@@ -46,8 +46,8 @@ a byte.
 ## Auth is not optional
 
 `modelpipe serve` generates a bearer token and validates
-`Authorization: Bearer …` on every request **before** a byte reaches your
-backend. Ollama has no built-in auth;
+`Authorization: Bearer …` — in constant time — on every request **before**
+a byte reaches your backend. Ollama has no built-in auth;
 [researchers found ~175,000 Ollama hosts exposed raw to the internet](https://thehackernews.com/2026/01/researchers-find-175000-publicly.html).
 modelpipe in front of a naked backend gives it the API key it never
 shipped. Running open requires an explicit flag whose name
@@ -92,7 +92,10 @@ This table is the shape of the payload, not yet a wire spec: the base32
 alphabet, payload codec, field framing and integrity check get pinned down
 by the implementation (most likely following
 [iroh-tickets](https://crates.io/crates/iroh-tickets)' conventions —
-base32-nopad over postcard). Until a byte-level spec with test vectors
+base32-nopad over postcard). One constraint is recorded now, with QR codes
+in mind: QR alphanumeric mode only fits uppercase, so the spec will either
+render tickets uppercase or require parsers to accept both cases, letting a
+display layer upcase for the QR without breaking round-trips. Until a byte-level spec with test vectors
 lands here, a non-Rust client cannot interoperate from this document
 alone. If you want to build one — mobile apps via iroh's official
 Swift/Kotlin bindings are the obvious case — open an issue and the spec
