@@ -59,7 +59,11 @@ token is deliberately *not* inside the ticket — a leaked ticket alone
 cannot make a request, and a leaked token alone cannot reach the listener.
 Rotation is asymmetric on purpose: restarting the listener rotates the
 ticket (and re-pairs everyone), while the token rotates in place with no
-re-pairing (`ServeHandle::rotate_token`). One honest caveat for v0: a
+re-pairing (`ServeHandle::rotate_token`). Embedding modelpipe behind an
+auth layer you already have? `serve` accepts a supplied token
+(`TokenPolicy::Supplied`) so your existing API key is enforced at the
+tunnel edge too — one credential, checked before a byte reaches the
+backend, rotated on your schedule (`ServeHandle::set_token`). One honest caveat for v0: a
 ticket has no expiry and no revocation list, so a leaked ticket can reach
 the listener until the serve process restarts. Treat tickets like keys,
 not like invitations.

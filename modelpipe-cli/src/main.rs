@@ -2,7 +2,7 @@
 //! in `modelpipe`; this file parses arguments and prints.
 
 use clap::{Parser, Subcommand};
-use modelpipe::{ConnectOptions, ServeOptions, Ticket};
+use modelpipe::{ConnectOptions, ServeOptions, Ticket, TokenPolicy};
 
 #[derive(Parser)]
 #[command(
@@ -29,6 +29,9 @@ enum Command {
         /// Serve without a bearer token. The name is the warning.
         #[arg(long)]
         insecure_no_auth: bool,
+        /// Require this existing bearer token instead of generating one
+        #[arg(long, conflicts_with = "insecure_no_auth")]
+        token: Option<String>,
         /// Accept a backend on a private (RFC 1918) address, not just loopback
         #[arg(long)]
         allow_private_backend: bool,
@@ -53,6 +56,7 @@ async fn main() -> anyhow::Result<()> {
         Command::Serve {
             backend_url,
             insecure_no_auth,
+            token,
             allow_private_backend,
             relay,
         } => {
@@ -61,7 +65,12 @@ async fn main() -> anyhow::Result<()> {
             // boundary — which is the point, new options must not break
             // existing callers (this one included).
             let mut opts = ServeOptions::default();
-            opts.insecure_no_auth = insecure_no_auth;
+            // clap's conflicts_with makes (Some, true) unrepresentable.
+            opts.auth = match (token, insecure_no_auth) {
+                (Some(t), _) => TokenPolicy::Supplied(t),
+                (None, true) => TokenPolicy::InsecureNoAuth,
+                (None, false) => TokenPolicy::Generate,
+            };
             opts.allow_private_backend = allow_private_backend;
             opts.relay = relay;
             let handle = modelpipe::serve(&backend_url, opts).await?;

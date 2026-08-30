@@ -176,6 +176,33 @@ impl std::error::Error for ConnectError {
     }
 }
 
+/// How the serve side authenticates requests.
+///
+/// One field, three valid states — the contradictory combinations a
+/// bool-plus-option pair would allow simply don't exist. Embedders with
+/// an existing bearer credential (an API key their clients already
+/// present) use [`Supplied`](Self::Supplied): the same key is then
+/// enforced at the tunnel edge, before a byte reaches the backend, and
+/// the embedder keeps exactly one credential.
+#[derive(Default)]
+#[non_exhaustive]
+pub enum TokenPolicy {
+    /// Generate a fresh random token at listen time; read it back with
+    /// [`ServeHandle::token`]. The recommended default for standalone
+    /// use.
+    #[default]
+    Generate,
+    /// Enforce this caller-supplied token instead of generating one.
+    /// Rotating a supplied credential belongs to the caller — push the
+    /// replacement into a running listener with
+    /// [`ServeHandle::set_token`].
+    Supplied(String),
+    /// Serve without a bearer token. The ticket becomes the only lock,
+    /// which is exactly the failure mode this crate exists to close —
+    /// hence the name. Loudly discouraged.
+    InsecureNoAuth,
+}
+
 /// Options for [`serve`].
 ///
 /// Start from `Default` — the recommended configuration — and set what
@@ -184,10 +211,8 @@ impl std::error::Error for ConnectError {
 #[derive(Default)]
 #[non_exhaustive]
 pub struct ServeOptions {
-    /// Serve without a bearer token. The ticket becomes the only lock,
-    /// which is exactly the failure mode this crate exists to close —
-    /// hence the name. Off by default, loudly discouraged.
-    pub insecure_no_auth: bool,
+    /// What the listener requires in `Authorization: Bearer …`.
+    pub auth: TokenPolicy,
     /// Self-hosted relay URL. `None` uses iroh's public relays, which
     /// carry only ciphertext either way.
     pub relay: Option<String>,
@@ -211,9 +236,10 @@ pub struct ConnectOptions {
 /// Expose the OpenAI-compatible server at `backend_url` (e.g.
 /// `http://127.0.0.1:11434`) to holders of the returned handle's ticket.
 ///
-/// Generates a bearer token (unless `insecure_no_auth`) and rejects any
-/// incoming request whose `Authorization` header doesn't carry it —
-/// before a byte reaches the backend. Read the token off the handle
+/// Enforces a bearer token per [`ServeOptions::auth`] — generated at
+/// listen time, or supplied by the caller — and rejects any incoming
+/// request whose `Authorization` header doesn't carry it, before a byte
+/// reaches the backend. Read the token off the handle
 /// ([`ServeHandle::token`]) and give it to clients alongside the ticket;
 /// it is deliberately not *inside* the ticket, so the two credentials
 /// travel — and leak — independently.
@@ -261,11 +287,23 @@ impl ServeHandle {
         todo!()
     }
 
-    /// Mint and install a replacement bearer token, returning it. The old
-    /// token stops working immediately; the ticket — and every existing
-    /// pairing — stays valid, so this is the recovery move for a leaked
-    /// token and it costs nothing but redistributing the new one. When
-    /// serving open, this turns auth *on* from this call forward.
+    /// Install `token` as the bearer credential, replacing whatever the
+    /// listener currently enforces; the old value stops working
+    /// immediately and the ticket — every existing pairing — stays
+    /// valid. This is how an embedder that supplied its own key
+    /// ([`TokenPolicy::Supplied`]) propagates a rotation of that key
+    /// into a running listener. When serving open, this turns auth *on*
+    /// from this call forward.
+    pub fn set_token(&self, token: String) {
+        // drop, not `let _`: the sketch must consume the String the real
+        // implementation will store, or needless_pass_by_value fires.
+        drop(token);
+        todo!()
+    }
+
+    /// [`set_token`](Self::set_token) with a freshly minted random
+    /// token, returned so the caller can redistribute it. The recovery
+    /// move for a leaked generated token.
     pub fn rotate_token(&self) -> String {
         todo!()
     }
