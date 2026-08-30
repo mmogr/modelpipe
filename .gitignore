@@ -1,0 +1,47 @@
+# Build artifacts
+/target
+**/*.rs.bk
+
+# Cargo.lock is COMMITTED: this workspace ships a binary (modelpipe-cli),
+# so reproducible builds win over the library convention of ignoring it.
+# Do not add Cargo.lock here.
+
+# Coverage / profiling output
+*.profraw
+*.profdata
+perf.data
+perf.data.old
+flamegraph.svg
+
+# Secrets — nothing here should ever be a committed file, but tokens and
+# tickets are this crate's whole business, so make the mistake harder.
+.env
+.env.*
+*.pem
+*.key
+
+# Local AI/assistant tooling — never tracked. Carried over from gglib, where
+# these directories are scratch space for coding assistants (session state,
+# worktrees, handoff notes). They are machine-local and must not enter history.
+.claude/
+.cursor/
+.aider*
+.continue/
+.codeium/
+.github/copilot-instructions.md
+CLAUDE.md
+AGENTS.md
+
+# Editors / tooling
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+*.iml
+.direnv/
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini

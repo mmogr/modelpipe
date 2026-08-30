@@ -1,0 +1,173 @@
+# Adapted from gglib's bump-version.yml. Same shape: dispatch with a version,
+# validate it, rewrite the manifests, regenerate the lockfile, open a PR.
+#
+# Three deliberate differences, all forced by this repo rather than by taste:
+#
+#  * The rewrite is `scripts/bump_version.py`, not inline `sed`. This workspace
+#    writes its version twice — [workspace.package] and the `modelpipe`
+#    requirement in [workspace.dependencies] — and gglib's
+#    `sed 's/^version = ".*"/…/'` only matches the first. See the script.
+#  * `cargo update --workspace`, not `cargo generate-lockfile`. The latter
+#    re-resolves the whole graph and can carry dependency upgrades in on the
+#    back of a version bump; `--workspace` touches only the workspace members'
+#    own entries. gglib guards against exactly this on its npm side
+#    (`--package-lock-only`) and not on its cargo side.
+#  * Merging does not release. gglib's release train fires on push to main;
+#    here the tag is the publish button, so this workflow's job ends at a
+#    merged PR and release.yml waits for `git push origin vX.Y.Z`.
+name: Bump Version
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "New version (X.Y.Z or X.Y.Z-rc.1)"
+        required: true
+        type: string
+      auto_merge:
+        description: "Enable auto-merge on the PR (requires branch protection)"
+        required: false
+        default: true
+        type: boolean
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  bump:
+    name: Bump and open PR
+    runs-on: ubuntu-latest
+    steps:
+      # A PR opened with the default GITHUB_TOKEN does not trigger workflow
+      # runs, so ci.yml would never start on it — and with `ci-success` as the
+      # required check, the PR could never merge. An App token is what makes
+      # the PR look like it came from a real actor. Needs the same APP_ID /
+      # APP_PRIVATE_KEY that gglib uses, with the App installed on this repo.
+      - name: Generate GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1.12.0
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Fetch tags
+        run: git fetch --force --tags
+
+      - name: Install Rust toolchain
+        run: rustup show
+
+      - name: Read current version
+        id: current
+        run: echo "version=$(./scripts/bump_version.py --check)" >> "$GITHUB_OUTPUT"
+
+      # Before touching anything: a tag that already exists means this version
+      # was already cut, and on crates.io it cannot be cut twice.
+      #
+      # inputs.version reaches every shell below through `env`, never through
+      # `${{ }}` inside `run:` — expression interpolation is textual and
+      # happens before bash parses, so a quote in the input would escape the
+      # script's own quoting and execute. As an env var it is data.
+      - name: Check the version is not already released
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          version="${VERSION#v}"
+          if git tag -l | grep -qx "v${version}"; then
+            echo "::error::v${version} is already tagged"
+            exit 1
+          fi
+          echo "v${version} is unused"
+
+      # Rejects a malformed version and a no-op bump. Doing it here rather than
+      # in a shell regex keeps one definition of what a valid version is, and
+      # `make bump` gets the same check.
+      - name: Rewrite the manifests
+        env:
+          VERSION: ${{ inputs.version }}
+        run: ./scripts/bump_version.py "$VERSION"
+
+      - name: Update the lockfile
+        run: cargo update --workspace
+
+      # `--locked` fails if Cargo.lock disagrees with the manifests, so this is
+      # what proves the bump left the workspace coherent. A missed second site
+      # would surface here as "failed to select a version for the requirement".
+      - name: Verify the workspace still resolves
+        run: cargo metadata --locked --format-version 1 > /dev/null
+
+      # The manifests are what get published, so the version has to be right in
+      # the packaged output, not just in the file.
+      - name: Verify the crates still package at the new version
+        run: cargo package --workspace --no-verify --locked
+
+      - name: Create pull request
+        id: create-pr
+        uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          branch: bump-v${{ inputs.version }}
+          branch-suffix: timestamp
+          delete-branch: true
+          title: "Bump version to ${{ inputs.version }}"
+          commit-message: "Bump version to ${{ inputs.version }}"
+          add-paths: |
+            Cargo.toml
+            Cargo.lock
+          body: |
+            ## Version bump
+
+            `${{ steps.current.outputs.version }}` → `${{ inputs.version }}`
+
+            ### Updated
+            - `Cargo.toml` — `[workspace.package] version`
+            - `Cargo.toml` — the `modelpipe` requirement in `[workspace.dependencies]`
+            - `Cargo.lock` — workspace members only (`cargo update --workspace`)
+            - both member crates, by inheritance
+
+            ### Next step, once this is merged
+
+            Merging does **not** publish. Tag the merged commit:
+
+            ```bash
+            git switch main && git pull
+            git tag v${{ inputs.version }}
+            git push origin v${{ inputs.version }}
+            ```
+
+            That is what starts [release.yml](.github/workflows/release.yml),
+            which re-runs the full gate and then publishes both crates to
+            crates.io. Publishing is irreversible.
+
+            ---
+            *Triggered by @${{ github.actor }}*
+          labels: |
+            version-bump
+            automated
+
+      - name: Enable auto-merge
+        if: steps.create-pr.outputs.pull-request-number && inputs.auto_merge
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: gh pr merge ${{ steps.create-pr.outputs.pull-request-number }} --auto --squash
+
+      - name: Summary
+        if: steps.create-pr.outputs.pull-request-number
+        env:
+          VERSION: ${{ inputs.version }}
+          CURRENT: ${{ steps.current.outputs.version }}
+          PR_URL: ${{ steps.create-pr.outputs.pull-request-url }}
+        run: |
+          {
+            echo "### Version bump PR opened"
+            echo ""
+            echo "**PR:** ${PR_URL}"
+            echo "**Version:** ${CURRENT} → ${VERSION}"
+            echo ""
+            echo "Merging does not publish — push the tag \`v${VERSION}\` afterwards."
+          } >> "$GITHUB_STEP_SUMMARY"

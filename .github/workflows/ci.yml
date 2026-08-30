@@ -1,0 +1,199 @@
+# Adapted from gglib's ci.yml, minus everything that workspace has and this one
+# does not: no Node, no Tauri, no bindings, no architecture-enforcement scripts,
+# no per-crate badge extraction. What carries over is the shape — a pinned
+# toolchain, one aggregate status check, and a cache key per build
+# configuration.
+#
+# No `apt-get install` step anywhere below, unlike gglib's: iroh resolves rustls
+# onto `ring`, which needs no system libraries. If a future dependency flips the
+# graph to `aws-lc-sys`, these jobs start needing cmake and a C toolchain — the
+# lockfile is where that change is visible.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Read-only across the board: nothing in CI writes to the repo, and the
+# checkout credential this scopes down is otherwise sitting in .git/config
+# for the whole build — including every build script cargo runs.
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  fmt:
+    name: Format
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # `rustup show` reads rust-toolchain.toml and installs what it names.
+      # Every job below does the same, so no job can drift onto another
+      # compiler.
+      - name: Install Rust toolchain
+        run: rustup show
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      # Asserts the two version sites in Cargo.toml are string-equal. Caret
+      # arithmetic stops guarding this at 0.1.0 — ^0.1.0 admits 0.1.1, so a
+      # requirement left behind by a hand edit would build and publish
+      # cleanly. The script's --check mode is where the guard now lives.
+      - name: Check version sites agree
+        run: ./scripts/bump_version.py --check > /dev/null
+
+      # Catches duplicate mapping keys, which GitHub rejects outright — the run
+      # is marked "failed because of a workflow file issue" and no jobs start.
+      # Note the limit, inherited along with the script: if THIS file is the
+      # broken one, this step never runs. `make pre-commit` is where that case
+      # gets caught, before the push.
+      - name: Validate workflow YAML
+        run: ./scripts/check_workflow_yaml.sh
+
+  clippy:
+    name: Clippy
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Rust toolchain
+        run: rustup show
+
+      # A shared-key per build configuration. clippy builds --all-features and
+      # `test` builds default features; one key across both means the second job
+      # restores artifacts it cannot use, which is what gglib measured at 49 of
+      # 630 units fresh.
+      - name: Setup Rust cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: "ci-clippy"
+          cache-on-failure: true
+
+      - name: Run clippy
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Rust toolchain
+        run: rustup show
+
+      - name: Setup Rust cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: "ci-test"
+          cache-on-failure: true
+
+      # Fails if Cargo.lock is stale or absent, rather than letting cargo
+      # silently update it and test a dependency set nobody committed.
+      - name: Lockfile guard
+        run: cargo metadata --locked --format-version 1 > /dev/null
+
+      # The publishable-metadata guard. modelpipe-cli reaches its library
+      # through a version requirement that only exists for publishing, so
+      # nothing in a normal build exercises it — the first thing that would
+      # have noticed it going missing was `cargo publish` on release day.
+      # `--no-verify` skips the rebuild; this is checking manifests, not code.
+      - name: Check the crates still package
+        run: cargo package --workspace --no-verify --locked
+
+      # `--no-fail-fast` so one failing binary does not hide the state of every
+      # crate after it.
+      - name: Run tests
+        run: cargo test --workspace --no-fail-fast
+
+  rustdoc:
+    name: Rustdoc
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Rust toolchain
+        run: rustup show
+
+      - name: Setup Rust cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: "ci-rustdoc"
+          cache-on-failure: true
+
+      # `-p modelpipe`, not `--workspace`: modelpipe-cli's bin target is also
+      # named `modelpipe`, so a workspace-wide doc build writes both to
+      # target/doc/modelpipe/index.html and cargo reports an output filename
+      # collision (rust-lang/cargo#6313). The CLI is still lint-checked and
+      # compiled by the jobs above; only its rustdoc is out of scope, and it is
+      # a thin argument-parsing face with no public API.
+      - name: Check rustdoc has no warnings
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc -p modelpipe --no-deps --document-private-items
+
+  # ubuntu clippy above never sees the inside of a `#[cfg(windows)]` block. This
+  # crate has none yet — it is a transport that will grow socket and
+  # process-lifetime code, which is exactly where platform blocks appear, and a
+  # lint that has never run on a branch is a lint that will fail on the change
+  # that first needs it.
+  #
+  # PR-only, and gated behind `clippy`: no sense spending macOS and Windows
+  # minutes on a tree ubuntu has already rejected.
+  clippy-cross-os:
+    name: Clippy (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    if: github.event_name == 'pull_request'
+    needs: [clippy]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            os: macos-14
+          - target: x86_64-pc-windows-msvc
+            os: windows-2022
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Rust toolchain
+        run: rustup show
+
+      - name: Setup Rust cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: "ci-clippy-${{ matrix.target }}"
+          cache-on-failure: true
+
+      - name: Run clippy
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+  # The single required status check. Branch protection points at this one job,
+  # so adding a job above needs no settings change — only a line in `needs:`.
+  ci-success:
+    name: CI Success
+    runs-on: ubuntu-latest
+    if: always()
+    needs: [fmt, clippy, test, rustdoc, clippy-cross-os]
+    steps:
+      - name: Check all jobs succeeded
+        run: |
+          if [[ "${{ contains(needs.*.result, 'failure') }}" == "true" ]]; then
+            echo "One or more CI jobs failed"
+            exit 1
+          fi
+          if [[ "${{ contains(needs.*.result, 'cancelled') }}" == "true" ]]; then
+            echo "One or more CI jobs were cancelled"
+            exit 1
+          fi
+          echo "All CI jobs passed successfully"

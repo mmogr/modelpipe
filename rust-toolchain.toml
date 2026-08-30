@@ -1,0 +1,7 @@
+# Pinned, not "stable": CI and every contributor build the workspace with the
+# exact compiler, so a lint that fires on one machine fires on all of them.
+# `rustup show` in CI is what installs this.
+[toolchain]
+channel = "1.97.1"
+profile = "minimal"
+components = ["rustfmt", "clippy"]

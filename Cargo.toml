@@ -1,0 +1,77 @@
+[workspace]
+resolver = "3"
+members = ["modelpipe", "modelpipe-cli"]
+
+[workspace.package]
+version = "0.0.1"
+edition = "2024"
+# The honest floor: the iroh stack declares rust-version 1.91, so claiming
+# anything lower would promise a build this workspace cannot deliver. A user
+# on an older toolchain now gets "requires rustc 1.91" instead of a parse
+# error. Raise it when the lockfile forces it, never speculatively.
+rust-version = "1.91"
+license = "MIT"
+repository = "https://github.com/mmogr/modelpipe"
+authors = ["mmogr"]
+
+[workspace.dependencies]
+# The library, as the CLI depends on it. The `version` is not optional and not
+# cosmetic: `cargo package` refuses a path dependency without one, because
+# publishing strips the path and resolves against the registry instead — the
+# published modelpipe-cli reaches its library through this requirement and
+# nothing else.
+#
+# It must be bumped in step with `version` in [workspace.package] above, and
+# only `scripts/bump_version.py` (via `make bump` or the Bump Version
+# workflow) should do that: it rewrites both sites, and its --check mode —
+# which CI runs — fails on any mismatch. Caret semantics are not what
+# protects this: ^0.1.0 admits 0.1.1, so from the first minor release onward
+# a requirement left behind by a hand edit would build, package and publish
+# cleanly while shipping a permanently loose dependency.
+modelpipe = { path = "modelpipe", version = "0.0.1" }
+# The engine. The requirement stays the usual caret major — downstream users
+# of the library resolve iroh for themselves — while the committed Cargo.lock
+# is what actually pins the version this workspace builds and tests against.
+iroh = "1"
+tokio = { version = "1", default-features = false }
+anyhow = "1"
+
+[workspace.lints.rust]
+# This crate is a transport for other people's inference traffic; there is no
+# performance argument that would justify hand-waving memory safety in it.
+unsafe_code = "deny"
+# Every `pub` must be reachable from outside its crate, so the keyword means
+# what it says. (This checks reach, not contents — keeping iroh's types out
+# of the public surface, as the README promises, is a review discipline no
+# lint enforces; what this buys is that `pub` describes the real surface that
+# discipline has to cover.)
+unreachable_pub = "deny"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+module_name_repetitions = "allow"
+must_use_candidate = "allow"
+collapsible_if = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+# Irreconcilable with `unreachable_pub` above: for an item in a private module
+# the two ask for opposite things. One has to be off, and this is the nursery
+# one.
+redundant_pub_crate = "allow"
+
+# Optimize dependencies even in debug builds; our own code stays at 0 so
+# incremental rebuilds stay fast. iroh pulls in QUIC, rustls and ring — an
+# unoptimized build of that stack makes a debug `modelpipe serve` slow enough
+# to be misleading about the transport's real behavior.
+[profile.dev.package."*"]
+opt-level = 3
+
+[profile.test.package."*"]
+opt-level = 3
+
+[profile.release]
+opt-level = 2
+lto = "thin"
+codegen-units = 16

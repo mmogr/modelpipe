@@ -1,0 +1,25 @@
+[package]
+name = "modelpipe-cli"
+description = "CLI for modelpipe: serve and connect commands"
+version.workspace = true
+rust-version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+readme = "../README.md"
+keywords = ["p2p", "iroh", "llm", "openai", "proxy"]
+categories = ["command-line-utilities", "network-programming"]
+
+[[bin]]
+name = "modelpipe"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+modelpipe = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "signal"] }
+anyhow = { workspace = true }
+clap = { version = "4", features = ["derive"] }

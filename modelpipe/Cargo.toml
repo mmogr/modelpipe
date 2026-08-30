@@ -1,0 +1,26 @@
+[package]
+name = "modelpipe"
+description = "Reach an OpenAI-compatible model server from anywhere over p2p — no VPN, no account, no cloud in the path"
+version.workspace = true
+rust-version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+# The README lives at the workspace root, outside this package directory, so
+# without this it is simply absent from the published tarball and the
+# crates.io page renders empty; it is also the ticket-format draft other
+# clients will eventually implement against, so that is not a cosmetic loss.
+# LICENSE is a checked-in symlink in this directory instead (cargo packages
+# it as a regular file): a `license-file` field alongside `license` makes
+# every cargo invocation warn that the two are mutually exclusive.
+readme = "../README.md"
+keywords = ["p2p", "iroh", "llm", "openai", "proxy"]
+categories = ["network-programming", "asynchronous"]
+
+[lints]
+workspace = true
+
+[dependencies]
+iroh = { workspace = true }
+tokio = { workspace = true, features = ["net", "io-util", "sync", "time"] }

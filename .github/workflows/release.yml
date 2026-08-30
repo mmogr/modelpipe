@@ -1,0 +1,206 @@
+# Publish to crates.io on a version tag.
+#
+# Written from scratch rather than adapted from gglib: that workspace is
+# AGPL-3.0 and has never been on crates.io, so its release.yml builds and
+# attests binaries and has no `cargo publish` in it at all. Nothing to copy.
+#
+# One-time setup, before the first release — these live in GitHub Settings,
+# not in the repo, and two of them fail OPEN if forgotten:
+#
+#   * a `crates-io` environment with a REQUIRED REVIEWER and an
+#     environment-scoped CARGO_REGISTRY_TOKEN. A workflow that references a
+#     nonexistent environment makes GitHub silently auto-create it with no
+#     reviewers and no secrets; the publish job asserts the token is
+#     non-empty so that dies loudly, but the reviewer gate can only come
+#     from Settings.
+#   * a tag ruleset restricting creation of v* tags to the repo admin.
+#     Branch protection does not cover tags; the ancestry check below
+#     refuses tags off main, and the ruleset stops stray tags at the push.
+#
+# Cutting a release:
+#
+#   1. run the Bump Version workflow — or `make bump VERSION=0.1.0` locally.
+#      Never edit the two version sites by hand: the script rewrites both and
+#      regenerates the lockfile, and CI's --check step is what catches drift
+#   2. merge / commit, let CI go green on main
+#   3. git tag v0.1.0 && git push origin v0.1.0
+#
+# Publishing is irreversible: a version can be yanked but never replaced, and
+# the name is claimed forever by the first publish. The `verify` job below is
+# the last point at which that is still true of nothing.
+name: Release
+
+on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+"
+      - "v[0-9]+.[0-9]+.[0-9]+-*"
+  # Dry runs. Every check below runs, `cargo publish` runs with --dry-run, and
+  # nothing is uploaded.
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Verify
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The ancestry check below needs real history, not a shallow tip.
+          fetch-depth: 0
+
+      # Branch protection covers branches, not tags: nothing else in this
+      # repo stops `git push origin vX.Y.Z` at a commit main never accepted
+      # from publishing it. This does. (Pair it with a v* tag ruleset in the
+      # repo settings — see the header of this file — so stray tags are
+      # stopped at the push, not here.)
+      - name: Check the tag is on main
+        if: github.event_name == 'push'
+        run: |
+          git fetch --no-tags origin main
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "::error::$GITHUB_REF_NAME points at a commit that is not on main"
+            exit 1
+          fi
+          echo "$GITHUB_REF_NAME is on main"
+
+      - name: Install Rust toolchain
+        run: rustup show
+
+      - name: Setup Rust cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: "release-verify"
+          cache-on-failure: true
+
+      # ci.yml triggers on pushes to main and on pull requests, so a tag push
+      # runs none of it. The gate is repeated here — fmt, the workflow lint,
+      # clippy, tests, rustdoc — so a tag on a stale commit still gets
+      # checked; the one piece not repeated is the cross-OS clippy matrix.
+      # (What binds the tag to a commit that actually PASSED ci.yml is the
+      # ancestry check above plus branch protection on main, not this job.)
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Validate workflow YAML
+        run: ./scripts/check_workflow_yaml.sh
+
+      - name: Run clippy
+        run: cargo clippy --all-targets --all-features --locked -- -D warnings
+
+      - name: Run tests
+        run: cargo test --workspace --locked --no-fail-fast
+
+      - name: Check rustdoc has no warnings
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc -p modelpipe --no-deps --document-private-items --locked
+
+      # A tag that disagrees with the manifest publishes a version nobody asked
+      # for under a tag that will forever point at the wrong tree. Cheap to
+      # check, impossible to undo. Read through the bump script's --check
+      # mode, which also fails if the two version sites in Cargo.toml have
+      # drifted apart — the one incoherence caret semantics stop catching
+      # after 0.1.0.
+      - name: Check tag matches the manifest version
+        if: github.event_name == 'push'
+        run: |
+          manifest="$(./scripts/bump_version.py --check)"
+          tag="${GITHUB_REF_NAME#v}"
+          if [[ "$manifest" != "$tag" ]]; then
+            echo "tag $GITHUB_REF_NAME says $tag, Cargo.toml says $manifest"
+            exit 1
+          fi
+          echo "tag and manifest agree on $manifest"
+
+      # --workspace, not two -p runs. modelpipe-cli depends on modelpipe by
+      # version, so packaging it alone resolves that against the registry and
+      # fails for as long as the version being released is not yet published —
+      # which is always, at this point in the job. --workspace makes the
+      # members resolve against each other locally, and is also what orders the
+      # real publish below.
+      - name: Dry-run the publish
+        run: cargo publish --workspace --dry-run --locked
+
+  publish:
+    name: Publish to crates.io
+    needs: [verify]
+    # Job-level, not step-level: a workflow_dispatch dry run ends at
+    # `verify`, instead of parking the publish job on a human approval whose
+    # only outcome would be an echo. Approvals people grant to no-ops are
+    # approvals they stop reading.
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    # Requires a repository environment named `crates-io` holding
+    # CARGO_REGISTRY_TOKEN, with a required reviewer on it: this is the step
+    # that cannot be taken back, and a human ack costs one click. That
+    # environment is one-time manual setup (see this file's header) — GitHub silently
+    # auto-creates a referenced environment with NO reviewers and NO
+    # secrets, which is why the first step below refuses to run without the
+    # token rather than trusting the environment to exist.
+    environment: crates-io
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Rust toolchain
+        run: rustup show
+
+      - name: Setup Rust cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: "release-verify"
+          cache-on-failure: true
+
+      - name: Assert the registry token is configured
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          if [ -z "${CARGO_REGISTRY_TOKEN:-}" ]; then
+            echo "::error::CARGO_REGISTRY_TOKEN is empty — the crates-io environment is missing or unconfigured (GitHub auto-creates referenced environments with no secrets and no reviewers; see this workflow's header comment)"
+            exit 1
+          fi
+          echo "registry token present"
+
+      # Makes a re-run safe after a partial failure — e.g. the GitHub
+      # release step below dying after a successful publish. modelpipe-cli
+      # is published last, so its presence means the whole publish landed.
+      # (The narrower partial — library up, CLI not — needs a manual
+      # `cargo publish -p modelpipe-cli --locked` from the tagged commit.)
+      - name: Check whether this version is already published
+        id: published
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          if curl -fsSL "https://crates.io/api/v1/crates/modelpipe-cli/${version}" > /dev/null 2>&1; then
+            echo "already=true" >> "$GITHUB_OUTPUT"
+            echo "modelpipe-cli ${version} is already on crates.io — skipping publish"
+          else
+            echo "already=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # One command for both crates. cargo publishes them in dependency order
+      # (library first) and waits for each to appear in the index before the
+      # next, which is the sleep-and-retry loop this would otherwise have been.
+      - name: Publish
+        if: steps.published.outputs.already != 'true'
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: cargo publish --workspace --locked
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --title "$GITHUB_REF_NAME" \
+            --generate-notes \
+            --verify-tag
