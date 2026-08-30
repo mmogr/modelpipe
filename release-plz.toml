@@ -1,0 +1,34 @@
+# release-plz owns the pre-tag half of the release train: it maintains the
+# release PR (version bump + changelog) and, when that PR merges, pushes the
+# vX.Y.Z tag. Everything from the tag onward — verify, the crates-io
+# environment approval, cargo publish — belongs to release.yml, which is why
+# publishing and GitHub releases are switched off here.
+
+[workspace]
+# release.yml publishes; release-plz must never run `cargo publish`.
+publish = false
+# release.yml's `gh release create` makes the GitHub release; not this.
+git_release_enable = false
+# No per-package tags (the default would be modelpipe-v0.1.0 AND
+# modelpipe-cli-v0.1.0). The single workspace tag is re-enabled on the
+# library package below.
+git_tag_enable = false
+# Tag only when the release PR merges, not on every push to main.
+release_always = false
+# One changelog for the whole workspace, maintained via the library
+# package below — both crates share one version, so per-crate changelogs
+# would just split one story in half.
+changelog_update = false
+pr_labels = ["release"]
+
+[[package]]
+name = "modelpipe"
+# The one tag for the whole workspace. Both crates inherit
+# [workspace.package] version, so {{ version }} is THE version — and the
+# name matches release.yml's `v[0-9]+.[0-9]+.[0-9]+` trigger.
+git_tag_enable = true
+git_tag_name = "v{{ version }}"
+changelog_update = true
+changelog_path = "./CHANGELOG.md"
+# Fold modelpipe-cli's commits into the same changelog.
+changelog_include = ["modelpipe-cli"]
