@@ -17,13 +17,15 @@
 #     Branch protection does not cover tags; the ancestry check below
 #     refuses tags off main, and the ruleset stops stray tags at the push.
 #
-# Cutting a release:
+# Cutting a release (release-plz owns everything before the tag):
 #
-#   1. run the Bump Version workflow — or `make bump VERSION=0.1.0` locally.
-#      Never edit the two version sites by hand: the script rewrites both and
-#      regenerates the lockfile, and CI's --check step is what catches drift
-#   2. merge / commit, let CI go green on main
-#   3. git tag v0.1.0 && git push origin v0.1.0
+#   1. merge the release PR that release-plz keeps open — it carries the
+#      version bump (both sites in Cargo.toml, so ci.yml's drift check stays
+#      green) and the changelog. For a deliberate jump release-plz will not
+#      make on its own (0.0.x → 0.1.0), run `make bump VERSION=0.1.0` in an
+#      ordinary PR first; release-plz respects the hand-set version
+#   2. release-plz pushes the vX.Y.Z tag, which starts this workflow
+#   3. approve the crates-io environment when the publish job asks
 #
 # Publishing is irreversible: a version can be yanked but never replaced, and
 # the name is claimed forever by the first publish. The `verify` job below is
