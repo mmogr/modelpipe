@@ -21,10 +21,11 @@ authors = ["mmogr"]
 # published modelpipe-cli reaches its library through this requirement and
 # nothing else.
 #
-# It must be bumped in step with `version` in [workspace.package] above, and
-# only `scripts/bump_version.py` (via `make bump` or the Bump Version
-# workflow) should do that: it rewrites both sites, and its --check mode —
-# which CI runs — fails on any mismatch. Caret semantics are not what
+# It must be bumped in step with `version` in [workspace.package] above.
+# Routine bumps are release-plz's job (it rewrites both sites in its release
+# PR); `make bump` is the manual tool for jumps release-plz won't make, like
+# 0.0.x → 0.1.0. Either way, `scripts/bump_version.py --check` — which CI
+# runs — fails on any mismatch. Caret semantics are not what
 # protects this: ^0.1.0 admits 0.1.1, so from the first minor release onward
 # a requirement left behind by a hand edit would build, package and publish
 # cleanly while shipping a permanently loose dependency.

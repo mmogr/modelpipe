@@ -1,0 +1,84 @@
+# release-plz (https://release-plz.dev): on every push to main it maintains a
+# release PR — version bump (both sites, exactly, so ci.yml's drift check
+# stays honest) plus CHANGELOG.md — and when that PR merges it pushes the
+# vX.Y.Z tag. It never publishes: release-plz.toml sets publish = false, so
+# the tag is where its job ends and release.yml (verify → environment
+# approval → cargo publish) takes over.
+#
+# Both jobs authenticate with RELEASE_PAT — a fine-grained PAT (this repo
+# only; Contents and Pull requests, read/write) — instead of the default
+# GITHUB_TOKEN, because events created with the default token trigger no
+# workflows: the release PR would get no CI (and could never merge past the
+# required check), and the pushed tag would never start release.yml.
+#
+# One deliberate gap: release-plz never bumps 0.0.x beyond the patch digit.
+# The 0.0.x → 0.1.0 jump is a human decision — `make bump VERSION=0.1.0` in
+# an ordinary PR; release-plz respects the hand-set version and carries on.
+name: Release-plz
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  # Pushes the vX.Y.Z tag when a release PR merges. A no-op on every other
+  # push (release_always = false in release-plz.toml).
+  release-plz-release:
+    name: Release-plz release
+    runs-on: ubuntu-latest
+    # Forks have no business releasing (and no RELEASE_PAT to do it with).
+    if: github.repository_owner == 'mmogr'
+    permissions:
+      # Push the tag.
+      contents: write
+      # Detect the merged release PR.
+      pull-requests: read
+    # No concurrency group here on purpose, per upstream docs: a cancelled
+    # in-progress run could skip a release.
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Full history: release-plz releases from the release-PR commit.
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        run: rustup show
+
+      - name: Run release-plz release
+        uses: release-plz/action@2eb1d8bcb770b4c48ccfaad919734b38b51958c9 # v0.5.131
+        with:
+          command: release
+        env:
+          GITHUB_TOKEN: ${{ secrets.RELEASE_PAT }}
+
+  # Opens or updates the release PR (version bump + changelog).
+  release-plz-pr:
+    name: Release-plz PR
+    runs-on: ubuntu-latest
+    if: github.repository_owner == 'mmogr'
+    permissions:
+      # Push to the PR branch.
+      contents: write
+      # Create and update the PR.
+      pull-requests: write
+    concurrency:
+      group: release-plz-${{ github.ref }}
+      cancel-in-progress: false
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        run: rustup show
+
+      - name: Run release-plz release-pr
+        uses: release-plz/action@2eb1d8bcb770b4c48ccfaad919734b38b51958c9 # v0.5.131
+        with:
+          command: release-pr
+        env:
+          GITHUB_TOKEN: ${{ secrets.RELEASE_PAT }}

@@ -75,8 +75,9 @@ workflow-yaml: ## Validate .github/workflows for duplicate keys
 ##@ Release
 
 bump: ## Bump the workspace version locally (make bump VERSION=0.1.0)
-	@# The same script the bump-version workflow runs, so a local bump and a
-	@# dispatched one produce identical diffs. It does not commit or tag.
+	@# Routine bumps belong to release-plz; this is the manual tool for the
+	@# jumps it refuses to make (release-plz never turns 0.0.x into 0.1.0 on
+	@# its own). It does not commit or tag.
 	@test -n "$(VERSION)" || { echo "usage: make bump VERSION=0.1.0"; exit 1; }
 	./scripts/bump_version.py "$(VERSION)"
 	$(CARGO) update --workspace
