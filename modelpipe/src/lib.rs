@@ -14,8 +14,10 @@ use std::net::SocketAddr;
 use std::str::FromStr;
 
 /// A pairing ticket: how one machine finds and authenticates another's
-/// listener. Base32 on the wire so it survives QR codes, terminals, and
-/// being read aloud.
+/// listener.
+///
+/// Base32 on the wire so it survives terminals, being read aloud, and —
+/// with the case rule the README's format section records — QR codes.
 ///
 /// Contains the serve side's endpoint identity (endpoint id plus a set of
 /// transport addresses) and a backend-kind hint — and deliberately *not*
@@ -62,7 +64,8 @@ impl FromStr for Ticket {
 }
 
 /// Why a ticket string failed to parse. Deliberately coarse: a ticket is
-/// pasted or scanned, so the only useful advice is "re-copy it".
+/// pasted or scanned, so the advice is one line — re-copy it, or, when
+/// the format is newer than this build, upgrade.
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum TicketParseError {
@@ -83,9 +86,12 @@ impl fmt::Display for TicketParseError {
 
 impl std::error::Error for TicketParseError {}
 
-/// Why [`serve`] failed. The variants are the caller's retry policy:
-/// [`BackendNotLocal`](Self::BackendNotLocal) is permanent and
-/// user-fixable, the rest describe the machine underneath.
+/// Why [`serve`] failed.
+///
+/// The variants are the caller's retry policy:
+/// [`BackendNotLocal`](Self::BackendNotLocal) and
+/// [`InvalidRelay`](Self::InvalidRelay) are permanent and user-fixable,
+/// the rest describe the machine underneath.
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum ServeError {
@@ -97,6 +103,16 @@ pub enum ServeError {
     /// *resolved* address of every outbound connection, not the URL text,
     /// so a DNS name cannot smuggle an address past it.
     BackendNotLocal {
+        /// The offending URL, for the error message.
+        url: String,
+    },
+    /// [`ServeOptions::relay`] does not parse as a relay URL. Syntactic
+    /// validation only, before the listener starts: it catches the typo
+    /// class that mangles the URL itself, and is permanent and
+    /// user-fixable like [`BackendNotLocal`](Self::BackendNotLocal). A
+    /// well-formed URL naming the wrong host is indistinguishable from a
+    /// downed relay, and still surfaces as a transport error.
+    InvalidRelay {
         /// The offending URL, for the error message.
         url: String,
     },
@@ -114,6 +130,12 @@ impl fmt::Display for ServeError {
                 f,
                 "backend {url} is not a local address — modelpipe exposes your own server, not the network behind it"
             ),
+            Self::InvalidRelay { url } => {
+                write!(
+                    f,
+                    "{url} does not parse as a relay URL — check the value passed as the relay"
+                )
+            }
             Self::Bind(e) => write!(f, "could not set up the p2p listener: {e}"),
             Self::Transport(e) => write!(f, "transport failure: {e}"),
         }
@@ -123,7 +145,7 @@ impl fmt::Display for ServeError {
 impl std::error::Error for ServeError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Self::BackendNotLocal { .. } => None,
+            Self::BackendNotLocal { .. } | Self::InvalidRelay { .. } => None,
             Self::Bind(e) => Some(e),
             Self::Transport(e) => Some(&**e),
         }
@@ -178,7 +200,7 @@ impl std::error::Error for ConnectError {
 
 /// How the serve side authenticates requests.
 ///
-/// One field, three valid states — the contradictory combinations a
+/// One field, only valid states — the contradictory combinations a
 /// bool-plus-option pair would allow simply don't exist. Embedders with
 /// an existing bearer credential (an API key their clients already
 /// present) use [`Supplied`](Self::Supplied): the same key is then
@@ -214,14 +236,17 @@ pub struct ServeOptions {
     /// What the listener requires in `Authorization: Bearer …`.
     pub auth: TokenPolicy,
     /// Self-hosted relay URL. `None` uses iroh's public relays, which
-    /// carry only ciphertext either way.
+    /// carry only ciphertext either way. Parsed when [`serve`] starts: a
+    /// value that is not a relay URL at all is
+    /// [`ServeError::InvalidRelay`] up front; a well-formed URL naming
+    /// the wrong relay still fails later, as transport.
     pub relay: Option<String>,
-    /// Accept a backend on a private (RFC 1918 / `fc00::/7`) address
-    /// rather than loopback only. Off by default: `serve` extends trust
-    /// outward from this machine, and pointing it into the LAN is a
-    /// decision the operator should make explicitly. Link-local ranges
-    /// are never accepted regardless; see
-    /// [`ServeError::BackendNotLocal`].
+    /// Loopback always passes and never needs this. Set it to also
+    /// accept a backend on a private (RFC 1918 / `fc00::/7`) address.
+    /// Off by default: `serve` extends trust outward from this machine,
+    /// and pointing it into the LAN is a decision the operator should
+    /// make explicitly. Link-local ranges are never accepted regardless;
+    /// see [`ServeError::BackendNotLocal`].
     pub allow_private_backend: bool,
 }
 
@@ -238,16 +263,26 @@ pub struct ConnectOptions {
 ///
 /// Enforces a bearer token per [`ServeOptions::auth`] — generated at
 /// listen time, or supplied by the caller — and rejects any incoming
-/// request whose `Authorization` header doesn't carry it, before a byte
-/// reaches the backend. Read the token off the handle
-/// ([`ServeHandle::token`]) and give it to clients alongside the ticket;
-/// it is deliberately not *inside* the ticket, so the two credentials
-/// travel — and leak — independently.
+/// request whose `Authorization` header doesn't carry it (compared in
+/// constant time), before a byte reaches the backend. Read the token off
+/// the handle ([`ServeHandle::token`]) and give it to clients alongside
+/// the ticket; it is deliberately not *inside* the ticket, so the two
+/// credentials travel — and leak — independently. Serving open
+/// ([`TokenPolicy::InsecureNoAuth`]) is the one exception: nothing is
+/// enforced, and [`ServeHandle::token`] returns `None`.
 ///
 /// The backend must be local. Loopback always passes; private-range
 /// addresses only with [`ServeOptions::allow_private_backend`]; anything
 /// else is [`ServeError::BackendNotLocal`]. This crate extends trust
 /// outward, it does not re-export someone else's server.
+///
+/// After a successful return, per-request trouble — the backend down or
+/// refusing, a re-resolved backend address failing the locality check —
+/// surfaces to the *remote client* as failed requests; the pipe itself
+/// stays up and its status stays [`Direct`](PipeStatus::Direct)/
+/// [`Relayed`](PipeStatus::Relayed). Only the death of the pipe is a
+/// status: [`PipeStatus::Closed`]. Finer-grained states can be added
+/// compatibly later (`PipeStatus` is `#[non_exhaustive]`).
 pub async fn serve(backend_url: &str, opts: ServeOptions) -> Result<ServeHandle, ServeError> {
     let _ = (backend_url, opts);
     todo!()
@@ -283,7 +318,16 @@ impl ServeHandle {
     /// open. Print it next to the ticket; it reaches client machines
     /// out-of-band, which is what makes it a second lock rather than a
     /// decoration on the first.
-    pub fn token(&self) -> Option<&str> {
+    ///
+    /// Under [`TokenPolicy::Supplied`] this echoes the supplied value, as
+    /// later replaced through [`set_token`](Self::set_token) or
+    /// [`rotate_token`](Self::rotate_token) — an embedder can always read
+    /// back what the listener currently enforces. Returns an owned clone
+    /// on purpose: [`set_token`](Self::set_token) takes `&self`, so a lent
+    /// `&str` could outlive the credential it names, and honoring such a
+    /// borrow would force the implementation to keep every rotated-out
+    /// secret alive (and un-zeroizable) for the handle's whole lifetime.
+    pub fn token(&self) -> Option<String> {
         todo!()
     }
 
@@ -294,6 +338,13 @@ impl ServeHandle {
     /// ([`TokenPolicy::Supplied`]) propagates a rotation of that key
     /// into a running listener. When serving open, this turns auth *on*
     /// from this call forward.
+    ///
+    /// Single-token by design: there is no dual-accept window where old
+    /// and new both pass, so rolling a replacement out to several clients
+    /// necessarily races their reconfiguration — plan rotations
+    /// accordingly. The credential gates request *admission*, not
+    /// delivery: a request that passed auth before the call runs to
+    /// completion (a streaming response is not cut mid-body).
     pub fn set_token(&self, token: String) {
         // drop, not `let _`: the sketch must consume the String the real
         // implementation will store, or needless_pass_by_value fires.
@@ -304,6 +355,12 @@ impl ServeHandle {
     /// [`set_token`](Self::set_token) with a freshly minted random
     /// token, returned so the caller can redistribute it. The recovery
     /// move for a leaked generated token.
+    ///
+    /// For [`TokenPolicy::Supplied`] embedders this is the wrong tool: it
+    /// desynchronizes the shared credential — the tunnel edge then wants
+    /// a token the embedder's own backend has never heard of. Supplied
+    /// embedders rotate by pushing their replacement through
+    /// [`set_token`](Self::set_token).
     pub fn rotate_token(&self) -> String {
         todo!()
     }
@@ -313,15 +370,31 @@ impl ServeHandle {
         todo!()
     }
 
-    /// Wait for the next status transition and return the new status.
+    /// Wait until the status changes, then return the new value.
+    ///
     /// This is how a caller surfaces "direct ↔ relayed" changes as they
-    /// happen, rather than polling [`status`](Self::status).
+    /// happen, rather than polling [`status`](Self::status). Snapshot
+    /// semantics: each call compares against the status at the moment
+    /// the call was made, so states that came and went while nobody was
+    /// waiting are coalesced away, never replayed. Any number of callers
+    /// may wait concurrently — a daemon and a UI stream can both watch
+    /// one handle — each resolving against its own snapshot. On
+    /// teardown, graceful or not, the status becomes
+    /// [`PipeStatus::Closed`] and every waiting call resolves with it;
+    /// once closed, calls resolve immediately, so a watcher can never
+    /// block on a pipe that is already gone.
     pub async fn status_changed(&self) -> PipeStatus {
         todo!()
     }
 
     /// Tear down and wait until the listener is gone.
-    pub async fn shutdown(self) {
+    ///
+    /// Takes `&self` so a handle parked in shared state (an `Arc` in a
+    /// daemon) can still be shut down gracefully — by-value `self` would
+    /// leave such embedders only the best-effort drop path. Idempotent:
+    /// every call after teardown has begun (however it began) awaits the
+    /// same completion.
+    pub async fn shutdown(&self) {
         todo!()
     }
 }
@@ -330,6 +403,19 @@ impl ServeHandle {
 ///
 /// Teardown semantics match [`ServeHandle`]: dropping tears down without
 /// waiting, [`shutdown`](Self::shutdown) waits.
+///
+/// When the far end goes quiet, this side does not guess: transient
+/// unreachability shows as [`PipeStatus::Idle`] while it retries — a
+/// sleeping laptop is indistinguishable from a dead one, so timeout
+/// policy belongs to the embedder — while a peer that actively no
+/// longer recognizes this pairing (it restarted, and the ticket died
+/// with it) closes the pipe: [`PipeStatus::Closed`].
+///
+/// Deliberately shares no trait with [`ServeHandle`]: the overlap is
+/// three methods, and embedders driving both sides duplicate a small
+/// park-and-watch loop. If that ever grows past a nuisance, a shared
+/// trait is an additive, non-breaking change — the decision is recorded
+/// here so the duplication reads as chosen, not overlooked.
 pub struct ConnectHandle {
     _private: (),
 }
@@ -355,21 +441,30 @@ impl ConnectHandle {
         todo!()
     }
 
-    /// Wait for the next status transition and return the new status.
-    /// See [`ServeHandle::status_changed`].
+    /// Wait until the status changes, then return the new value.
+    ///
+    /// Same contract as [`ServeHandle::status_changed`]: snapshot
+    /// semantics, concurrent callers each against their own snapshot,
+    /// and once the pipe is closed every call resolves immediately with
+    /// [`PipeStatus::Closed`].
     pub async fn status_changed(&self) -> PipeStatus {
         todo!()
     }
 
-    /// Tear down and wait until the local listener is gone.
-    pub async fn shutdown(self) {
+    /// Tear down and wait until the local listener is gone. Same contract
+    /// as [`ServeHandle::shutdown`]: `&self` for shared-state embedders,
+    /// idempotent.
+    pub async fn shutdown(&self) {
         todo!()
     }
 }
 
-/// What the transport is doing right now. The `Relayed` case is worth
-/// surfacing to users: it explains latency and is expected under
-/// carrier-grade or strict corporate NAT.
+/// What the transport is doing right now.
+///
+/// The `Relayed` case is worth surfacing to users: it explains latency
+/// and is expected under carrier-grade or strict corporate NAT. `Closed`
+/// is the terminal state, and `status_changed` guarantees to deliver it —
+/// a watcher never blocks forever on a pipe that is already gone.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum PipeStatus {
@@ -379,4 +474,44 @@ pub enum PipeStatus {
     Direct,
     /// Falling back through an (encrypted, unreadable) relay.
     Relayed,
+    /// The pipe is gone — shut down, dropped, or dead after an
+    /// unrecoverable transport failure. Terminal: no transition follows.
+    /// Carried as a bare state rather than a reason so this type stays
+    /// `Copy`; a diagnostic accessor on the handle can be added
+    /// compatibly if the need proves real.
+    Closed,
+}
+
+// Auto-trait promises, pinned. The handles and the ticket live inside
+// consumers' `select!` arms, spawned tasks and daemon state, and the error
+// types ride through `anyhow` — those embeddings need these bounds, and a
+// sketch whose types are only *accidentally* `Send + Sync` would let the
+// implementation break every consumer after the fact. A regression here is
+// a compile error in this crate instead.
+#[expect(dead_code, reason = "compile-time pin; never called")]
+const fn auto_trait_promises() {
+    const fn assert<T: Send + Sync + 'static>() {}
+    assert::<Ticket>();
+    assert::<ServeHandle>();
+    assert::<ConnectHandle>();
+    assert::<PipeStatus>();
+    assert::<ServeError>();
+    assert::<ConnectError>();
+    assert::<TicketParseError>();
+}
+
+// The async surface gets the same treatment: a spawned task awaiting one
+// of these futures needs them `Send`, and an implementation that held a
+// non-Send guard across an await point would compile on its own while
+// breaking exactly that embedding. Pinning the futures has to name them,
+// which means calling the functions — dead code, type-checked, never run.
+#[expect(dead_code, reason = "compile-time pin; never called")]
+fn future_promises(serve_side: &ServeHandle, connect_side: &ConnectHandle, ticket: &Ticket) {
+    fn assert_send(_: impl Send) {}
+    assert_send(serve("", ServeOptions::default()));
+    assert_send(connect(ticket, ConnectOptions::default()));
+    assert_send(serve_side.status_changed());
+    assert_send(serve_side.shutdown());
+    assert_send(connect_side.status_changed());
+    assert_send(connect_side.shutdown());
 }
