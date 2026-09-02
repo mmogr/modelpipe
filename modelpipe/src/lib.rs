@@ -12,6 +12,7 @@
 use std::fmt;
 use std::net::SocketAddr;
 use std::str::FromStr;
+use std::time::Duration;
 
 /// A pairing ticket: how one machine finds and authenticates another's
 /// listener.
@@ -123,6 +124,32 @@ pub enum ServeError {
     Transport(Box<dyn std::error::Error + Send + Sync>),
 }
 
+impl ServeError {
+    /// Whether trying again could succeed without anyone changing
+    /// anything.
+    ///
+    /// This exists because the enum is `#[non_exhaustive]`, which is what
+    /// makes the classification promised above impossible for a caller to
+    /// compute for itself: a downstream `match` needs a `_` arm, and a
+    /// variant added in a later release lands silently in whichever
+    /// bucket that arm chose. Deciding here means a new variant is a
+    /// compile error in *this* crate — the only place that can answer it.
+    ///
+    /// Written as a full `match` with no `_` arm for exactly that reason.
+    /// `matches!` would compile past a new variant and is banned here.
+    pub const fn is_retryable(&self) -> bool {
+        match self {
+            // Both are the operator's to fix, and no amount of waiting
+            // changes either one.
+            Self::BackendNotLocal { .. } | Self::InvalidRelay { .. } => false,
+            // Nothing here names an address the caller chose — `serve`
+            // takes no bind option — so a failure is a machine condition,
+            // and transient resource exhaustion is the common shape.
+            Self::Bind(_) | Self::Transport(_) => true,
+        }
+    }
+}
+
 impl fmt::Display for ServeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -157,13 +184,17 @@ impl std::error::Error for ServeError {
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum ConnectError {
-    /// The serve side is reachable but does not recognize this ticket —
-    /// it has restarted since the ticket was issued. Not retryable:
-    /// re-pair with a fresh ticket.
-    TicketRejected,
     /// The peer could not be reached, directly or through a relay.
     /// Retryable: the serve side may be offline, or the network in
     /// between temporarily unwilling.
+    ///
+    /// This is also what a ticket outlived by its listener looks like.
+    /// There is no "ticket rejected" case to distinguish it from: the
+    /// endpoint key is ephemeral, so a restarted serve side is a
+    /// *different* endpoint, and dialing the old one reaches nobody
+    /// rather than reaching someone who refuses. A caller that wants to
+    /// tell "offline" from "re-paired" has to ask a human, not this
+    /// enum.
     PeerUnreachable,
     /// The requested local address could not be bound.
     Bind(std::io::Error),
@@ -172,13 +203,31 @@ pub enum ConnectError {
     Transport(Box<dyn std::error::Error + Send + Sync>),
 }
 
+impl ConnectError {
+    /// Whether trying again could succeed without anyone changing
+    /// anything. Same contract, and same no-`_`-arm rule, as
+    /// [`ServeError::is_retryable`].
+    ///
+    /// The two enums disagree about [`Bind`](Self::Bind), and the
+    /// disagreement is the point rather than an oversight: here the
+    /// caller named the address, through [`ConnectOptions::bind`], so a
+    /// bind failure is theirs to resolve by choosing another port. On the
+    /// serve side no address is caller-chosen, which is why the same
+    /// variant is retryable there. This is also why the two enums are
+    /// kept as separate types with duplicated arms instead of being
+    /// collapsed into one — they are two contracts that must stay free to
+    /// diverge, and here they already have.
+    pub const fn is_retryable(&self) -> bool {
+        match self {
+            Self::PeerUnreachable | Self::Transport(_) => true,
+            Self::Bind(_) => false,
+        }
+    }
+}
+
 impl fmt::Display for ConnectError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::TicketRejected => write!(
-                f,
-                "the serve side no longer recognizes this ticket — it restarted; pair again with a fresh one"
-            ),
             Self::PeerUnreachable => {
                 write!(f, "could not reach the serve side, directly or via a relay")
             }
@@ -191,7 +240,7 @@ impl fmt::Display for ConnectError {
 impl std::error::Error for ConnectError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Self::TicketRejected | Self::PeerUnreachable => None,
+            Self::PeerUnreachable => None,
             Self::Bind(e) => Some(e),
             Self::Transport(e) => Some(&**e),
         }
@@ -225,6 +274,23 @@ pub enum TokenPolicy {
     InsecureNoAuth,
 }
 
+impl fmt::Debug for TokenPolicy {
+    // Hand-written for the same reason `Debug for Ticket` is, one screen
+    // up: a derive over `Supplied(String)` copies the credential into
+    // every downstream panic message and `tracing` line. This type is
+    // also the reason the derive cannot simply be omitted — without a
+    // `Debug` at all, an embedder holding a `ServeOptions` in their own
+    // struct cannot `#[derive(Debug)]` on it, and the obvious fix they
+    // reach for is the one that leaks.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Generate => f.write_str("Generate"),
+            Self::Supplied(_) => f.write_str("Supplied(<redacted>)"),
+            Self::InsecureNoAuth => f.write_str("InsecureNoAuth"),
+        }
+    }
+}
+
 /// Options for [`serve`].
 ///
 /// Start from `Default` — the recommended configuration — and set what
@@ -250,8 +316,25 @@ pub struct ServeOptions {
     pub allow_private_backend: bool,
 }
 
+impl fmt::Debug for ServeOptions {
+    // Delegates to `TokenPolicy`'s redacting `Debug` rather than deriving,
+    // which would inline the credential. Written out field by field so
+    // that adding an option to this `#[non_exhaustive]` struct without
+    // adding it here is a visible omission rather than a silent one.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ServeOptions")
+            .field("auth", &self.auth)
+            .field("relay", &self.relay)
+            .field("allow_private_backend", &self.allow_private_backend)
+            .finish()
+    }
+}
+
 /// Options for [`connect`]. Same contract as [`ServeOptions`].
-#[derive(Default)]
+///
+/// Derives `Debug` where [`ServeOptions`] hand-writes one: nothing here
+/// is a credential, so there is nothing to redact.
+#[derive(Debug, Default)]
 #[non_exhaustive]
 pub struct ConnectOptions {
     /// Local address to bind. `None` picks a free port on loopback.
@@ -310,7 +393,17 @@ pub struct ServeHandle {
 
 impl ServeHandle {
     /// The ticket to hand to connecting machines (print it, QR it).
-    pub fn ticket(&self) -> &Ticket {
+    ///
+    /// Returns an owned clone, for the same reason
+    /// [`token`](Self::token) does — and for one this handle has that a
+    /// credential does not. iroh discovers direct addresses *over time*:
+    /// a ticket read the instant [`serve`] returns is legitimately
+    /// relay-only, and the same call later carries the direct addresses
+    /// hole-punching has since found. A borrow would force the listener
+    /// to mint one ticket at startup and hand out that snapshot forever,
+    /// so the cheaper signature is the one that quietly makes the ticket
+    /// wrong.
+    pub fn ticket(&self) -> Ticket {
         todo!()
     }
 
@@ -327,6 +420,16 @@ impl ServeHandle {
     /// `&str` could outlive the credential it names, and honoring such a
     /// borrow would force the implementation to keep every rotated-out
     /// secret alive (and un-zeroizable) for the handle's whole lifetime.
+    ///
+    /// `String` is the settled type here, not a placeholder for a
+    /// zeroizing wrapper. The token's whole job is to be read back and
+    /// handed to a person — the CLI prints it to stdout, an embedder puts
+    /// it in a config — so it lands in terminal scrollback and process
+    /// memory the caller controls long before any wrapper could scrub the
+    /// copy this returns. A `Secret<String>` here would encrypt the last
+    /// three feet of a journey that is public at both ends, and swapping
+    /// it in later would be a breaking change; the honest position is to
+    /// say so once, here.
     pub fn token(&self) -> Option<String> {
         todo!()
     }
@@ -387,7 +490,23 @@ impl ServeHandle {
         todo!()
     }
 
-    /// Tear down and wait until the listener is gone.
+    /// Stop admitting new requests, let the in-flight ones finish, and
+    /// wait until the listener is gone.
+    ///
+    /// **This drains rather than cuts, and it does not time out.** For a
+    /// pipe whose payload is a ten-minute token stream that is the whole
+    /// question, so it is answered here rather than left to the
+    /// implementation: the same promise [`set_token`](Self::set_token)
+    /// already makes — that a streaming response is not cut mid-body —
+    /// holds for teardown. A request admitted before this call runs to
+    /// completion; one arriving after it does not get in.
+    ///
+    /// Dropping the handle is the other half of the pair and cuts
+    /// immediately, without waiting. Both are needed: a daemon shutting
+    /// down cleanly wants the drain, and a process that has already
+    /// decided to die should not be held open by a backend that has
+    /// stopped producing tokens. [`shutdown_timeout`](Self::shutdown_timeout)
+    /// is the middle ground.
     ///
     /// Takes `&self` so a handle parked in shared state (an `Arc` in a
     /// daemon) can still be shut down gracefully — by-value `self` would
@@ -397,6 +516,23 @@ impl ServeHandle {
     pub async fn shutdown(&self) {
         todo!()
     }
+
+    /// [`shutdown`](Self::shutdown) with a deadline on the drain.
+    ///
+    /// Returns `true` if every in-flight request finished within `grace`,
+    /// and `false` if the deadline arrived first and the remainder were
+    /// cut. Either way the listener is gone when this returns, so a
+    /// caller that does not care which happened can ignore the value.
+    ///
+    /// This ships alongside `shutdown` rather than after it because the
+    /// unbounded wait has a real failure mode — a backend that has wedged
+    /// mid-generation never completes, and an embedder with only the
+    /// unbounded call would have to reach for the drop path and lose the
+    /// drain entirely.
+    pub async fn shutdown_timeout(&self, grace: Duration) -> bool {
+        let _ = grace;
+        todo!()
+    }
 }
 
 /// A live connect side.
@@ -404,12 +540,19 @@ impl ServeHandle {
 /// Teardown semantics match [`ServeHandle`]: dropping tears down without
 /// waiting, [`shutdown`](Self::shutdown) waits.
 ///
-/// When the far end goes quiet, this side does not guess: transient
-/// unreachability shows as [`PipeStatus::Idle`] while it retries — a
-/// sleeping laptop is indistinguishable from a dead one, so timeout
-/// policy belongs to the embedder — while a peer that actively no
-/// longer recognizes this pairing (it restarted, and the ticket died
-/// with it) closes the pipe: [`PipeStatus::Closed`].
+/// When the far end goes quiet, this side does not guess: unreachability
+/// shows as [`PipeStatus::Idle`] while it retries, and it keeps retrying.
+/// A sleeping laptop is indistinguishable from a dead one, so timeout
+/// policy belongs to the embedder.
+///
+/// A listener that has restarted since the ticket was issued is *also*
+/// this case, and deliberately not a distinct one. The endpoint key is
+/// ephemeral, so the restarted process is a different endpoint entirely:
+/// dialing the ticket reaches nobody, exactly as an offline peer does.
+/// There is no rejection to observe, because there is nobody left to
+/// reject. [`PipeStatus::Closed`] therefore means this side is gone —
+/// shut down, dropped, or dead after an unrecoverable transport failure
+/// — never that the far side declined the pairing.
 ///
 /// Deliberately shares no trait with [`ServeHandle`]: the overlap is
 /// three methods, and embedders driving both sides duplicate a small
@@ -451,10 +594,21 @@ impl ConnectHandle {
         todo!()
     }
 
-    /// Tear down and wait until the local listener is gone. Same contract
-    /// as [`ServeHandle::shutdown`]: `&self` for shared-state embedders,
-    /// idempotent.
+    /// Stop accepting local connections, let the in-flight requests
+    /// finish, and wait until the local listener is gone.
+    ///
+    /// Same contract as [`ServeHandle::shutdown`]: drains rather than
+    /// cuts, does not time out, takes `&self` for shared-state embedders,
+    /// and is idempotent. Dropping the handle cuts instead.
     pub async fn shutdown(&self) {
+        todo!()
+    }
+
+    /// [`shutdown`](Self::shutdown) with a deadline on the drain. Same
+    /// contract as [`ServeHandle::shutdown_timeout`], including the
+    /// returned `bool`.
+    pub async fn shutdown_timeout(&self, grace: Duration) -> bool {
+        let _ = grace;
         todo!()
     }
 }
@@ -465,14 +619,26 @@ impl ConnectHandle {
 /// and is expected under carrier-grade or strict corporate NAT. `Closed`
 /// is the terminal state, and `status_changed` guarantees to deliver it —
 /// a watcher never blocks forever on a pipe that is already gone.
+///
+/// One listener can serve several peers at once — a phone and a laptop
+/// holding the same ticket — so on the serve side this is an aggregate,
+/// and it reports **the worst active path**: `Relayed` if any connected
+/// peer is relayed, `Direct` only when all of them are direct. Reporting
+/// the best path instead would hide exactly what `Relayed` exists to
+/// explain, leaving the owner of the slow device with no way to find out
+/// why. The cost is accepted and stated plainly: with a mixed set this
+/// value describes no single peer, and a per-peer accessor is the
+/// additive change that would fix that if the need proves real.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum PipeStatus {
-    /// Waiting for the first peer, or between connections.
+    /// No peer is connected — waiting for the first, or between
+    /// connections.
     Idle,
-    /// Direct hole-punched connection established.
+    /// Every connected peer has a direct hole-punched connection.
     Direct,
-    /// Falling back through an (encrypted, unreadable) relay.
+    /// At least one connected peer is falling back through an (encrypted,
+    /// unreadable) relay.
     Relayed,
     /// The pipe is gone — shut down, dropped, or dead after an
     /// unrecoverable transport failure. Terminal: no transition follows.
@@ -480,6 +646,29 @@ pub enum PipeStatus {
     /// `Copy`; a diagnostic accessor on the handle can be added
     /// compatibly if the need proves real.
     Closed,
+}
+
+impl PipeStatus {
+    /// A stable lowercase identifier: `"idle"`, `"direct"`, `"relayed"`,
+    /// `"closed"`.
+    ///
+    /// For status output, log fields and anything else that wants to name
+    /// the state without matching on it. Deliberately an identifier and
+    /// not a sentence — freezing `"relayed"` costs nothing, while freezing
+    /// "falling back through a relay" would make every wording improvement
+    /// a breaking change for whoever grepped for it.
+    ///
+    /// A variant added later returns its own new identifier, so a caller
+    /// rendering this string keeps working; one *matching* on the string
+    /// has the same obligation it would have had matching on the enum.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Idle => "idle",
+            Self::Direct => "direct",
+            Self::Relayed => "relayed",
+            Self::Closed => "closed",
+        }
+    }
 }
 
 // Auto-trait promises, pinned. The handles and the ticket live inside
@@ -491,6 +680,11 @@ pub enum PipeStatus {
 #[expect(dead_code, reason = "compile-time pin; never called")]
 const fn auto_trait_promises() {
     const fn assert<T: Send + Sync + 'static>() {}
+    // Declared with `assert` above rather than beside their call sites:
+    // an item after a statement is a clippy error, and these are items.
+    const fn assert_clone<T: Clone>() {}
+    const fn assert_copy_eq<T: Copy + Eq>() {}
+
     assert::<Ticket>();
     assert::<ServeHandle>();
     assert::<ConnectHandle>();
@@ -498,6 +692,24 @@ const fn auto_trait_promises() {
     assert::<ServeError>();
     assert::<ConnectError>();
     assert::<TicketParseError>();
+    // The options structs and the policy they carry. Until now these were
+    // only *accidentally* `Send`, by way of `future_promises` pinning the
+    // futures that consume them; nothing said so, and an implementation
+    // could have made one of them `!Send` without failing a single check.
+    // Pinning `TokenPolicy` also forbids a future variant holding
+    // something like an `Rc<dyn Fn…>` — that is the intent, not a side
+    // effect: a credential source that cannot cross a thread boundary
+    // would break every embedder holding the listener in a spawned task.
+    assert::<ServeOptions>();
+    assert::<ConnectOptions>();
+    assert::<TokenPolicy>();
+
+    // Two promises the docs make that no check enforced. `Ticket: Clone`
+    // is what `ServeHandle::ticket` returning owned depends on, and
+    // `PipeStatus: Copy + Eq` is stated at its derive and relied on by
+    // `status_changed`'s snapshot comparison.
+    assert_clone::<Ticket>();
+    assert_copy_eq::<PipeStatus>();
 }
 
 // The async surface gets the same treatment: a spawned task awaiting one
@@ -512,6 +724,147 @@ fn future_promises(serve_side: &ServeHandle, connect_side: &ConnectHandle, ticke
     assert_send(connect(ticket, ConnectOptions::default()));
     assert_send(serve_side.status_changed());
     assert_send(serve_side.shutdown());
+    assert_send(serve_side.shutdown_timeout(Duration::from_secs(0)));
     assert_send(connect_side.status_changed());
     assert_send(connect_side.shutdown());
+    assert_send(connect_side.shutdown_timeout(Duration::from_secs(0)));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Distinctive enough that finding it anywhere in a rendering is
+    /// unambiguous, and not a substring of any word the formatter emits.
+    const SECRET: &str = "sk-zzq-a-very-distinctive-credential-value";
+
+    // ── Credential redaction ─────────────────────────────────────────────
+
+    /// A derived `Debug` would inline the credential, putting it into
+    /// every downstream panic message and `tracing` line — the same
+    /// failure the hand-written `Debug for Ticket` exists to prevent, on
+    /// the other type in this crate that holds a secret.
+    #[test]
+    fn debug_for_token_policy_never_renders_the_supplied_token() {
+        let rendered = format!("{:?}", TokenPolicy::Supplied(SECRET.to_owned()));
+        assert!(
+            !rendered.contains(SECRET),
+            "the token leaked into Debug output: {rendered}"
+        );
+        // Asserting the positive too, so the test cannot pass because the
+        // impl rendered nothing at all.
+        assert!(
+            rendered.contains("Supplied") && rendered.contains("redacted"),
+            "Debug should still say which variant it is: {rendered}"
+        );
+    }
+
+    /// The variants carrying no secret must still be legible — a redacting
+    /// `Debug` that redacted everything would be useless and would quietly
+    /// pass the test above.
+    #[test]
+    fn debug_for_token_policy_names_the_variants_that_hold_nothing() {
+        assert_eq!(format!("{:?}", TokenPolicy::Generate), "Generate");
+        assert_eq!(
+            format!("{:?}", TokenPolicy::InsecureNoAuth),
+            "InsecureNoAuth"
+        );
+    }
+
+    /// `ServeOptions` is the type an embedder is most likely to hold in a
+    /// struct of their own and derive `Debug` on, which is how a supplied
+    /// credential reaches a log without anyone deciding it should.
+    #[test]
+    fn debug_for_serve_options_never_renders_the_supplied_token() {
+        // A struct literal rather than the `Default`-then-mutate dance an
+        // out-of-crate embedder is forced into by `#[non_exhaustive]`:
+        // inside the crate the literal is legal, and clippy rejects the
+        // dance. What is under test is the `Debug` impl, which cannot tell
+        // how the value was built.
+        let opts = ServeOptions {
+            auth: TokenPolicy::Supplied(SECRET.to_owned()),
+            relay: Some("https://relay.example.com/".to_owned()),
+            ..Default::default()
+        };
+        let rendered = format!("{opts:?}");
+        assert!(
+            !rendered.contains(SECRET),
+            "the token leaked through ServeOptions: {rendered}"
+        );
+        assert!(
+            rendered.contains("relay.example.com"),
+            "the non-secret fields should still be visible: {rendered}"
+        );
+    }
+
+    // ── Retry classification ─────────────────────────────────────────────
+
+    /// Both are the operator's to fix, and no amount of waiting changes
+    /// either one.
+    #[test]
+    fn a_user_fixable_serve_error_is_not_retryable() {
+        for e in [
+            ServeError::BackendNotLocal {
+                url: "http://example.com".to_owned(),
+            },
+            ServeError::InvalidRelay {
+                url: "not a url".to_owned(),
+            },
+        ] {
+            assert!(!e.is_retryable(), "{e} should not be retryable");
+        }
+    }
+
+    /// `serve` takes no bind option, so nothing here names an address the
+    /// caller chose — a failure describes the machine underneath.
+    #[test]
+    fn a_machine_serve_error_is_retryable() {
+        for e in [
+            ServeError::Bind(std::io::Error::other("no sockets left")),
+            ServeError::Transport("relay handshake failed".into()),
+        ] {
+            assert!(e.is_retryable(), "{e} should be retryable");
+        }
+    }
+
+    #[test]
+    fn an_unreachable_peer_is_retryable() {
+        assert!(ConnectError::PeerUnreachable.is_retryable());
+        assert!(ConnectError::Transport("stream reset".into()).is_retryable());
+    }
+
+    /// The one point where the two enums disagree, and the reason they
+    /// stay two types rather than one shared enum: here the caller named
+    /// the port through `ConnectOptions::bind`, so retrying the same value
+    /// fails the same way forever.
+    #[test]
+    fn a_connect_bind_failure_is_not_retryable_because_the_caller_chose_the_address() {
+        let e = ConnectError::Bind(std::io::Error::other("address in use"));
+        assert!(!e.is_retryable(), "{e} should not be retryable");
+    }
+
+    // ── Status identifiers ───────────────────────────────────────────────
+
+    /// The identifiers are frozen surface once anything greps for them, so
+    /// pin the spellings and the distinctness in one place.
+    #[test]
+    fn every_status_renders_a_distinct_stable_identifier() {
+        let all = [
+            PipeStatus::Idle,
+            PipeStatus::Direct,
+            PipeStatus::Relayed,
+            PipeStatus::Closed,
+        ];
+        let rendered: Vec<&str> = all.iter().map(|s| s.as_str()).collect();
+        assert_eq!(rendered, ["idle", "direct", "relayed", "closed"]);
+
+        let mut deduped = rendered.clone();
+        deduped.sort_unstable();
+        deduped.dedup();
+        assert_eq!(
+            deduped.len(),
+            rendered.len(),
+            "identifiers must be distinct"
+        );
+    }
 }

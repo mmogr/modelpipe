@@ -23,4 +23,12 @@ workspace = true
 
 [dependencies]
 iroh = { workspace = true }
-tokio = { workspace = true, features = ["net", "io-util", "sync", "time"] }
+# `rt` is load-bearing and was missing: both `serve` and `connect` return a
+# handle over a background accept loop, so the first real body spawns, and
+# `tokio::spawn` is gated on it. It currently compiles anyway — iroh enables
+# `rt` and `rt-multi-thread` on its own copy of tokio and cargo unifies the
+# features — which is exactly the problem: this crate's ability to build would
+# depend on a dependency's private feature choice, and iroh narrowing it would
+# surface as a confusing error in a release that changed nothing here. Declared
+# because it is used, not because it is currently absent.
+tokio = { workspace = true, features = ["net", "io-util", "rt", "sync", "time"] }
