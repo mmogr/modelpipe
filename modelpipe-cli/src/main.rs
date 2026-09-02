@@ -148,7 +148,7 @@ async fn park(mut status: impl AsyncStatus, interrupt: &mut Interrupt) -> anyhow
     }
 }
 
-/// A SIGINT listener that outlives `park`.
+/// A Ctrl-C listener that outlives `park`.
 ///
 /// tokio installs its handler on first use and documents that it stays
 /// installed for the life of the process — "even if this `Signal` instance
@@ -159,12 +159,27 @@ async fn park(mut status: impl AsyncStatus, interrupt: &mut Interrupt) -> anyhow
 /// operator's only remaining option was `kill` from another terminal.
 /// Keeping one listener alive across both phases is what makes the second
 /// interrupt mean something.
-struct Interrupt(tokio::signal::unix::Signal);
+///
+/// The two platform types are the same idea under different names — a
+/// stream that yields once per interrupt — which is why the whole
+/// difference fits in the field and the constructor. What is *not*
+/// interchangeable is `tokio::signal::ctrl_c()`: it is a one-shot future,
+/// and the second Ctrl-C is the one that matters here.
+struct Interrupt(
+    #[cfg(unix)] tokio::signal::unix::Signal,
+    #[cfg(windows)] tokio::signal::windows::CtrlC,
+);
 
 impl Interrupt {
+    #[cfg(unix)]
     fn new() -> anyhow::Result<Self> {
         use tokio::signal::unix::{SignalKind, signal};
         Ok(Self(signal(SignalKind::interrupt())?))
+    }
+
+    #[cfg(windows)]
+    fn new() -> anyhow::Result<Self> {
+        Ok(Self(tokio::signal::windows::ctrl_c()?))
     }
 
     async fn next(&mut self) -> anyhow::Result<()> {
