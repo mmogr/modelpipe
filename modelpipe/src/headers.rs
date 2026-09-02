@@ -47,11 +47,29 @@ const FORWARDING: &[&str] = &[
     "x-real-ip",
 ];
 
+/// Fields a `Connection` header may not nominate, whatever it says.
+///
+/// RFC 9110 §7.6.1 forbids a sender from naming a field that is meaningful
+/// to every recipient, and this is the recipient half of that rule: these
+/// describe the *message*, not the hop, so deleting one on a peer's say-so
+/// changes what the message means rather than what the connection does.
+///
+/// `content-length` is the one that matters. Framing is decided from the
+/// headers as they arrived; the strip happens afterwards; and the
+/// serializer re-declares framing only for chunked. So honouring
+/// `Connection: content-length` deletes the length from the head while the
+/// body is still forwarded under it — the edge emitting a body beneath a
+/// head that declares none, which is the framing confusion the module
+/// comment above says stripping must not create.
+const NEVER_NOMINABLE: &[&str] = &["connection", "content-length", "host", "transfer-encoding"];
+
 /// Remove the hop-by-hop headers, including the ones this message nominates.
 ///
 /// `Connection` may name further headers as hop-by-hop for this connection
 /// only, and honouring that is not optional: a header a peer marked
-/// connection-scoped is one it did not intend to reach anybody else.
+/// connection-scoped is one it did not intend to reach anybody else. A
+/// nomination of a message-level field is the exception and is ignored —
+/// see [`NEVER_NOMINABLE`].
 pub(crate) fn strip_hop_by_hop(headers: &mut Vec<(String, String)>) {
     // Collected before anything is removed, because `Connection` is itself
     // hop-by-hop and is about to be deleted along with the list it carries.
@@ -61,6 +79,8 @@ pub(crate) fn strip_hop_by_hop(headers: &mut Vec<(String, String)>) {
         .flat_map(|(_, value)| value.split(','))
         .map(|token| token.trim().to_ascii_lowercase())
         .filter(|token| !token.is_empty())
+        // A peer may not redefine what its own message means.
+        .filter(|token| !NEVER_NOMINABLE.contains(&token.as_str()))
         .collect();
 
     headers.retain(|(name, _)| {

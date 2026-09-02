@@ -76,6 +76,48 @@ fn a_connection_header_strips_the_names_it_lists() {
     assert_eq!(names(&h), ["x-kept"]);
 }
 
+/// The nomination cannot reach a field that describes the message.
+///
+/// `Content-Length` is the one with teeth: framing is decided from the
+/// headers as they arrived and the strip runs afterwards, so a honoured
+/// `Connection: content-length` would leave the edge forwarding a body
+/// under a head that declares none — a peer rewriting what its own message
+/// means, using a header that is only supposed to describe the hop.
+#[test]
+fn a_message_level_field_cannot_be_nominated_away() {
+    for field in ["Content-Length", "Host", "Transfer-Encoding", "Connection"] {
+        let mut h = headers(&[
+            ("Connection", &field.to_ascii_lowercase()),
+            (field, "9"),
+            ("X-Kept", "1"),
+        ]);
+        strip_hop_by_hop(&mut h);
+        // `Connection` and `Transfer-Encoding` are hop-by-hop in their own
+        // right and go regardless; what must survive is everything the
+        // nomination alone would have taken.
+        let expected: &[&str] = match field {
+            "Content-Length" => &["content-length", "x-kept"],
+            "Host" => &["host", "x-kept"],
+            _ => &["x-kept"],
+        };
+        assert_eq!(names(&h), expected, "nominating {field}");
+    }
+}
+
+/// The exclusion is narrow: an ordinary header is still nominable, so the
+/// test above cannot pass because the whole mechanism stopped working.
+#[test]
+fn an_ordinary_field_is_still_nominable_alongside_a_refused_one() {
+    let mut h = headers(&[
+        ("Connection", "content-length, X-Hop"),
+        ("Content-Length", "9"),
+        ("X-Hop", "1"),
+        ("X-Kept", "2"),
+    ]);
+    strip_hop_by_hop(&mut h);
+    assert_eq!(names(&h), ["content-length", "x-kept"]);
+}
+
 /// Whitespace and case inside the `Connection` value are as variable as
 /// anywhere else in HTTP.
 #[test]
