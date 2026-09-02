@@ -12,7 +12,7 @@
 
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
-use crate::http_head::Framing;
+use crate::framing::Framing;
 
 /// Read size for one pull from the source.
 const CHUNK: usize = 16 * 1024;

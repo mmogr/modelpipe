@@ -3,8 +3,14 @@
 //! Pure: each of these is a complete HTTP/1.1 response as bytes, built here
 //! and never obtained from anywhere else. That is the property worth having
 //! a module for — a refusal produced locally cannot be confused with
-//! something the backend said, because at the point these are written the
-//! backend has not been contacted.
+//! something the backend said.
+//!
+//! For [`unauthorized`] and [`bad_request`] the stronger statement holds:
+//! at the point they are written the backend has not been contacted at all.
+//! [`bad_gateway`] is the deliberate exception, and has to be — it reports
+//! what happened *at* the backend, so it cannot be produced before reaching
+//! one. It is still synthesized here rather than relayed, which is what
+//! keeps it distinguishable from a 502 the backend itself sent.
 //!
 //! Every one closes the connection. A stream carries exactly one exchange
 //! and a refused exchange is over.
@@ -59,7 +65,8 @@ pub(crate) fn bad_gateway() -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::http_head::{Framing, framing, parse_response};
+    use crate::framing::{Framing, framing};
+    use crate::http_head::parse_response;
 
     /// Each refusal must be a well-formed response whose declared length
     /// matches the body actually written — a wrong length here would hang

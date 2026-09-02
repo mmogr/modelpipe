@@ -12,6 +12,7 @@
 //! disagreement to desynchronize, which is the property that makes an
 //! opaque body safe here and would not make it safe on a shared socket.
 
+use crate::framing::Framing;
 use crate::headers;
 
 /// The most head a peer may send before being cut off.
@@ -24,21 +25,6 @@ pub(crate) const MAX_HEAD_BYTES: usize = 64 * 1024;
 
 /// The most header fields a head may carry, bounding the parse itself.
 const MAX_HEADER_FIELDS: usize = 128;
-
-/// How to find the end of a message body.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Framing {
-    /// No body at all.
-    Empty,
-    /// Exactly this many bytes.
-    Length(u64),
-    /// Chunked transfer coding; the body ends at its terminal chunk.
-    Chunked,
-    /// The body ends when the peer closes. Responses only — a request
-    /// framed this way could never be answered, because the server would
-    /// have to wait for a close that means "I am done asking".
-    UntilClose,
-}
 
 /// Why a head was refused. Every variant is a 400 to the client; they are
 /// separate so a test can say which rule fired rather than only that one
@@ -119,73 +105,6 @@ pub(crate) fn parse_response(buf: &[u8]) -> Result<Option<(ResponseHead, usize)>
     }
 }
 
-/// Decide how a body is framed, refusing every combination that two
-/// implementations could read differently.
-///
-/// This is the request-smuggling check, and it refuses rather than
-/// resolves. RFC 9112 does say `Transfer-Encoding` overrides
-/// `Content-Length`, and a proxy that follows that rule is correct and
-/// still exploitable: the attack works precisely because the *next* hop
-/// resolves the same ambiguity the other way. An edge that refuses cannot
-/// disagree with anybody.
-///
-/// `assume_close` is true for responses, which may legitimately be framed
-/// by the connection closing; a request may not be, because a server
-/// cannot distinguish "I have finished asking" from "I have gone away".
-pub(crate) fn framing(
-    fields: &[(String, String)],
-    assume_close: bool,
-) -> Result<Framing, HeadError> {
-    let mut lengths = fields
-        .iter()
-        .filter(|(name, _)| name.eq_ignore_ascii_case("content-length"))
-        .map(|(_, value)| value.trim());
-    let mut codings = fields
-        .iter()
-        .filter(|(name, _)| name.eq_ignore_ascii_case("transfer-encoding"))
-        .peekable();
-
-    let chunked = codings.peek().is_some();
-    if chunked {
-        // Any transfer coding at all rules out Content-Length. Both present
-        // is the classic smuggling shape and is refused outright.
-        if lengths.next().is_some() {
-            return Err(HeadError::ConflictingFraming);
-        }
-        // `chunked` must be the final coding, and it is the only one this
-        // edge implements. A coding it cannot apply is not something to
-        // pass through blind.
-        let all: Vec<String> = codings
-            .flat_map(|(_, value)| value.split(','))
-            .map(|token| token.trim().to_ascii_lowercase())
-            .filter(|token| !token.is_empty())
-            .collect();
-        if all.last().map(String::as_str) != Some("chunked") || all.len() != 1 {
-            return Err(HeadError::UnsupportedTransferCoding);
-        }
-        return Ok(Framing::Chunked);
-    }
-
-    let Some(first) = lengths.next() else {
-        return Ok(if assume_close {
-            Framing::UntilClose
-        } else {
-            Framing::Empty
-        });
-    };
-    // Repeated Content-Length is legal only when every value agrees; two
-    // that disagree are the same ambiguity by another route.
-    for other in lengths {
-        if other != first {
-            return Err(HeadError::ConflictingFraming);
-        }
-    }
-    let length = first
-        .parse::<u64>()
-        .map_err(|_| HeadError::ConflictingFraming)?;
-    Ok(Framing::Length(length))
-}
-
 /// Serialize a request head, re-declaring chunked framing when that is how
 /// the body will be forwarded.
 ///
@@ -231,6 +150,19 @@ pub(crate) fn rewrite_for_backend(head: &mut RequestHead, authority: &str) {
     headers::strip_hop_by_hop(&mut head.headers);
     headers::strip_inbound_forwarded(&mut head.headers);
     headers::set_host(&mut head.headers, authority);
+    // The same sentence the response carries to the client, said to the
+    // other side for the same reason: this connection carries one exchange.
+    // The edge opens a fresh one per exchange and drops it afterwards, so
+    // keep-alive — which HTTP/1.1 applies by default once the client's own
+    // `Connection` has been stripped — is a promise it does not keep.
+    //
+    // It is also what makes `Framing::UntilClose` terminable. That framing
+    // ends the body at the backend's close, and a keep-alive backend never
+    // closes: without this, a response the edge resolves that way is a hang
+    // rather than a stream. Added after the strip, which removes whatever
+    // the client said about *its* connection.
+    head.headers
+        .push(("Connection".to_owned(), "close".to_owned()));
 }
 
 fn collect(fields: &[httparse::Header<'_>]) -> Result<Vec<(String, String)>, HeadError> {

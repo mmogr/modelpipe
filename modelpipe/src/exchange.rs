@@ -13,19 +13,23 @@
 //!                                      → *only then* open the backend
 //! ```
 //!
-//! Every refusal happens with the backend untouched. That is the difference
-//! between "returned 401" and "the backend never saw it", and only the
-//! second is what the README sells — so it is asserted with a connection
-//! counter rather than a status code.
+//! Every refusal *the client can cause* happens with the backend untouched.
+//! That is the difference between "returned 401" and "the backend never saw
+//! it", and only the second is what the README sells — so it is asserted
+//! with a connection counter rather than a status code. The one refusal
+//! written after contact is the 502, which by definition reports what
+//! happened at the backend and could not be produced before reaching it.
 
 use std::future::Future;
 
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 
 use crate::body::{self, Buffered};
 use crate::credential::Credential;
+use crate::framing;
+use crate::head_read;
 use crate::headers;
-use crate::http_head::{self, Framing, HeadError, MAX_HEAD_BYTES};
+use crate::http_head;
 use crate::refusal;
 
 /// Where the serve side gets a connection to the backend.
@@ -55,6 +59,11 @@ pub(crate) enum Outcome {
     /// Refused on the head — unparseable, oversized, or framed
     /// ambiguously. The backend was not contacted.
     BadRequest,
+    /// The backend was contacted and the exchange failed there — it would
+    /// not take the connection, or answered with something this edge
+    /// cannot read. The client was told so; distinct from
+    /// [`Forwarded`](Self::Forwarded) because nothing came back.
+    BadGateway,
 }
 
 /// Serve one exchange on `stream`.
@@ -74,7 +83,7 @@ where
     // 1. The head, bounded. A ticket-holder can open a stream and type
     //    headers; without a bound that is an unbounded allocation for the
     //    price of a connection.
-    let Ok((mut head, leftover)) = read_head(stream).await? else {
+    let Ok((mut head, leftover)) = head_read::request(stream, Vec::new()).await? else {
         return refuse(stream, refusal::bad_request(), Outcome::BadRequest).await;
     };
 
@@ -84,7 +93,7 @@ where
     //    the other way.
     // Every framing refusal is a 400; the variants exist so a test can say
     // which rule fired, not so the edge answers them differently.
-    let Ok(request_framing) = http_head::framing(&head.headers, false) else {
+    let Ok(request_framing) = framing::framing(&head.headers, false) else {
         return refuse(stream, refusal::bad_request(), Outcome::BadRequest).await;
     };
 
@@ -94,8 +103,15 @@ where
     }
 
     // 4. Admitted. Only now does a backend connection exist.
+    let method = head.method.clone();
     http_head::rewrite_for_backend(&mut head, backend.authority());
-    let mut upstream = backend.connect().await?;
+    // A backend that will not take the connection is a gateway failure with
+    // an answer, not a stream that dies silently. Without this the client
+    // received nothing at all — not a status, not a malformed response, no
+    // bytes — for a backend that was simply down.
+    let Ok(mut upstream) = backend.connect().await else {
+        return refuse(stream, refusal::bad_gateway(), Outcome::BadGateway).await;
+    };
 
     upstream
         .write_all(&http_head::serialize_request(&head, request_framing))
@@ -111,11 +127,17 @@ where
     // A backend response this edge cannot read is a gateway failure, not a
     // client error, and is reported as one rather than passed through as
     // though the client had erred.
-    let Ok((mut response, response_leftover)) = read_response_head(&mut upstream).await? else {
-        return refuse(stream, refusal::bad_gateway(), Outcome::Forwarded).await;
+    let Ok((mut response, response_leftover)) = final_response(&mut upstream).await? else {
+        return refuse(stream, refusal::bad_gateway(), Outcome::BadGateway).await;
     };
-    let response_framing =
-        http_head::framing(&response.headers, true).unwrap_or(Framing::UntilClose);
+    // The status and the method decide this before any header does, and an
+    // ambiguously framed backend response is refused on the way out for the
+    // same reason an ambiguously framed request is refused on the way in.
+    let Ok(response_framing) =
+        framing::response_framing(response.status, &method, &response.headers)
+    else {
+        return refuse(stream, refusal::bad_gateway(), Outcome::BadGateway).await;
+    };
     headers::strip_hop_by_hop(&mut response.headers);
 
     stream
@@ -141,55 +163,31 @@ async fn refuse<S: AsyncWrite + Unpin>(
     Ok(outcome)
 }
 
-/// Read until the request head is complete, or the bound is reached.
+/// The backend's *final* response head, with any interim ones skipped.
 ///
-/// The outer `Result` is transport failure; the inner one is a head this
-/// edge refuses. They are different things: one means the stream broke,
-/// the other means the peer sent something it should not have.
-async fn read_head<S: AsyncRead + Unpin>(
+/// A `1xx` is a complete head that is not a response: the client asked for
+/// it (`Expect: 100-continue`) or the backend volunteered it, and the real
+/// answer is the next head on the stream. Returning the first head made the
+/// interim one the final one — and since a `1xx` carries neither
+/// `Content-Length` nor `Transfer-Encoding`, the framing that followed was
+/// `UntilClose`, so the client waited on a close a keep-alive backend never
+/// sends. An interim head arrived as a hang, not as a wrong status.
+///
+/// The bytes that came in with the interim head are the start of the head
+/// after it, which is why the reader takes a prefix.
+async fn final_response<S: AsyncRead + Unpin>(
     stream: &mut S,
-) -> std::io::Result<Result<(http_head::RequestHead, Vec<u8>), HeadError>> {
-    let mut buf = Vec::new();
+) -> head_read::Read<http_head::ResponseHead> {
+    let mut prefix = Vec::new();
     loop {
-        match http_head::parse_request(&buf) {
-            Ok(Some((head, consumed))) => return Ok(Ok((head, buf[consumed..].to_vec()))),
-            Ok(None) => {}
-            Err(e) => return Ok(Err(e)),
+        let head = head_read::response(stream, prefix).await?;
+        let Ok((response, rest)) = head else {
+            return Ok(head);
+        };
+        if !framing::is_interim(response.status) {
+            return Ok(Ok((response, rest)));
         }
-        if buf.len() > MAX_HEAD_BYTES {
-            return Ok(Err(HeadError::TooLarge));
-        }
-        let mut next = [0u8; 4096];
-        let n = stream.read(&mut next).await?;
-        if n == 0 {
-            // The peer stopped mid-head. Nothing to answer, and nothing to
-            // forward.
-            return Ok(Err(HeadError::Malformed));
-        }
-        buf.extend_from_slice(&next[..n]);
-    }
-}
-
-/// The response twin of [`read_head`].
-async fn read_response_head<S: AsyncRead + Unpin>(
-    stream: &mut S,
-) -> std::io::Result<Result<(http_head::ResponseHead, Vec<u8>), HeadError>> {
-    let mut buf = Vec::new();
-    loop {
-        match http_head::parse_response(&buf) {
-            Ok(Some((head, consumed))) => return Ok(Ok((head, buf[consumed..].to_vec()))),
-            Ok(None) => {}
-            Err(e) => return Ok(Err(e)),
-        }
-        if buf.len() > MAX_HEAD_BYTES {
-            return Ok(Err(HeadError::TooLarge));
-        }
-        let mut next = [0u8; 4096];
-        let n = stream.read(&mut next).await?;
-        if n == 0 {
-            return Ok(Err(HeadError::Malformed));
-        }
-        buf.extend_from_slice(&next[..n]);
+        prefix = rest;
     }
 }
 

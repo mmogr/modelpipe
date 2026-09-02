@@ -29,6 +29,8 @@ mod crc32c;
 mod credential;
 mod dialer;
 mod exchange;
+mod framing;
+mod head_read;
 mod headers;
 mod http_head;
 mod lifecycle;

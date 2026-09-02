@@ -10,6 +10,7 @@
 //! way.
 
 use super::*;
+use crate::framing::{Framing, framing};
 
 fn fields(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
     pairs
@@ -279,7 +280,7 @@ fn the_authorization_header_is_found_whatever_its_case() {
 /// The three header rules applied in the order the edge applies them,
 /// pinned once as a combination.
 #[test]
-fn rewriting_for_the_backend_drops_the_connection_and_keeps_the_message() {
+fn rewriting_for_the_backend_replaces_the_connection_and_keeps_the_message() {
     let mut head = RequestHead {
         method: "POST".to_owned(),
         target: "/".to_owned(),
@@ -299,6 +300,17 @@ fn rewriting_for_the_backend_drops_the_connection_and_keeps_the_message() {
         .iter()
         .map(|(n, _)| n.to_ascii_lowercase())
         .collect();
-    assert_eq!(names, ["host", "authorization", "content-type"]);
+    // `Connection: close` is the edge's own, not the client's `keep-alive`
+    // surviving: one bi-stream carries one exchange and the backend socket
+    // is dropped after it, so the edge says so rather than letting HTTP/1.1
+    // default keep-alive apply to a connection it is about to close.
+    assert_eq!(
+        names,
+        ["host", "authorization", "content-type", "connection"]
+    );
     assert_eq!(head.headers[0].1, "127.0.0.1:11434");
+    assert_eq!(
+        head.headers.last().expect("connection"),
+        &("Connection".to_owned(), "close".to_owned())
+    );
 }
