@@ -118,18 +118,6 @@ impl Ticket {
     /// which is the right way round: a direct address is an optimization,
     /// while the relay is what connects at all under a NAT that refuses to
     /// hole-punch.
-    // Scoped to the non-test build, which is the only configuration where
-    // this is true: the tests below are currently the sole caller, so an
-    // unconditional `expect` is itself unfulfilled when they compile. When
-    // the transport starts minting tickets this attribute becomes
-    // unfulfilled in turn, which is the reminder to delete it.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "the transport mints tickets; until it exists only tests build one"
-        )
-    )]
     pub(crate) fn new(
         endpoint_id: [u8; ENDPOINT_ID_LEN],
         addrs: Vec<TicketAddr>,
@@ -158,6 +146,19 @@ impl Ticket {
             addrs: encoded.into_iter().map(|(_, a)| a).collect(),
             backend,
         }
+    }
+
+    /// The serve side's endpoint identity, as raw bytes.
+    ///
+    /// `pub(crate)`: the transport needs it to dial, and nobody outside
+    /// this crate has anything to do with a raw key.
+    pub(crate) const fn endpoint_id(&self) -> &[u8; ENDPOINT_ID_LEN] {
+        &self.endpoint_id
+    }
+
+    /// The transport addresses this ticket carries, in canonical order.
+    pub(crate) fn addrs(&self) -> &[TicketAddr] {
+        &self.addrs
     }
 
     /// Short fingerprint of the serve side's identity, for `status`

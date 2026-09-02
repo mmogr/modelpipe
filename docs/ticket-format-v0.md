@@ -219,6 +219,27 @@ ticket: pipeadlvvgabqkyqvn6vjp7nhslea45a5yls6pnkmizfv4bbu2hxa5iruaiaaaswq5duobzt
 A conforming parser additionally accepts each `ticket` string fully
 uppercased and yields identical bytes.
 
+## The protocol a ticket leads to (normative)
+
+A ticket says *where* a peer is. What to say once you get there is the other
+half, and a client cannot guess it.
+
+The QUIC ALPN is the ASCII string **`modelpipe/0`**. A dialer offers exactly
+this; a listener may offer several, which is what makes introducing
+`modelpipe/1` a rollout rather than a flag day.
+
+The version here is **independent of the ticket's version byte**. They are
+separate compatibility spaces, and the ticket's version cannot cover for
+this one: a ticket that parses perfectly still reaches a peer you cannot
+speak to if the ALPNs do not overlap. A refusal to negotiate is what a
+client sees when the two sides speak different protocol versions, and it is
+distinct from being unable to reach the peer at all.
+
+What travels *over* an accepted connection is not specified in this
+document. It will be, before anything claims to be stable — until then, a
+non-Rust client can pair and negotiate, and the exchange format is the Rust
+implementation's.
+
 ## Refusals (normative)
 
 The vectors above are all happy paths, and the error taxonomy is half of
