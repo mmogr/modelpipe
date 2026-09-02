@@ -1,8 +1,12 @@
 # Adapted from gglib's ci.yml, minus everything that workspace has and this one
-# does not: no Node, no Tauri, no bindings, no architecture-enforcement scripts,
-# no per-crate badge extraction. What carries over is the shape — a pinned
-# toolchain, one aggregate status check, and a cache key per build
-# configuration.
+# does not: no Node, no Tauri, no bindings, no per-crate badge extraction. What
+# carries over is the shape — a pinned toolchain, one aggregate status check, a
+# cache key per build configuration, and the habit of mechanizing an
+# architectural rule rather than writing it down and hoping.
+#
+# The enforcement scripts live in the `fmt` job because none of them needs a
+# toolchain: check_file_size.sh counts lines, and ticket_vectors.py --check is
+# pure stdlib Python.
 #
 # No `apt-get install` step anywhere below, unlike gglib's: iroh resolves rustls
 # onto `ring`, which needs no system libraries. If a future dependency flips the
@@ -57,6 +61,22 @@ jobs:
       - name: Validate workflow YAML
         run: ./scripts/check_workflow_yaml.sh
 
+      # A hard gate rather than gglib's ratchet, because this workspace has
+      # no debt to ratchet down: every file is under budget, so crossing the
+      # line is a failure and not a new baseline entry. Lives in this job
+      # because it needs no toolchain — it counts lines.
+      - name: Check file sizes
+        run: ./scripts/check_file_size.sh
+
+      # The ticket layout exists in three places — the spec table, the Python
+      # reference, and (from the next phase) the Rust codec. Nothing checked
+      # that they agreed; the invariant was asserted in a commit message. This
+      # is that assertion made executable, and it is why the reference has no
+      # --update: a v0 vector that changes is a broken client in another
+      # language, not a stale fixture.
+      - name: Check the ticket vectors match the spec
+        run: python3 scripts/ticket_vectors.py --check
+
   clippy:
     name: Clippy
     runs-on: ubuntu-latest
@@ -109,6 +129,16 @@ jobs:
       - name: Check the crates still package
         run: cargo package --workspace --no-verify --locked
 
+      # The library on its OWN feature set, which no other job checks.
+      # Every workspace-wide command unifies features across members, so a
+      # feature the library uses but does not declare is supplied by a
+      # neighbour and the gap stays invisible here while breaking anyone who
+      # depends on `modelpipe` alone. That is not hypothetical: tokio's `rt`
+      # is what `tokio::spawn` needs, both entry points spawn, and it was
+      # absent from this crate's manifest while arriving free from iroh.
+      - name: Check the library builds on its own features
+        run: cargo check -p modelpipe --locked
+
       # `--no-fail-fast` so one failing binary does not hide the state of every
       # crate after it.
       - name: Run tests
@@ -140,6 +170,18 @@ jobs:
         env:
           RUSTDOCFLAGS: -D warnings
         run: cargo doc -p modelpipe --no-deps --document-private-items
+
+      # The step above documents private items; docs.rs does not. That
+      # difference is not cosmetic: an intra-doc link from a public item to a
+      # private one RESOLVES under --document-private-items and 404s on the
+      # published page, so the gate above cannot see the one audience that
+      # matters. Running what docs.rs actually runs is the only way to catch
+      # it, and a crate whose modules are all private is exactly the shape
+      # that produces such links.
+      - name: Check rustdoc as docs.rs builds it
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc -p modelpipe --no-deps
 
   # ubuntu clippy above never sees the inside of a `#[cfg(windows)]` block. This
   # crate has none yet — it is a transport that will grow socket and
