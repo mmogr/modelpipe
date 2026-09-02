@@ -70,10 +70,10 @@ not like invitations.
 
 The backend itself must be local: loopback always, private (RFC 1918 /
 ULA) ranges only behind an explicit `--allow-private-backend`, link-local
-ranges — where cloud instance metadata lives — never. The check runs
-against resolved addresses, not URL text, so a DNS name can't smuggle an
-address past it. modelpipe extends trust outward from your machine; it
-does not re-export someone else's server.
+ranges — where cloud instance metadata lives — never, whatever that flag
+says. The check runs against resolved addresses, not URL text, so a DNS
+name can't smuggle an address past it. modelpipe extends trust outward
+from your machine; it does not re-export someone else's server.
 
 ## Ticket format (v0 — draft)
 
