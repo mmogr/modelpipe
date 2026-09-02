@@ -569,3 +569,91 @@ async fn a_backend_that_refuses_the_connection_is_reported_as_a_gateway_failure(
     let text = String::from_utf8_lossy(&seen);
     assert!(text.starts_with("HTTP/1.1 502"), "got: {text}");
 }
+
+// ── The backend that answers before it has finished listening ────────────
+
+/// A backend that replies as soon as it has the head and then stops
+/// reading, exactly as a server rejecting an oversized payload does. Its
+/// buffer is small so the edge's write blocks well before the body is
+/// through — which is the whole point: the answer is available while the
+/// request is still going out.
+struct AnswersEarly(Mutex<Option<DuplexStream>>);
+
+impl AnswersEarly {
+    fn new(response: &'static str) -> Self {
+        let (mine, mut theirs) = duplex(1024);
+        tokio::spawn(async move {
+            let mut buf = [0u8; 256];
+            let mut seen = Vec::new();
+            while !seen.windows(4).any(|w| w == b"\r\n\r\n") {
+                match theirs.read(&mut buf).await {
+                    Ok(0) | Err(_) => return,
+                    Ok(n) => seen.extend_from_slice(&buf[..n]),
+                }
+            }
+            let _ = theirs.write_all(response.as_bytes()).await;
+            let _ = theirs.flush().await;
+            // And now it stops reading. The edge is mid-body.
+            std::future::pending::<()>().await;
+        });
+        Self(Mutex::new(Some(mine)))
+    }
+}
+
+impl Backend for AnswersEarly {
+    type Stream = DuplexStream;
+
+    fn authority(&self) -> &'static str {
+        "127.0.0.1:11434"
+    }
+
+    async fn connect(&self) -> std::io::Result<DuplexStream> {
+        Ok(self.0.lock().await.take().expect("connected once"))
+    }
+}
+
+/// A backend that answers before it has read the request must not cost the
+/// client the answer.
+///
+/// This is the shape of every `413` on an oversized payload, every `400` on
+/// bad JSON, every `429` — and SECURITY.md names multi-MiB vision payloads
+/// as the expected traffic. Written sequentially, the edge was still inside
+/// `write_all` when the backend stopped draining, so the write blocked
+/// forever here and, against a real socket, died with `ECONNRESET` and took
+/// the already-delivered response with it.
+#[tokio::test]
+async fn a_backend_that_answers_before_reading_the_body_is_still_heard() {
+    let backend =
+        AnswersEarly::new("HTTP/1.1 413 Payload Too Large\r\nContent-Length: 2\r\n\r\nno");
+    let (mut client, mut edge) = duplex(256 * 1024);
+
+    // A body far larger than the backend's buffer, so the pump cannot
+    // finish and the answer is only reachable by reading while it stalls.
+    let body = "x".repeat(64 * 1024);
+    let request = format!(
+        "POST /v1/chat/completions HTTP/1.1\r\nHost: x\r\n\
+         Authorization: Bearer {TOKEN}\r\nContent-Length: {}\r\n\r\n{body}",
+        body.len()
+    );
+    client.write_all(request.as_bytes()).await.unwrap();
+
+    let (credential, _) = Credential::new(&supplied());
+    let outcome = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        serve_exchange(&mut edge, &credential, &backend),
+    )
+    .await
+    .expect("the answer is already in hand; waiting on the body is waiting forever")
+    .expect("no transport failure");
+    assert_eq!(outcome, Outcome::Forwarded);
+
+    drop(edge);
+    let mut seen = Vec::new();
+    client.read_to_end(&mut seen).await.unwrap();
+    let text = String::from_utf8_lossy(&seen);
+    assert!(
+        text.starts_with("HTTP/1.1 413"),
+        "the backend's answer must reach the client: {text}"
+    );
+    assert!(text.ends_with("no"), "body included: {text}");
+}

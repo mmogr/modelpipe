@@ -26,10 +26,10 @@ use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 
 use crate::body::{self, Buffered};
 use crate::credential::Credential;
-use crate::framing;
+use crate::framing::{self, Framing};
 use crate::head_read;
 use crate::headers;
-use crate::http_head;
+use crate::http_head::{self, HeadError};
 use crate::refusal;
 
 /// Where the serve side gets a connection to the backend.
@@ -109,25 +109,35 @@ where
     // an answer, not a stream that dies silently. Without this the client
     // received nothing at all — not a status, not a malformed response, no
     // bytes — for a backend that was simply down.
-    let Ok(mut upstream) = backend.connect().await else {
+    let Ok(upstream) = backend.connect().await else {
         return refuse(stream, refusal::bad_gateway(), Outcome::BadGateway).await;
     };
 
-    upstream
+    // Split so the request body and the response can be in flight at once.
+    // They have to be: see `pump_and_read`.
+    let (mut up_read, mut up_write) = tokio::io::split(upstream);
+    up_write
         .write_all(&http_head::serialize_request(&head, request_framing))
         .await?;
-    upstream.flush().await?;
+    up_write.flush().await?;
 
-    let mut from_client = Buffered::new(stream, leftover);
-    body::forward(&mut from_client, &mut upstream, request_framing).await?;
-
-    // 5. The response, forwarded frame by frame. `UntilClose` is the
-    //    streaming case and the one that matters: an SSE response has to
-    //    leave this edge as it arrives, not once it has finished.
+    // 5. The request body out and the response head back, together. The
+    //    response is then forwarded frame by frame: `UntilClose` is the
+    //    streaming case and the one that matters, because an SSE response
+    //    has to leave this edge as it arrives rather than once it has
+    //    finished.
     // A backend response this edge cannot read is a gateway failure, not a
     // client error, and is reported as one rather than passed through as
     // though the client had erred.
-    let Ok((mut response, response_leftover)) = final_response(&mut upstream).await? else {
+    let read = pump_and_read(
+        stream,
+        leftover,
+        request_framing,
+        &mut up_write,
+        &mut up_read,
+    )
+    .await;
+    let Ok((mut response, response_leftover)) = read? else {
         return refuse(stream, refusal::bad_gateway(), Outcome::BadGateway).await;
     };
     // The status and the method decide this before any header does, and an
@@ -145,10 +155,64 @@ where
         .await?;
     stream.flush().await?;
 
-    let mut from_backend = Buffered::new(&mut upstream, response_leftover);
+    let mut from_backend = Buffered::new(&mut up_read, response_leftover);
     body::forward(&mut from_backend, stream, response_framing).await?;
 
     Ok(Outcome::Forwarded)
+}
+
+/// Forward the request body while watching for the response, and return the
+/// response head.
+///
+/// The two have to overlap, and the reason is not throughput. A backend may
+/// answer before it has finished reading — a `413` on an oversized payload,
+/// a `400` on bad JSON, a `429` — and then stop draining. Its close then
+/// arrives as an RST, because the receive queue is not empty, and an RST
+/// makes the kernel discard what it had already delivered. Written
+/// sequentially, this edge was still inside `write_all` at that moment: the
+/// write died with `ECONNRESET`, the error propagated, and the answer the
+/// backend had already sent was gone. The client got a cleanly closed
+/// stream with zero bytes in it — no status, no 502, nothing — for every
+/// request whose body outran the backend's socket buffer. Under it, the
+/// same request worked, so it presented as a size-dependent phantom.
+///
+/// The pump is polled first, so a backend that answers only after reading —
+/// every well-behaved one — behaves exactly as before and the response is
+/// read afterwards. When the head arrives first the pump is abandoned,
+/// which is correct: the backend has committed to an answer and the rest of
+/// the body cannot change it.
+///
+/// A pump failure is deliberately not propagated. It is the symptom this
+/// function exists for, and the response is the thing worth having.
+async fn pump_and_read<S, R, W>(
+    stream: &mut S,
+    leftover: Vec<u8>,
+    framing: Framing,
+    to_backend: &mut W,
+    from_backend: &mut R,
+) -> std::io::Result<Result<(http_head::ResponseHead, Vec<u8>), HeadError>>
+where
+    S: AsyncRead + Unpin,
+    R: AsyncRead + Unpin,
+    W: AsyncWrite + Unpin,
+{
+    let mut from_client = Buffered::new(stream, leftover);
+    let mut pump = std::pin::pin!(body::forward(&mut from_client, to_backend, framing));
+    let mut reading = std::pin::pin!(final_response(from_backend));
+    let mut pumping = true;
+    loop {
+        tokio::select! {
+            // Biased, and the pump first: a backend that reads before it
+            // answers must see the whole body, and on a buffered stream the
+            // pump completes before the response is ever polled.
+            biased;
+            outcome = &mut pump, if pumping => {
+                pumping = false;
+                let _ = outcome;
+            }
+            head = &mut reading => return head,
+        }
+    }
 }
 
 /// Write a locally synthesized response and return without touching the
