@@ -12,11 +12,13 @@
 //! rather than a test run.
 
 use super::*;
+use crate::ServeError;
 
 const TOKEN: &str = "sk-zzq-a-known-credential";
 
 fn enforcing(token: &str) -> Credential {
-    let (cell, given) = Credential::new(&TokenPolicy::Supplied(token.to_owned()));
+    let (cell, given) =
+        Credential::new(&TokenPolicy::Supplied(token.to_owned())).expect("a usable token");
     assert_eq!(given.as_deref(), Some(token), "Supplied echoes its input");
     cell
 }
@@ -40,7 +42,7 @@ fn the_expected_header_is_accepted() {
 /// still runs — it just has nothing to refuse against.
 #[test]
 fn serving_open_admits_everything_including_nothing() {
-    let (cell, token) = Credential::new(&TokenPolicy::InsecureNoAuth);
+    let (cell, token) = Credential::new(&TokenPolicy::InsecureNoAuth).expect("a usable policy");
     assert_eq!(token, None, "there is no token to report");
     assert!(offers(&cell, None));
     assert!(offers(&cell, Some("Bearer anything")));
@@ -136,7 +138,7 @@ fn there_is_no_window_where_both_credentials_pass() {
 /// The recovery move for a leaked generated token.
 #[test]
 fn rotate_mints_a_fresh_token_and_enforces_it() {
-    let (cell, first) = Credential::new(&TokenPolicy::Generate);
+    let (cell, first) = Credential::new(&TokenPolicy::Generate).expect("a usable policy");
     let first = first.expect("Generate produces a token");
     assert!(offers(&cell, Some(&format!("Bearer {first}"))));
 
@@ -151,7 +153,7 @@ fn rotate_mints_a_fresh_token_and_enforces_it() {
 /// why the check is always installed rather than decided at startup.
 #[test]
 fn set_turns_auth_on_when_serving_open() {
-    let (cell, _) = Credential::new(&TokenPolicy::InsecureNoAuth);
+    let (cell, _) = Credential::new(&TokenPolicy::InsecureNoAuth).expect("a usable policy");
     assert!(offers(&cell, None), "open to begin with");
 
     cell.set(TOKEN.to_owned());
@@ -193,6 +195,58 @@ fn debug_reports_whether_a_credential_is_enforced_and_never_which() {
     assert!(!rendered.contains(TOKEN), "the token leaked: {rendered}");
     assert!(rendered.contains("enforced"), "but the state is legible");
 
-    let (open, _) = Credential::new(&TokenPolicy::InsecureNoAuth);
+    let (open, _) = Credential::new(&TokenPolicy::InsecureNoAuth).expect("a usable policy");
     assert!(format!("{open:?}").contains("open"));
+}
+
+// ── A credential nothing can present ─────────────────────────────────────
+
+/// Refused at construction, not enforced.
+///
+/// `"Bearer "` with a trailing space is a header value no conforming client
+/// can produce: HTTP parsers trim trailing whitespace, so what arrives is
+/// `"Bearer"` and never matches. Enforcing it fails closed, which is the
+/// safe direction and the worst version of it — the listener starts,
+/// reports the token it was handed, and refuses every request afterwards
+/// with nothing to say why.
+#[test]
+fn a_token_no_client_could_send_is_refused_rather_than_enforced() {
+    for empty in ["", " ", "\t", "\n", "  \r\n "] {
+        assert!(
+            matches!(
+                Credential::new(&TokenPolicy::Supplied(empty.to_owned())),
+                Err(ServeError::InvalidToken)
+            ),
+            "{empty:?} must not become a credential"
+        );
+    }
+}
+
+/// The refusal is narrow. A token that merely *contains* whitespace, or is
+/// short, is the embedder's business — this crate has no standing to impose
+/// a shape on an API key it did not mint.
+#[test]
+fn an_unusual_but_presentable_token_is_still_accepted() {
+    for odd in ["x", " padded ", "sk-with spaces", "🔑"] {
+        let (cell, given) = Credential::new(&TokenPolicy::Supplied(odd.to_owned()))
+            .expect("presentable, however odd");
+        assert_eq!(given.as_deref(), Some(odd));
+        assert!(offers(&cell, Some(&format!("Bearer {odd}"))));
+    }
+}
+
+/// A rotation to an unpresentable value keeps the credential already in
+/// force. Installing it would take a working listener down to one that
+/// answers nothing, which is not a rotation — it is an outage.
+#[test]
+fn setting_an_unpresentable_token_changes_nothing() {
+    let cell = enforcing(TOKEN);
+    assert!(
+        !cell.set(String::new()),
+        "the caller is told it did not take"
+    );
+    assert!(
+        offers(&cell, Some(&format!("Bearer {TOKEN}"))),
+        "the credential in force must survive a refused rotation"
+    );
 }

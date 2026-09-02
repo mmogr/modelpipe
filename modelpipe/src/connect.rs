@@ -28,11 +28,16 @@ pub enum ConnectError {
     /// tell "offline" from "re-paired" has to ask a human, not this
     /// enum.
     PeerUnreachable,
-    /// The requested local address could not be bound.
+    /// The local address the caller asked for could not be bound.
+    ///
+    /// Only that one. The p2p endpoint this side also binds is
+    /// [`Endpoint`](Self::Endpoint), and keeping them apart is what makes
+    /// this variant's permanence true rather than merely stated.
     Bind(std::io::Error),
-    /// The transport failed some other way. Opaque on purpose; see
-    /// [`ServeError::Transport`](crate::ServeError::Transport).
-    Transport(Box<dyn std::error::Error + Send + Sync>),
+    /// The p2p endpoint could not be set up. The twin of
+    /// [`ServeError::Bind`](crate::ServeError::Bind), and retryable for the
+    /// same reason: no address here was chosen by anyone.
+    Endpoint(std::io::Error),
 }
 
 impl ConnectError {
@@ -40,18 +45,22 @@ impl ConnectError {
     /// anything. Same contract, and same no-`_`-arm rule, as
     /// [`ServeError::is_retryable`](crate::ServeError::is_retryable).
     ///
-    /// The two enums disagree about [`Bind`](Self::Bind), and the
-    /// disagreement is the point rather than an oversight: here the
-    /// caller named the address, through [`ConnectOptions::bind`], so a
-    /// bind failure is theirs to resolve by choosing another port. On the
-    /// serve side no address is caller-chosen, which is why the same
-    /// variant is retryable there. This is also why the two enums are
-    /// kept as separate types with duplicated arms instead of being
-    /// collapsed into one — they are two contracts that must stay free to
-    /// diverge, and here they already have.
+    /// The two enums look like they disagree about "a bind failed", and
+    /// they do not: they name two different failures.
+    /// [`Bind`](Self::Bind) is the address the caller passed through
+    /// [`ConnectOptions::bind`], which retrying will fail on forever;
+    /// [`Endpoint`](Self::Endpoint) is the p2p socket nobody chose, which
+    /// is [`ServeError::Bind`](crate::ServeError::Bind) by another name and
+    /// retryable exactly as that one is.
+    ///
+    /// Splitting them is what makes the classification honest. While one
+    /// variant carried both, two of its three producers named no
+    /// caller-chosen address at all — including the iroh endpoint, bound
+    /// with `None` — so a supervisor following this contract abandoned
+    /// `connect` permanently over a transient `EMFILE`.
     pub const fn is_retryable(&self) -> bool {
         match self {
-            Self::PeerUnreachable | Self::Transport(_) => true,
+            Self::PeerUnreachable | Self::Endpoint(_) => true,
             Self::Bind(_) => false,
         }
     }
@@ -63,8 +72,11 @@ impl fmt::Display for ConnectError {
             Self::PeerUnreachable => {
                 write!(f, "could not reach the serve side, directly or via a relay")
             }
-            Self::Bind(e) => write!(f, "could not bind the local address: {e}"),
-            Self::Transport(e) => write!(f, "transport failure: {e}"),
+            // Neither interpolates its source: `anyhow` prints the
+            // top-level Display and then the chain, so a variant that does
+            // both prints the OS error twice.
+            Self::Bind(_) => f.write_str("could not bind the requested local address"),
+            Self::Endpoint(_) => f.write_str("could not set up the p2p endpoint"),
         }
     }
 }
@@ -73,8 +85,7 @@ impl std::error::Error for ConnectError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::PeerUnreachable => None,
-            Self::Bind(e) => Some(e),
-            Self::Transport(e) => Some(&**e),
+            Self::Bind(e) | Self::Endpoint(e) => Some(e),
         }
     }
 }
@@ -106,13 +117,21 @@ mod tests {
     #[test]
     fn an_unreachable_peer_is_retryable() {
         assert!(ConnectError::PeerUnreachable.is_retryable());
-        assert!(ConnectError::Transport("stream reset".into()).is_retryable());
     }
 
-    /// The one point where the two enums disagree, and the reason they
-    /// stay two types rather than one shared enum: here the caller named
-    /// the port through `ConnectOptions::bind`, so retrying the same value
-    /// fails the same way forever.
+    /// The p2p endpoint is nobody's choice, so failing to bind it is a
+    /// machine condition — the same verdict `ServeError::Bind` gets for the
+    /// same socket.
+    #[test]
+    fn failing_to_bind_the_p2p_endpoint_is_retryable() {
+        let e = ConnectError::Endpoint(std::io::Error::other("too many open files"));
+        assert!(e.is_retryable(), "{e} should be retryable");
+    }
+
+    /// The one variant that is permanent, and the reason it is a variant of
+    /// its own: the caller named this port through `ConnectOptions::bind`,
+    /// so retrying the same value fails the same way forever. The p2p
+    /// endpoint's own bind failure is `Endpoint`, above.
     #[test]
     fn a_connect_bind_failure_is_not_retryable_because_the_caller_chose_the_address() {
         let e = ConnectError::Bind(std::io::Error::other("address in use"));

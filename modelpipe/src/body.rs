@@ -12,7 +12,8 @@
 
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
-use crate::http_head::Framing;
+use crate::framing::Framing;
+use crate::headers;
 
 /// Read size for one pull from the source.
 const CHUNK: usize = 16 * 1024;
@@ -161,12 +162,23 @@ where
 
         if size == 0 {
             // Trailers, then the blank line that ends the body.
+            //
+            // Filtered by the same rule the head is, because a trailer is a
+            // header field that arrives late and nothing else. Forwarding
+            // them verbatim let a peer restate anything the head strip had
+            // just removed — a client putting back its own
+            // `X-Forwarded-For`, a backend putting back `Connection` or a
+            // second `Content-Length` — with the edge's own header rules
+            // applied and then undone a few hundred bytes later.
             loop {
                 let trailer = src.read_line().await?;
-                dst.write_all(&trailer).await?;
-                dst.write_all(b"\r\n").await?;
                 if trailer.is_empty() {
+                    dst.write_all(b"\r\n").await?;
                     break;
+                }
+                if !dropped(&trailer) {
+                    dst.write_all(&trailer).await?;
+                    dst.write_all(b"\r\n").await?;
                 }
             }
             dst.flush().await?;
@@ -207,6 +219,18 @@ where
 
 fn find_crlf(buf: &[u8]) -> Option<usize> {
     buf.windows(2).position(|w| w == b"\r\n")
+}
+
+/// Whether a trailer line names a field the edge strips from a head.
+///
+/// A line with no colon is not a field at all; it is dropped, because
+/// passing bytes onward that this edge could not read is how a value means
+/// one thing here and another downstream — the rule `http_head::collect`
+/// already applies to header values.
+fn dropped(line: &[u8]) -> bool {
+    line.iter()
+        .position(|&b| b == b':')
+        .is_none_or(|colon| std::str::from_utf8(&line[..colon]).is_ok_and(headers::is_stripped))
 }
 
 fn unexpected_eof() -> std::io::Error {

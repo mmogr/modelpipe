@@ -174,6 +174,33 @@ fn every_vector_round_trips_through_its_uppercase_form() {
     );
 }
 
+/// The claim in the test below, made about a *parsed* ticket.
+///
+/// The one under it builds both tickets with `Ticket::new`, so it pins
+/// `new`'s canonicalization and cannot see whether `decode` shares it — and
+/// `decode` did not, so parse-then-print reproduced the input order and two
+/// tickets naming one pairing compared unequal. Both inputs below are valid
+/// v0 tickets from the reference implementation; only the address order
+/// differs.
+#[test]
+fn a_parsed_ticket_is_canonical_too() {
+    // vector 2's pairing, with the IPv4 address written before the relay.
+    const NON_CANONICAL: &str = "pipeadlvvgabqkyqvn6vjp7nhslea45a5yls6pnkmizfv4bbu2hxa5iruaqbaadmbkaba4ivcaaadjuhi5dqom5c6l3smvwgc6jomv4gc3lqnrss4y3pnuxqau732bda";
+
+    let parsed: Ticket = NON_CANONICAL.parse().expect("a valid v0 ticket");
+    assert_eq!(
+        parsed.to_string(),
+        V2_TICKET,
+        "Display is the encoder, and the spec has encoders emit addresses \
+         sorted so that equal tickets compare equal as strings"
+    );
+    assert_eq!(
+        parsed,
+        V2_TICKET.parse::<Ticket>().expect("vector 2"),
+        "the spec says the parsed result is a set, so these are one ticket"
+    );
+}
+
 /// `Display` is canonicalizing, which is worth pinning because it means
 /// parse-then-print is not always the identity.
 #[test]

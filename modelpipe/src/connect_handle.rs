@@ -91,12 +91,7 @@ impl ConnectHandle {
     /// contract as [`ServeHandle::shutdown_timeout`](crate::ServeHandle::shutdown_timeout), including the
     /// returned `bool`.
     pub async fn shutdown_timeout(&self, grace: Duration) -> bool {
-        self.state.lifecycle.close();
-        let drained = tokio::time::timeout(grace, self.state.lifecycle.wait_until_drained())
-            .await
-            .is_ok();
-        self.state.lifecycle.mark_torn_down();
-        drained
+        dialer::shutdown_timeout(&self.state, grace).await
     }
 }
 
@@ -109,9 +104,17 @@ impl ConnectHandle {
 
 impl Drop for ConnectHandle {
     fn drop(&mut self) {
-        // Close only. Marking teardown complete here would be a lie the
-        // moment anyone believed it: the accept loop still holds the
-        // listener, and it is the loop that says when the port is free.
+        // Publishing `Closed` stops the accept loop; closing the connection
+        // is what makes this a cut. Without the second half, `Drop` on this
+        // side ended nothing: the spawned `carry` tasks each hold their own
+        // `Arc<ConnectState>`, so they kept streaming after the handle that
+        // owned them was gone — while the serve side's identically
+        // documented `Drop` cut immediately. `Connection::close` is
+        // synchronous, so unlike the serve side this needs no runtime.
         self.state.lifecycle.close();
+        self.state.connection.close(0u32.into(), b"dropped");
+        // Marking teardown complete is still not ours: the accept loop
+        // holds the listener, and it is the loop that says when the port is
+        // free.
     }
 }

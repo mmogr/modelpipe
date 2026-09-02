@@ -118,7 +118,7 @@ async fn exchange(
     client.write_all(request).await.unwrap();
     client.shutdown().await.unwrap();
 
-    let (credential, _) = Credential::new(policy);
+    let (credential, _) = Credential::new(policy).expect("a usable policy");
     let outcome = tokio::time::timeout(
         std::time::Duration::from_secs(5),
         serve_exchange(&mut edge, &credential, backend),
@@ -292,7 +292,23 @@ async fn the_backend_receives_the_message_headers_and_not_the_connection_ones() 
         !lower.contains("x-hop"),
         "a nominated hop-by-hop header: {sent}"
     );
-    assert!(!lower.contains("connection:"), "hop-by-hop: {sent}");
+    // The client's `Connection` is gone; the edge's own is in its place.
+    // Not a survival: this connection carries one exchange and the edge
+    // drops it afterwards, so saying so is what keeps a keep-alive backend
+    // from holding an `UntilClose` response open forever.
+    assert!(
+        !lower.contains("connection: keep-alive"),
+        "the client's connection header must not survive: {sent}"
+    );
+    assert_eq!(
+        lower.matches("connection:").count(),
+        1,
+        "exactly one, and it is the edge's: {sent}"
+    );
+    assert!(
+        lower.contains("connection: close"),
+        "the backend is told this connection carries one exchange: {sent}"
+    );
     assert!(
         !lower.contains("x-forwarded-for"),
         "a forwarding chain: {sent}"
@@ -352,7 +368,7 @@ async fn a_streaming_response_reaches_the_client_frame_by_frame() {
     });
 
     let fixed = Fixed(Mutex::new(Some(mine)));
-    let (credential, _) = Credential::new(&supplied());
+    let (credential, _) = Credential::new(&supplied()).expect("a usable token");
     let pump = tokio::spawn(async move {
         serve_exchange(&mut edge, &credential, &fixed)
             .await
@@ -377,4 +393,267 @@ async fn a_streaming_response_reaches_the_client_frame_by_frame() {
     released.notify_one();
     assert_eq!(pump.await.unwrap(), Outcome::Forwarded);
     let _ = backend.connects();
+}
+
+// ── The backend's half of the framing rules ──────────────────────────────
+
+/// A backend whose response head is written by hand, so a test can say
+/// exactly what came back. Distinct from `Fixed` in taking the bytes rather
+/// than a prepared stream, and in never closing: a real keep-alive backend
+/// holds the socket open after answering, which is the condition under
+/// which every framing mistake below becomes a hang rather than a wrong
+/// answer.
+struct KeepAlive(Mutex<Option<DuplexStream>>);
+
+impl KeepAlive {
+    fn new(response: &'static str) -> Self {
+        let (mine, mut theirs) = duplex(64 * 1024);
+        tokio::spawn(async move {
+            let mut sink = Vec::new();
+            // Answer, then hold the connection open exactly as Ollama and
+            // llama-server do. Nothing here ever writes EOF.
+            let _ = theirs.write_all(response.as_bytes()).await;
+            let _ = theirs.flush().await;
+            let _ = theirs.read_to_end(&mut sink).await;
+        });
+        Self(Mutex::new(Some(mine)))
+    }
+}
+
+impl Backend for KeepAlive {
+    type Stream = DuplexStream;
+
+    fn authority(&self) -> &'static str {
+        "127.0.0.1:11434"
+    }
+
+    async fn connect(&self) -> std::io::Result<DuplexStream> {
+        Ok(self.0.lock().await.take().expect("connected once"))
+    }
+}
+
+/// Drive one exchange against a keep-alive backend, failing rather than
+/// hanging. The deadline is the assertion: every case below completes in
+/// microseconds when the framing is right and never completes when it is
+/// not.
+async fn against_keepalive(request: &[u8], response: &'static str) -> (Outcome, String) {
+    let backend = KeepAlive::new(response);
+    let (mut client, mut edge) = duplex(64 * 1024);
+    client.write_all(request).await.unwrap();
+
+    let (credential, _) = Credential::new(&supplied()).expect("a usable token");
+    let outcome = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        serve_exchange(&mut edge, &credential, &backend),
+    )
+    .await
+    .expect("a keep-alive backend must not hang the exchange")
+    .expect("no transport failure");
+
+    drop(edge);
+    let mut seen = Vec::new();
+    client.read_to_end(&mut seen).await.unwrap();
+    (outcome, String::from_utf8_lossy(&seen).into_owned())
+}
+
+fn authed(method: &str) -> Vec<u8> {
+    format!("{method} /v1/models HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer {TOKEN}\r\n\r\n")
+        .into_bytes()
+}
+
+/// RFC 9112 §6.3: the status code settles this before any header does.
+/// Reading it from the headers alone is not a wrong answer, it is a hang —
+/// `204` declares no framing, so the old rule resolved it to `UntilClose`
+/// and waited for a close a keep-alive backend never sends.
+#[tokio::test]
+async fn a_bodyless_status_is_framed_by_its_status_and_not_by_its_headers() {
+    for response in [
+        "HTTP/1.1 204 No Content\r\n\r\n",
+        "HTTP/1.1 304 Not Modified\r\nContent-Length: 42\r\n\r\n",
+    ] {
+        let (outcome, seen) = against_keepalive(&authed("GET"), response).await;
+        assert_eq!(outcome, Outcome::Forwarded, "{response:?}");
+        assert!(
+            seen.starts_with("HTTP/1.1 3") || seen.starts_with("HTTP/1.1 2"),
+            "{seen}"
+        );
+    }
+}
+
+/// The same rule from the request's side: a response to `HEAD` carries the
+/// length a `GET` would have returned, and no body. Waiting for that many
+/// bytes is a wait that cannot end.
+#[tokio::test]
+async fn a_head_response_is_not_a_body_to_wait_for() {
+    let (outcome, seen) = against_keepalive(
+        &authed("HEAD"),
+        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 4096\r\n\r\n",
+    )
+    .await;
+    assert_eq!(outcome, Outcome::Forwarded);
+    assert!(seen.starts_with("HTTP/1.1 200"), "{seen}");
+    assert!(
+        seen.to_ascii_lowercase().contains("content-length: 4096"),
+        "the declared length still describes what a GET would return: {seen}"
+    );
+}
+
+/// An interim response is a head that precedes the real one. Delivered as
+/// final it was not merely the wrong status: a `1xx` declares no framing,
+/// so what followed was `UntilClose` and the client waited forever.
+#[tokio::test]
+async fn an_interim_response_is_skipped_and_the_real_one_forwarded() {
+    let (outcome, seen) = against_keepalive(
+        &authed("GET"),
+        "HTTP/1.1 100 Continue\r\n\r\nHTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}",
+    )
+    .await;
+    assert_eq!(outcome, Outcome::Forwarded);
+    assert!(
+        seen.starts_with("HTTP/1.1 200"),
+        "the interim head must not be the answer: {seen}"
+    );
+    assert!(seen.ends_with("{}"), "and the real body arrives: {seen}");
+}
+
+/// The rule the request path enforces, applied to the backend. A response
+/// carrying both `Content-Length` and `Transfer-Encoding` is the
+/// request-smuggling shape; refusing it inbound and resolving it outbound
+/// is one rule applied on one side of the pipe only.
+#[tokio::test]
+async fn an_ambiguously_framed_backend_response_is_refused_rather_than_resolved() {
+    let (outcome, seen) = against_keepalive(
+        &authed("GET"),
+        "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nTransfer-Encoding: chunked\r\n\r\n{}",
+    )
+    .await;
+    assert_eq!(outcome, Outcome::BadGateway);
+    assert!(
+        seen.starts_with("HTTP/1.1 502"),
+        "the client did nothing wrong, and the backend's answer is unreadable: {seen}"
+    );
+}
+
+/// A backend that will not take the connection owes the client an answer.
+/// Before this the stream simply died: no status, no malformed response, no
+/// bytes at all — indistinguishable from the tunnel being gone.
+#[tokio::test]
+async fn a_backend_that_refuses_the_connection_is_reported_as_a_gateway_failure() {
+    struct Refusing;
+    impl Backend for Refusing {
+        type Stream = DuplexStream;
+        fn authority(&self) -> &'static str {
+            "127.0.0.1:11434"
+        }
+        async fn connect(&self) -> std::io::Result<DuplexStream> {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::ConnectionRefused,
+                "nothing is listening",
+            ))
+        }
+    }
+
+    let (mut client, mut edge) = duplex(64 * 1024);
+    client.write_all(&authed("GET")).await.unwrap();
+    client.shutdown().await.unwrap();
+
+    let (credential, _) = Credential::new(&supplied()).expect("a usable token");
+    let outcome = serve_exchange(&mut edge, &credential, &Refusing)
+        .await
+        .expect("a refused backend is an answer, not a transport failure");
+    assert_eq!(outcome, Outcome::BadGateway);
+
+    drop(edge);
+    let mut seen = Vec::new();
+    client.read_to_end(&mut seen).await.unwrap();
+    let text = String::from_utf8_lossy(&seen);
+    assert!(text.starts_with("HTTP/1.1 502"), "got: {text}");
+}
+
+// ── The backend that answers before it has finished listening ────────────
+
+/// A backend that replies as soon as it has the head and then stops
+/// reading, exactly as a server rejecting an oversized payload does. Its
+/// buffer is small so the edge's write blocks well before the body is
+/// through — which is the whole point: the answer is available while the
+/// request is still going out.
+struct AnswersEarly(Mutex<Option<DuplexStream>>);
+
+impl AnswersEarly {
+    fn new(response: &'static str) -> Self {
+        let (mine, mut theirs) = duplex(1024);
+        tokio::spawn(async move {
+            let mut buf = [0u8; 256];
+            let mut seen = Vec::new();
+            while !seen.windows(4).any(|w| w == b"\r\n\r\n") {
+                match theirs.read(&mut buf).await {
+                    Ok(0) | Err(_) => return,
+                    Ok(n) => seen.extend_from_slice(&buf[..n]),
+                }
+            }
+            let _ = theirs.write_all(response.as_bytes()).await;
+            let _ = theirs.flush().await;
+            // And now it stops reading. The edge is mid-body.
+            std::future::pending::<()>().await;
+        });
+        Self(Mutex::new(Some(mine)))
+    }
+}
+
+impl Backend for AnswersEarly {
+    type Stream = DuplexStream;
+
+    fn authority(&self) -> &'static str {
+        "127.0.0.1:11434"
+    }
+
+    async fn connect(&self) -> std::io::Result<DuplexStream> {
+        Ok(self.0.lock().await.take().expect("connected once"))
+    }
+}
+
+/// A backend that answers before it has read the request must not cost the
+/// client the answer.
+///
+/// This is the shape of every `413` on an oversized payload, every `400` on
+/// bad JSON, every `429` — and SECURITY.md names multi-MiB vision payloads
+/// as the expected traffic. Written sequentially, the edge was still inside
+/// `write_all` when the backend stopped draining, so the write blocked
+/// forever here and, against a real socket, died with `ECONNRESET` and took
+/// the already-delivered response with it.
+#[tokio::test]
+async fn a_backend_that_answers_before_reading_the_body_is_still_heard() {
+    let backend =
+        AnswersEarly::new("HTTP/1.1 413 Payload Too Large\r\nContent-Length: 2\r\n\r\nno");
+    let (mut client, mut edge) = duplex(256 * 1024);
+
+    // A body far larger than the backend's buffer, so the pump cannot
+    // finish and the answer is only reachable by reading while it stalls.
+    let body = "x".repeat(64 * 1024);
+    let request = format!(
+        "POST /v1/chat/completions HTTP/1.1\r\nHost: x\r\n\
+         Authorization: Bearer {TOKEN}\r\nContent-Length: {}\r\n\r\n{body}",
+        body.len()
+    );
+    client.write_all(request.as_bytes()).await.unwrap();
+
+    let (credential, _) = Credential::new(&supplied()).expect("a usable token");
+    let outcome = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        serve_exchange(&mut edge, &credential, &backend),
+    )
+    .await
+    .expect("the answer is already in hand; waiting on the body is waiting forever")
+    .expect("no transport failure");
+    assert_eq!(outcome, Outcome::Forwarded);
+
+    drop(edge);
+    let mut seen = Vec::new();
+    client.read_to_end(&mut seen).await.unwrap();
+    let text = String::from_utf8_lossy(&seen);
+    assert!(
+        text.starts_with("HTTP/1.1 413"),
+        "the backend's answer must reach the client: {text}"
+    );
+    assert!(text.ends_with("no"), "body included: {text}");
 }
