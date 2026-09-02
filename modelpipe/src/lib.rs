@@ -24,9 +24,13 @@ use std::time::Duration;
 // "added a type, forgot to export it" into a compile error.
 
 // Pure: no I/O, no async.
+mod base32;
+mod crc32c;
 mod credential;
 mod status;
 mod ticket;
+mod ticket_addr;
+mod ticket_string;
 
 // Orchestration: the two entry points, and the live pipes they return.
 mod connect;
