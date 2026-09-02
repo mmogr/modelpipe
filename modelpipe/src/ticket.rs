@@ -160,6 +160,19 @@ impl Ticket {
         }
     }
 
+    /// The serve side's endpoint identity, as raw bytes.
+    ///
+    /// `pub(crate)`: the transport needs it to dial, and nobody outside
+    /// this crate has anything to do with a raw key.
+    pub(crate) const fn endpoint_id(&self) -> &[u8; ENDPOINT_ID_LEN] {
+        &self.endpoint_id
+    }
+
+    /// The transport addresses this ticket carries, in canonical order.
+    pub(crate) fn addrs(&self) -> &[TicketAddr] {
+        &self.addrs
+    }
+
     /// Short fingerprint of the serve side's identity, for `status`
     /// output and eyeball comparison. Never the full key.
     pub fn fingerprint(&self) -> String {

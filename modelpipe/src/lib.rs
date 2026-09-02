@@ -31,12 +31,14 @@ mod credential;
 mod exchange;
 mod headers;
 mod http_head;
+mod lifecycle;
 mod locality;
 mod refusal;
 mod status;
 mod ticket;
 mod ticket_addr;
 mod ticket_string;
+mod transport;
 
 // Orchestration: the two entry points, and the live pipes they return.
 mod connect;
