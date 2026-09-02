@@ -57,6 +57,13 @@ jobs:
       - name: Validate workflow YAML
         run: ./scripts/check_workflow_yaml.sh
 
+      # A hard gate rather than gglib's ratchet, because this workspace has
+      # no debt to ratchet down: every file is under budget, so crossing the
+      # line is a failure and not a new baseline entry. Lives in this job
+      # because it needs no toolchain — it counts lines.
+      - name: Check file sizes
+        run: ./scripts/check_file_size.sh
+
   clippy:
     name: Clippy
     runs-on: ubuntu-latest
@@ -150,6 +157,18 @@ jobs:
         env:
           RUSTDOCFLAGS: -D warnings
         run: cargo doc -p modelpipe --no-deps --document-private-items
+
+      # The step above documents private items; docs.rs does not. That
+      # difference is not cosmetic: an intra-doc link from a public item to a
+      # private one RESOLVES under --document-private-items and 404s on the
+      # published page, so the gate above cannot see the one audience that
+      # matters. Running what docs.rs actually runs is the only way to catch
+      # it, and a crate whose modules are all private is exactly the shape
+      # that produces such links.
+      - name: Check rustdoc as docs.rs builds it
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc -p modelpipe --no-deps
 
   # ubuntu clippy above never sees the inside of a `#[cfg(windows)]` block. This
   # crate has none yet — it is a transport that will grow socket and
