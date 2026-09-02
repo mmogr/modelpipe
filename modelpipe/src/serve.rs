@@ -2,12 +2,16 @@
 //! it fails.
 //!
 //! Orchestration. The live listener you get back lives in
-//! [`crate::handle`]; this module owns the call and its inputs.
+//! [`crate::serve_handle`]; this module owns the call and its inputs.
 
 use std::fmt;
+use std::sync::Arc;
 
-use crate::credential::TokenPolicy;
-use crate::handle::ServeHandle;
+use crate::backend::TcpBackend;
+use crate::credential::{Credential, TokenPolicy};
+use crate::listener::{ServeState, accept_loop};
+use crate::serve_handle::ServeHandle;
+use crate::transport;
 
 /// Why [`serve`] failed.
 ///
@@ -166,8 +170,20 @@ impl fmt::Debug for ServeOptions {
 /// status: [`PipeStatus::Closed`](crate::PipeStatus::Closed). Finer-grained states can be added
 /// compatibly later (`PipeStatus` is `#[non_exhaustive]`).
 pub async fn serve(backend_url: &str, opts: ServeOptions) -> Result<ServeHandle, ServeError> {
-    let _ = (backend_url, opts);
-    todo!()
+    // Order matters, and it is the order of what the operator can fix. The
+    // relay value and the backend URL are theirs; binding an endpoint is the
+    // machine's. Checking the cheap, user-fixable things first means a typo
+    // is reported as a typo rather than after a socket has been opened.
+    if let Some(relay) = opts.relay.as_deref() {
+        transport::validate_relay(relay)?;
+    }
+    let backend = TcpBackend::new(backend_url, opts.allow_private_backend).await?;
+    let endpoint = transport::bind(opts.relay.as_deref()).await?;
+    let (credential, _) = Credential::new(&opts.auth);
+
+    let state = Arc::new(ServeState::new(endpoint, credential, backend));
+    tokio::spawn(accept_loop(state.clone()));
+    Ok(ServeHandle::new(state))
 }
 
 #[cfg(test)]

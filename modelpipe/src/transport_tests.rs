@@ -209,7 +209,10 @@ async fn an_endpoint_binds_and_reports_its_own_identity() {
 /// surfacing later as an unexplained transport failure.
 #[tokio::test]
 async fn binding_with_an_unparseable_relay_fails_before_the_endpoint_exists() {
-    let err = bind(Some("not a url")).await.expect_err("must refuse");
+    let Err(failure) = bind(Some("not a url")).await else {
+        panic!("an unparseable relay must be refused");
+    };
+    let err = ServeError::from(failure);
     match &err {
         ServeError::InvalidRelay { url } => assert_eq!(url, "not a url"),
         other => panic!("expected InvalidRelay, got {other:?}"),

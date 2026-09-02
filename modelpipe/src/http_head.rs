@@ -12,16 +12,6 @@
 //! disagreement to desynchronize, which is the property that makes an
 //! opaque body safe here and would not make it safe on a shared socket.
 
-// Scoped to the non-test build: the edge that drives this lands with the
-// listener, and until then the tests below are the only callers.
-#![cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the request edge drives this; tests call it meanwhile"
-    )
-)]
-
 use crate::headers;
 
 /// The most head a peer may send before being cut off.

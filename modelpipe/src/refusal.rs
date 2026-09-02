@@ -9,15 +9,6 @@
 //! Every one closes the connection. A stream carries exactly one exchange
 //! and a refused exchange is over.
 
-// Scoped to the non-test build: the edge writes these, and lands next.
-#![cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the request edge writes these; tests assert them meanwhile"
-    )
-)]
-
 /// The 401 the edge writes itself.
 ///
 /// Synthesized locally and never forwarded: the backend has not been

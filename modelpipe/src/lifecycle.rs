@@ -42,6 +42,26 @@ pub(crate) struct Lifecycle {
     /// Distinct from `status`, and the distinction is load-bearing — see
     /// [`Lifecycle::wait_until_torn_down`].
     torn_down: watch::Sender<bool>,
+    /// Exchanges still running. `shutdown` drains rather than cuts, so it
+    /// needs to know when the last one finishes.
+    in_flight: watch::Sender<usize>,
+}
+
+/// Held for as long as one exchange is running.
+///
+/// A guard rather than a pair of calls, because the decrement has to happen
+/// on every exit path — including a panic in the middle of forwarding a
+/// body. A missed decrement makes `shutdown` wait forever for work that
+/// finished, which is the worst failure this could have: it looks like a
+/// hang in the caller's code.
+pub(crate) struct InFlight {
+    counter: watch::Sender<usize>,
+}
+
+impl Drop for InFlight {
+    fn drop(&mut self) {
+        self.counter.send_modify(|n| *n = n.saturating_sub(1));
+    }
 }
 
 impl Lifecycle {
@@ -49,7 +69,35 @@ impl Lifecycle {
         Self {
             status: watch::Sender::new(PipeStatus::Idle),
             torn_down: watch::Sender::new(false),
+            in_flight: watch::Sender::new(0),
         }
+    }
+
+    /// Register an exchange as running until the returned guard is dropped.
+    pub(crate) fn enter(&self) -> InFlight {
+        self.in_flight.send_modify(|n| *n += 1);
+        InFlight {
+            counter: self.in_flight.clone(),
+        }
+    }
+
+    /// How many exchanges are running.
+    pub(crate) fn in_flight(&self) -> usize {
+        *self.in_flight.borrow()
+    }
+
+    /// Wait until every in-flight exchange has finished.
+    ///
+    /// This is the drain in "`shutdown` drains, `Drop` cuts". A request
+    /// admitted before teardown began runs to completion, which is the same
+    /// promise `set_token` already makes about not cutting a streaming
+    /// response mid-body.
+    pub(crate) async fn wait_until_drained(&self) {
+        let mut rx = self.in_flight.subscribe();
+        if *rx.borrow_and_update() == 0 {
+            return;
+        }
+        let _ = rx.wait_for(|n| *n == 0).await;
     }
 
     /// The current status.
@@ -105,6 +153,19 @@ impl Lifecycle {
     /// exists separately.
     pub(crate) fn close(&self) {
         self.set_status(PipeStatus::Closed);
+    }
+
+    /// Resolve once the pipe is closed, and not before.
+    ///
+    /// For loops that must stop accepting on teardown: `select!` on this
+    /// and the accept, and the loop falls out rather than being cancelled
+    /// part way through handing off a connection.
+    pub(crate) async fn wait_until_closed(&self) {
+        let mut rx = self.status.subscribe();
+        if *rx.borrow_and_update() == PipeStatus::Closed {
+            return;
+        }
+        let _ = rx.wait_for(|s| *s == PipeStatus::Closed).await;
     }
 
     /// Signal that teardown has finished and every resource is released.

@@ -10,16 +10,6 @@
 //! per-token delivery into one blob that still returns 200 and still passes
 //! any test that only checks the bytes.
 
-// Scoped to the non-test build: the edge that drives this lands with the
-// listener, and until then the tests below are the only callers.
-#![cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the request edge drives this; tests call it meanwhile"
-    )
-)]
-
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 use crate::http_head::Framing;

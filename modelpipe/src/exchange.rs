@@ -18,15 +18,6 @@
 //! second is what the README sells — so it is asserted with a connection
 //! counter rather than a status code.
 
-// Scoped to the non-test build: the listener drives this, and lands next.
-#![cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the listener drives this; tests call it meanwhile"
-    )
-)]
-
 use std::future::Future;
 
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};

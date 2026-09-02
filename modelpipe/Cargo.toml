@@ -37,6 +37,10 @@ getrandom = "0.4"
 # in the crate where asceticism about dependencies would be the wrong call.
 # Already in the graph via iroh's relay client.
 httparse = "1"
+# Backend URL parsing. Splitting a URL by hand is where a host ends up being
+# something other than what the operator wrote, which for this crate is a
+# security boundary rather than a papercut. Already in the graph via iroh.
+url = "2"
 # `rt` is load-bearing and was missing: both `serve` and `connect` return a
 # handle over a background accept loop, so the first real body spawns, and
 # `tokio::spawn` is gated on it. It currently compiles anyway — iroh enables

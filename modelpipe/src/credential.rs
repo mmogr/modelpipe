@@ -11,17 +11,6 @@
 //! the difference between open and closed is whether the cell holds a
 //! credential, never whether the check runs.
 
-// Scoped to the non-test build: `TokenPolicy` below is public and used, but
-// the cell that enforces a credential has no caller until the listener
-// lands. When it does, this goes unfulfilled — the reminder to delete it.
-#![cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the listener holds the cell; tests exercise it meanwhile"
-    )
-)]
-
 use std::fmt;
 use std::sync::{Arc, RwLock};
 
@@ -155,7 +144,7 @@ impl Credential {
             // open, which is the one wrong default this type could have.
         };
         let cell = Self {
-            enforced: RwLock::new(token.as_deref().map(Enforced::new)),
+            enforced: RwLock::new(token.clone().map(Enforced::new)),
         };
         (cell, token)
     }
@@ -192,14 +181,14 @@ impl Credential {
 
     /// Install `token`, replacing whatever is enforced. Turns
     /// authentication on if it was off.
-    pub(crate) fn set(&self, token: &str) {
+    pub(crate) fn set(&self, token: String) {
         *self.write() = Some(Enforced::new(token));
     }
 
     /// Install a freshly minted token and return it.
     pub(crate) fn rotate(&self) -> String {
         let token = mint();
-        self.set(&token);
+        self.set(token.clone());
         token
     }
 
@@ -239,10 +228,10 @@ impl fmt::Debug for Credential {
 }
 
 impl Enforced {
-    fn new(token: &str) -> Arc<Self> {
+    fn new(token: String) -> Arc<Self> {
         Arc::new(Self {
-            token: token.to_owned(),
             header: format!("{BEARER_PREFIX}{token}"),
+            token,
         })
     }
 }
