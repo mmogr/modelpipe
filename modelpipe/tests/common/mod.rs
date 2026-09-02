@@ -76,6 +76,48 @@ impl MockBackend {
         .await
     }
 
+    /// Stream frames forever, recording how many were written before the
+    /// socket refused them.
+    ///
+    /// The counter is the whole point: a backend that keeps producing after
+    /// its client has gone is a generation still running on a GPU nobody is
+    /// waiting for, and no functional assertion can see it — the request
+    /// "worked".
+    pub(crate) async fn endless_stream() -> (Self, Arc<AtomicUsize>) {
+        let written = Arc::new(AtomicUsize::new(0));
+        let counter = written.clone();
+        let backend = Self::spawn_with(move |mut socket| {
+            let counter = counter.clone();
+            async move {
+                let mut seen = Vec::new();
+                let _ = read_head(&mut socket, &mut seen).await;
+                if socket
+                    .write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\r\n")
+                    .await
+                    .is_err()
+                {
+                    return seen;
+                }
+                let _ = socket.flush().await;
+                for i in 0..2000 {
+                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                    if socket
+                        .write_all(format!("data: {i}\n\n").as_bytes())
+                        .await
+                        .is_err()
+                        || socket.flush().await.is_err()
+                    {
+                        break;
+                    }
+                    counter.fetch_add(1, Ordering::SeqCst);
+                }
+                seen
+            }
+        })
+        .await;
+        (backend, written)
+    }
+
     async fn spawn(respond: impl Fn(&[u8]) -> Vec<u8> + Send + Sync + 'static) -> Self {
         let respond = Arc::new(respond);
         Self::spawn_with(move |mut socket| {

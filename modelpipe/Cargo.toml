@@ -54,4 +54,7 @@ tokio = { workspace = true, features = ["net", "io-util", "rt", "sync", "time"] 
 [dev-dependencies]
 # `macros` for #[tokio::test]; `rt-multi-thread` because a test that pumps a
 # stream while reading the other end needs a second task to make progress.
-tokio = { workspace = true, features = ["macros", "rt-multi-thread", "io-util"] }
+# `test-util` is what #[tokio::test(start_paused = true)] needs, and it is
+# deliberately not part of any default: a timeout test that waited thirty real
+# seconds would be one nobody runs.
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "io-util", "test-util"] }
