@@ -118,7 +118,7 @@ async fn exchange(
     client.write_all(request).await.unwrap();
     client.shutdown().await.unwrap();
 
-    let (credential, _) = Credential::new(policy);
+    let (credential, _) = Credential::new(policy).expect("a usable policy");
     let outcome = tokio::time::timeout(
         std::time::Duration::from_secs(5),
         serve_exchange(&mut edge, &credential, backend),
@@ -368,7 +368,7 @@ async fn a_streaming_response_reaches_the_client_frame_by_frame() {
     });
 
     let fixed = Fixed(Mutex::new(Some(mine)));
-    let (credential, _) = Credential::new(&supplied());
+    let (credential, _) = Credential::new(&supplied()).expect("a usable token");
     let pump = tokio::spawn(async move {
         serve_exchange(&mut edge, &credential, &fixed)
             .await
@@ -441,7 +441,7 @@ async fn against_keepalive(request: &[u8], response: &'static str) -> (Outcome, 
     let (mut client, mut edge) = duplex(64 * 1024);
     client.write_all(request).await.unwrap();
 
-    let (credential, _) = Credential::new(&supplied());
+    let (credential, _) = Credential::new(&supplied()).expect("a usable token");
     let outcome = tokio::time::timeout(
         std::time::Duration::from_secs(5),
         serve_exchange(&mut edge, &credential, &backend),
@@ -557,7 +557,7 @@ async fn a_backend_that_refuses_the_connection_is_reported_as_a_gateway_failure(
     client.write_all(&authed("GET")).await.unwrap();
     client.shutdown().await.unwrap();
 
-    let (credential, _) = Credential::new(&supplied());
+    let (credential, _) = Credential::new(&supplied()).expect("a usable token");
     let outcome = serve_exchange(&mut edge, &credential, &Refusing)
         .await
         .expect("a refused backend is an answer, not a transport failure");
@@ -637,7 +637,7 @@ async fn a_backend_that_answers_before_reading_the_body_is_still_heard() {
     );
     client.write_all(request.as_bytes()).await.unwrap();
 
-    let (credential, _) = Credential::new(&supplied());
+    let (credential, _) = Credential::new(&supplied()).expect("a usable token");
     let outcome = tokio::time::timeout(
         std::time::Duration::from_secs(5),
         serve_exchange(&mut edge, &credential, &backend),

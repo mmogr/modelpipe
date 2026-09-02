@@ -16,6 +16,7 @@ use std::sync::{Arc, RwLock};
 
 use subtle::ConstantTimeEq;
 
+use crate::ServeError;
 use crate::base32;
 
 /// Bytes of entropy in a generated token: 256 bits, which is not a number
@@ -133,9 +134,15 @@ struct Enforced {
 impl Credential {
     /// Build the cell a policy asks for, returning the token to show the
     /// operator — `None` when serving open.
-    pub(crate) fn new(policy: &TokenPolicy) -> (Self, Option<String>) {
+    pub(crate) fn new(policy: &TokenPolicy) -> Result<(Self, Option<String>), ServeError> {
         let token = match policy {
             TokenPolicy::Generate => Some(mint()),
+            // Refused rather than enforced. `"Bearer "` with a trailing
+            // space is a header no conforming client can present, because
+            // HTTP parsers trim trailing whitespace from values — so the
+            // listener would come up and refuse everything, silently, for
+            // the life of the process.
+            TokenPolicy::Supplied(t) if !presentable(t) => return Err(ServeError::InvalidToken),
             TokenPolicy::Supplied(t) => Some(t.clone()),
             TokenPolicy::InsecureNoAuth => None,
             // `TokenPolicy` is `#[non_exhaustive]` within its own crate only
@@ -146,7 +153,7 @@ impl Credential {
         let cell = Self {
             enforced: RwLock::new(token.clone().map(Enforced::new)),
         };
-        (cell, token)
+        Ok((cell, token))
     }
 
     /// Whether an `Authorization` header value admits.
@@ -181,14 +188,26 @@ impl Credential {
 
     /// Install `token`, replacing whatever is enforced. Turns
     /// authentication on if it was off.
-    pub(crate) fn set(&self, token: String) {
+    ///
+    /// Returns whether it did. A token nothing can present is refused here
+    /// for the reason [`Credential::new`] refuses it, and refusing means
+    /// keeping the credential already in force — installing it would take a
+    /// working listener down to one that answers nothing.
+    pub(crate) fn set(&self, token: String) -> bool {
+        if !presentable(&token) {
+            return false;
+        }
         *self.write() = Some(Enforced::new(token));
+        true
     }
 
     /// Install a freshly minted token and return it.
     pub(crate) fn rotate(&self) -> String {
         let token = mint();
-        self.set(token.clone());
+        // Always presentable: 256 bits of base32 is never empty. Asserted
+        // rather than ignored, so that a change to `mint` that broke it
+        // fails here instead of producing a listener nobody can reach.
+        assert!(self.set(token.clone()), "a minted token is always usable");
         token
     }
 
@@ -234,6 +253,16 @@ impl Enforced {
             token,
         })
     }
+}
+
+/// Whether a token is one a client could actually send.
+///
+/// The check is deliberately only "not empty after trimming". Anything more
+/// — a byte-set rule, a minimum length — is a policy this crate has no
+/// standing to impose on an embedder's existing API key. What it does have
+/// standing to refuse is a value that makes the listener unusable.
+fn presentable(token: &str) -> bool {
+    !token.trim().is_empty()
 }
 
 /// A fresh token from the operating system's CSPRNG.
