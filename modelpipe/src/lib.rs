@@ -27,6 +27,8 @@ use std::time::Duration;
 mod base32;
 mod crc32c;
 mod credential;
+mod headers;
+mod locality;
 mod status;
 mod ticket;
 mod ticket_addr;
