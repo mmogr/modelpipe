@@ -79,6 +79,7 @@ package-check: ## Verify both crates still package for crates.io
 
 enforce: ## Run the architecture gates (no toolchain needed)
 	@./scripts/check_file_size.sh
+	@python3 scripts/ticket_vectors.py --check
 
 workflow-yaml: ## Validate .github/workflows for duplicate keys
 	@# This one has to run locally to be worth anything: a duplicate key in

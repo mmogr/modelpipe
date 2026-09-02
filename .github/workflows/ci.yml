@@ -1,8 +1,12 @@
 # Adapted from gglib's ci.yml, minus everything that workspace has and this one
-# does not: no Node, no Tauri, no bindings, no architecture-enforcement scripts,
-# no per-crate badge extraction. What carries over is the shape — a pinned
-# toolchain, one aggregate status check, and a cache key per build
-# configuration.
+# does not: no Node, no Tauri, no bindings, no per-crate badge extraction. What
+# carries over is the shape — a pinned toolchain, one aggregate status check, a
+# cache key per build configuration, and the habit of mechanizing an
+# architectural rule rather than writing it down and hoping.
+#
+# The enforcement scripts live in the `fmt` job because none of them needs a
+# toolchain: check_file_size.sh counts lines, and ticket_vectors.py --check is
+# pure stdlib Python.
 #
 # No `apt-get install` step anywhere below, unlike gglib's: iroh resolves rustls
 # onto `ring`, which needs no system libraries. If a future dependency flips the
@@ -63,6 +67,15 @@ jobs:
       # because it needs no toolchain — it counts lines.
       - name: Check file sizes
         run: ./scripts/check_file_size.sh
+
+      # The ticket layout exists in three places — the spec table, the Python
+      # reference, and (from the next phase) the Rust codec. Nothing checked
+      # that they agreed; the invariant was asserted in a commit message. This
+      # is that assertion made executable, and it is why the reference has no
+      # --update: a v0 vector that changes is a broken client in another
+      # language, not a stale fixture.
+      - name: Check the ticket vectors match the spec
+        run: python3 scripts/ticket_vectors.py --check
 
   clippy:
     name: Clippy
