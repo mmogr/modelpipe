@@ -109,6 +109,16 @@ jobs:
       - name: Check the crates still package
         run: cargo package --workspace --no-verify --locked
 
+      # The library on its OWN feature set, which no other job checks.
+      # Every workspace-wide command unifies features across members, so a
+      # feature the library uses but does not declare is supplied by a
+      # neighbour and the gap stays invisible here while breaking anyone who
+      # depends on `modelpipe` alone. That is not hypothetical: tokio's `rt`
+      # is what `tokio::spawn` needs, both entry points spawn, and it was
+      # absent from this crate's manifest while arriving free from iroh.
+      - name: Check the library builds on its own features
+        run: cargo check -p modelpipe --locked
+
       # `--no-fail-fast` so one failing binary does not hide the state of every
       # crate after it.
       - name: Run tests
