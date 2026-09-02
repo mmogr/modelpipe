@@ -21,18 +21,6 @@
 //! which is where someone hitting it will read it. This module is the
 //! mechanism, and the two must agree.
 
-// Scoped to the non-test build: the tests below are currently the only
-// callers, so an unconditional expectation is itself unfulfilled when they
-// compile. When the real caller lands this goes unfulfilled in turn, which
-// is the reminder to delete it.
-#![cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the backend dial screens addresses; until it exists only tests call these"
-    )
-)]
-
 use std::net::IpAddr;
 
 /// What kind of address this is, from the point of view of "may we dial it".

@@ -1,7 +1,5 @@
 //! Reach an OpenAI-compatible model server from anywhere over p2p.
 //!
-//! This is the API sketch under review — the contract, not the
-//! implementation. Signatures are settled intent; bodies are `todo!()`.
 //! The iroh types stay out of the public surface deliberately: callers
 //! hold [`Ticket`]s and handles, so an iroh major upgrade is this crate's
 //! problem, not its dependents'. The same rule shapes the error types:
@@ -24,14 +22,17 @@ use std::time::Duration;
 // "added a type, forgot to export it" into a compile error.
 
 // Pure: no I/O, no async.
+mod backend;
 mod base32;
 mod body;
 mod crc32c;
 mod credential;
+mod dialer;
 mod exchange;
 mod headers;
 mod http_head;
 mod lifecycle;
+mod listener;
 mod locality;
 mod refusal;
 mod status;
@@ -42,16 +43,18 @@ mod transport;
 
 // Orchestration: the two entry points, and the live pipes they return.
 mod connect;
-mod handle;
+mod connect_handle;
 mod serve;
+mod serve_handle;
 
 // This block is the public API. Everything above is a private module,
 // free to be rearranged at will; every name below is versioned. Adding to
 // this block is the one edit in the crate that cannot be walked back.
 pub use connect::{ConnectError, ConnectOptions, connect};
+pub use connect_handle::ConnectHandle;
 pub use credential::TokenPolicy;
-pub use handle::{ConnectHandle, ServeHandle};
 pub use serve::{ServeError, ServeOptions, serve};
+pub use serve_handle::ServeHandle;
 pub use status::PipeStatus;
 pub use ticket::{Ticket, TicketParseError};
 

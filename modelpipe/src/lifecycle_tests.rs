@@ -247,3 +247,62 @@ fn the_phone_and_laptop_case_is_representable() {
         "the slow device is the one that needs explaining"
     );
 }
+
+// ── Draining ─────────────────────────────────────────────────────────────
+
+/// The drain in "shutdown drains, Drop cuts": a request admitted before
+/// teardown began runs to completion.
+#[tokio::test]
+async fn a_drain_waits_for_every_in_flight_exchange() {
+    let life = std::sync::Arc::new(Lifecycle::new());
+    let first = life.enter();
+    let second = life.enter();
+    assert_eq!(life.in_flight(), 2);
+
+    let drain = {
+        let life = life.clone();
+        tokio::spawn(async move { life.wait_until_drained().await })
+    };
+    tokio::task::yield_now().await;
+    assert!(!drain.is_finished(), "two exchanges are still running");
+
+    drop(first);
+    tokio::task::yield_now().await;
+    assert!(!drain.is_finished(), "one still is");
+
+    drop(second);
+    within("the drain must complete", drain).await.unwrap();
+}
+
+#[tokio::test]
+async fn a_drain_with_nothing_in_flight_returns_at_once() {
+    let life = Lifecycle::new();
+    assert_eq!(life.in_flight(), 0);
+    within(
+        "an idle pipe has nothing to drain",
+        life.wait_until_drained(),
+    )
+    .await;
+}
+
+/// The decrement must survive a panic in the middle of an exchange. A
+/// missed one makes `shutdown` wait forever for work that finished, which
+/// presents as a hang in the caller's code.
+#[tokio::test]
+async fn a_panicking_exchange_still_releases_its_slot() {
+    let life = std::sync::Arc::new(Lifecycle::new());
+    let panicked = {
+        let life = life.clone();
+        tokio::spawn(async move {
+            let _guard = life.enter();
+            panic!("an exchange died mid-body");
+        })
+    };
+    assert!(panicked.await.is_err(), "the task really did panic");
+    assert_eq!(life.in_flight(), 0, "and its slot came back");
+    within(
+        "a drain must not hang on a dead exchange",
+        life.wait_until_drained(),
+    )
+    .await;
+}

@@ -18,15 +18,6 @@
 //! which is the thing that will actually have dial and accept failures to
 //! classify.
 
-// Scoped to the non-test build: the listener drives this, and lands next.
-#![cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the listener drives this; tests exercise it meanwhile"
-    )
-)]
-
 use std::net::SocketAddr;
 use std::str::FromStr;
 
@@ -55,23 +46,62 @@ use crate::{ConnectError, ServeError};
 /// alongside the ticket layout.
 pub(crate) const ALPN: &[u8] = b"modelpipe/0";
 
+/// Why binding an endpoint failed.
+///
+/// The discrimination site the two public error types need, and the reason
+/// it exists here rather than being written twice: both sides bind, both
+/// have a `Bind` variant, and only this module knows which iroh failure is
+/// which. It earns its place now that it has callers — a pair of boxing
+/// helpers written before that were removed for having none.
+#[derive(Debug)]
+pub(crate) enum BindFailure {
+    /// The relay value does not parse. Permanent and user-fixable.
+    InvalidRelay(String),
+    /// The listener could not be set up. Describes the machine.
+    Io(std::io::Error),
+}
+
+impl From<BindFailure> for ServeError {
+    fn from(e: BindFailure) -> Self {
+        match e {
+            BindFailure::InvalidRelay(url) => Self::InvalidRelay { url },
+            BindFailure::Io(e) => Self::Bind(e),
+        }
+    }
+}
+
+impl From<BindFailure> for ConnectError {
+    fn from(e: BindFailure) -> Self {
+        match e {
+            // The connect side has no `InvalidRelay`: it is not configured
+            // with a relay, so a value that fails to parse here came from a
+            // ticket, and a ticket naming a relay this build cannot use is
+            // one more path lost rather than a pairing refused. Reported as
+            // transport, which is what it is.
+            BindFailure::InvalidRelay(url) => {
+                Self::Transport(format!("relay {url} is not a relay URL").into())
+            }
+            BindFailure::Io(e) => Self::Bind(e),
+        }
+    }
+}
+
 /// Bind an endpoint for this side of the pipe.
 ///
 /// `relay` is the operator's own relay, or `None` for the defaults. It is
 /// passed as the string it arrived as — see [`validate_relay`] for why the
 /// value is never handed through a parsed URL type.
-pub(crate) async fn bind(relay: Option<&str>) -> Result<Endpoint, ServeError> {
+pub(crate) async fn bind(relay: Option<&str>) -> Result<Endpoint, BindFailure> {
     let mut builder = Endpoint::builder(presets::N0).alpns(vec![ALPN.to_vec()]);
     if let Some(url) = relay {
-        let parsed = RelayUrl::from_str(url).map_err(|_| ServeError::InvalidRelay {
-            url: url.to_owned(),
-        })?;
+        let parsed =
+            RelayUrl::from_str(url).map_err(|_| BindFailure::InvalidRelay(url.to_owned()))?;
         builder = builder.relay_mode(RelayMode::Custom(parsed.into()));
     }
     builder
         .bind()
         .await
-        .map_err(|e| ServeError::Bind(bind_io(&e)))
+        .map_err(|e| BindFailure::Io(bind_io(&e)))
 }
 
 /// Check that a relay value is a relay URL at all.

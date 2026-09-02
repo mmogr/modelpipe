@@ -113,7 +113,7 @@ fn set_refuses_the_old_credential_immediately() {
     let old = format!("Bearer {TOKEN}");
     assert!(offers(&cell, Some(&old)));
 
-    cell.set("sk-zzq-the-replacement");
+    cell.set("sk-zzq-the-replacement".to_owned());
     assert!(!offers(&cell, Some(&old)), "the old value is dead");
     assert!(
         offers(&cell, Some("Bearer sk-zzq-the-replacement")),
@@ -128,7 +128,7 @@ fn set_refuses_the_old_credential_immediately() {
 #[test]
 fn there_is_no_window_where_both_credentials_pass() {
     let cell = enforcing(TOKEN);
-    cell.set("sk-zzq-second");
+    cell.set("sk-zzq-second".to_owned());
     assert!(!offers(&cell, Some(&format!("Bearer {TOKEN}"))));
     assert!(offers(&cell, Some("Bearer sk-zzq-second")));
 }
@@ -154,7 +154,7 @@ fn set_turns_auth_on_when_serving_open() {
     let (cell, _) = Credential::new(&TokenPolicy::InsecureNoAuth);
     assert!(offers(&cell, None), "open to begin with");
 
-    cell.set(TOKEN);
+    cell.set(TOKEN.to_owned());
     assert!(!offers(&cell, None), "and closed afterwards");
     assert!(offers(&cell, Some(&format!("Bearer {TOKEN}"))));
 }

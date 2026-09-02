@@ -1,16 +1,20 @@
-//! The two live pipes.
+//! The live serve side.
 //!
-//! Orchestration. Both handles need the same three things — a status cell
-//! to publish transitions, a latch that says teardown has completed, and
-//! somewhere to track the tasks still running — so they are kept in one
-//! file where that overlap is visible. They deliberately share no public
-//! trait; see the note on [`ConnectHandle`].
+//! Split from its connect-side twin now that both are implemented: the two
+//! were kept in one file while they were signatures, so the machinery they
+//! share would be visible before it was written twice. That machinery is
+//! now [`crate::lifecycle`], so the co-location has done its job and the
+//! file-size gate is right that they are two things.
+//!
+//! They still share no public trait — see [`crate::ConnectHandle`].
 
-use std::net::SocketAddr;
+use std::sync::Arc;
 use std::time::Duration;
 
+use crate::listener::{self, ServeState};
 use crate::status::PipeStatus;
 use crate::ticket::Ticket;
+use crate::transport;
 
 /// A live serve side.
 ///
@@ -21,10 +25,14 @@ use crate::ticket::Ticket;
 /// a ticket valid across restarts, so ticket rotation *is* the restart.
 /// (Token rotation is cheaper: [`rotate_token`](Self::rotate_token).)
 pub struct ServeHandle {
-    _private: (),
+    state: Arc<ServeState>,
 }
 
 impl ServeHandle {
+    pub(crate) const fn new(state: Arc<ServeState>) -> Self {
+        Self { state }
+    }
+
     /// The ticket to hand to connecting machines (print it, QR it).
     ///
     /// Returns an owned clone, for the same reason
@@ -37,7 +45,11 @@ impl ServeHandle {
     /// so the cheaper signature is the one that quietly makes the ticket
     /// wrong.
     pub fn ticket(&self) -> Ticket {
-        todo!()
+        // Minted fresh from the endpoint's *current* address set, which is
+        // the reason this returns owned: iroh discovers direct addresses
+        // over time, so a ticket read a minute after `serve` returned
+        // carries paths the first one could not have.
+        transport::ticket_from(&self.state.endpoint.addr())
     }
 
     /// The bearer token clients must present, or `None` when serving
@@ -64,7 +76,7 @@ impl ServeHandle {
     /// it in later would be a breaking change; the honest position is to
     /// say so once, here.
     pub fn token(&self) -> Option<String> {
-        todo!()
+        self.state.credential.token()
     }
 
     /// Install `token` as the bearer credential, replacing whatever the
@@ -82,10 +94,7 @@ impl ServeHandle {
     /// delivery: a request that passed auth before the call runs to
     /// completion (a streaming response is not cut mid-body).
     pub fn set_token(&self, token: String) {
-        // drop, not `let _`: the sketch must consume the String the real
-        // implementation will store, or needless_pass_by_value fires.
-        drop(token);
-        todo!()
+        self.state.credential.set(token);
     }
 
     /// [`set_token`](Self::set_token) with a freshly minted random
@@ -98,12 +107,12 @@ impl ServeHandle {
     /// embedders rotate by pushing their replacement through
     /// [`set_token`](Self::set_token).
     pub fn rotate_token(&self) -> String {
-        todo!()
+        self.state.credential.rotate()
     }
 
     /// Current transport status, for `status` output.
     pub fn status(&self) -> PipeStatus {
-        todo!()
+        self.state.lifecycle.status()
     }
 
     /// Wait until the status changes, then return the new value.
@@ -120,7 +129,11 @@ impl ServeHandle {
     /// once closed, calls resolve immediately, so a watcher can never
     /// block on a pipe that is already gone.
     pub async fn status_changed(&self) -> PipeStatus {
-        todo!()
+        // The snapshot is taken here, at the moment of the call, which is
+        // what makes states that came and went while nobody was waiting
+        // coalesce rather than replay.
+        let snapshot = self.state.lifecycle.status();
+        self.state.lifecycle.changed_since(snapshot).await
     }
 
     /// Stop admitting new requests, let the in-flight ones finish, and
@@ -147,7 +160,7 @@ impl ServeHandle {
     /// every call after teardown has begun (however it began) awaits the
     /// same completion.
     pub async fn shutdown(&self) {
-        todo!()
+        listener::shutdown(&self.state).await;
     }
 
     /// [`shutdown`](Self::shutdown) with a deadline on the drain.
@@ -163,85 +176,32 @@ impl ServeHandle {
     /// unbounded call would have to reach for the drop path and lose the
     /// drain entirely.
     pub async fn shutdown_timeout(&self, grace: Duration) -> bool {
-        let _ = grace;
-        todo!()
+        self.state.lifecycle.close();
+        self.state.endpoint.close().await;
+        let drained = tokio::time::timeout(grace, self.state.lifecycle.wait_until_drained())
+            .await
+            .is_ok();
+        self.state.lifecycle.mark_torn_down();
+        drained
     }
 }
 
-/// A live connect side.
-///
-/// Teardown semantics match [`ServeHandle`]: dropping tears down without
-/// waiting, [`shutdown`](Self::shutdown) waits.
-///
-/// When the far end goes quiet, this side does not guess: unreachability
-/// shows as [`PipeStatus::Idle`] while it retries, and it keeps retrying.
-/// A sleeping laptop is indistinguishable from a dead one, so timeout
-/// policy belongs to the embedder.
-///
-/// A listener that has restarted since the ticket was issued is *also*
-/// this case, and deliberately not a distinct one. The endpoint key is
-/// ephemeral, so the restarted process is a different endpoint entirely:
-/// dialing the ticket reaches nobody, exactly as an offline peer does.
-/// There is no rejection to observe, because there is nobody left to
-/// reject. [`PipeStatus::Closed`] therefore means this side is gone —
-/// shut down, dropped, or dead after an unrecoverable transport failure
-/// — never that the far side declined the pairing.
-///
-/// Deliberately shares no trait with [`ServeHandle`]: the overlap is
-/// three methods, and embedders driving both sides duplicate a small
-/// park-and-watch loop. If that ever grows past a nuisance, a shared
-/// trait is an additive, non-breaking change — the decision is recorded
-/// here so the duplication reads as chosen, not overlooked.
-pub struct ConnectHandle {
-    _private: (),
-}
+// Dropping a handle tears its side down best-effort and without waiting,
+// which is the other half of "`shutdown` drains, `Drop` cuts". The close is
+// published synchronously so a watcher sees `Closed` immediately; anything
+// that needs an await is handed to the runtime, and a handle dropped
+// outside one does the synchronous half only — the process is going away
+// regardless.
 
-impl ConnectHandle {
-    /// The bound local address.
-    pub fn local_addr(&self) -> SocketAddr {
-        todo!()
-    }
-
-    /// The URL to point an OpenAI-compatible client at, ready to paste:
-    /// `http://{host}/v1` with a host that is actually dialable. Not
-    /// always [`local_addr`](Self::local_addr) verbatim: a wildcard bind
-    /// (`0.0.0.0`, `[::]`) is a listen address, not a destination, so it
-    /// renders as loopback, and an IPv6 zone id is dropped rather than
-    /// emitted in a form no URL parser accepts.
-    pub fn base_url(&self) -> String {
-        todo!()
-    }
-
-    /// Current transport status, for `status` output.
-    pub fn status(&self) -> PipeStatus {
-        todo!()
-    }
-
-    /// Wait until the status changes, then return the new value.
-    ///
-    /// Same contract as [`ServeHandle::status_changed`]: snapshot
-    /// semantics, concurrent callers each against their own snapshot,
-    /// and once the pipe is closed every call resolves immediately with
-    /// [`PipeStatus::Closed`].
-    pub async fn status_changed(&self) -> PipeStatus {
-        todo!()
-    }
-
-    /// Stop accepting local connections, let the in-flight requests
-    /// finish, and wait until the local listener is gone.
-    ///
-    /// Same contract as [`ServeHandle::shutdown`]: drains rather than
-    /// cuts, does not time out, takes `&self` for shared-state embedders,
-    /// and is idempotent. Dropping the handle cuts instead.
-    pub async fn shutdown(&self) {
-        todo!()
-    }
-
-    /// [`shutdown`](Self::shutdown) with a deadline on the drain. Same
-    /// contract as [`ServeHandle::shutdown_timeout`], including the
-    /// returned `bool`.
-    pub async fn shutdown_timeout(&self, grace: Duration) -> bool {
-        let _ = grace;
-        todo!()
+impl Drop for ServeHandle {
+    fn drop(&mut self) {
+        self.state.lifecycle.close();
+        if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+            let state = self.state.clone();
+            runtime.spawn(async move {
+                state.endpoint.close().await;
+                state.lifecycle.mark_torn_down();
+            });
+        }
     }
 }
