@@ -89,6 +89,23 @@ pub(crate) fn strip_hop_by_hop(headers: &mut Vec<(String, String)>) {
     });
 }
 
+/// Whether a field name is one the edge removes from a head.
+///
+/// Exported so the chunked trailer section can be filtered against the same
+/// two lists rather than a second copy of them. A trailer is a header field
+/// that happens to arrive after the body, and the rules above are about what
+/// a field *means*, not where it sits — so a trailer that restates a name
+/// the head strip removed is that strip undone.
+///
+/// Deliberately ignores `Connection` nominations. Those describe the head
+/// they arrived with; a trailer arrives after it, and re-reading a
+/// nomination here would hand a peer the same message-rewriting lever
+/// [`NEVER_NOMINABLE`] exists to take away.
+pub(crate) fn is_stripped(name: &str) -> bool {
+    let lower = name.trim().to_ascii_lowercase();
+    HOP_BY_HOP.contains(&lower.as_str()) || FORWARDING.contains(&lower.as_str())
+}
+
 /// Remove any inbound description of a proxy chain, and add none.
 pub(crate) fn strip_inbound_forwarded(headers: &mut Vec<(String, String)>) {
     headers.retain(|(name, _)| {
