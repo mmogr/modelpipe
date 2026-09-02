@@ -75,7 +75,7 @@ says. The check runs against resolved addresses, not URL text, so a DNS
 name can't smuggle an address past it. modelpipe extends trust outward
 from your machine; it does not re-export someone else's server.
 
-## Ticket format (v0 — draft)
+## Ticket format (v0)
 
 A ticket is a base32 string carrying a version, the serve side's endpoint
 id, a set of transport addresses, and a backend hint. The bearer token is
@@ -126,8 +126,38 @@ copyright holder, and this extraction is relicensed MIT by that copyright
 holder specifically so clients and other servers can embed it. gglib's
 licensing does not apply here.
 
+## What it contacts, and what it doesn't
+
+"No cloud in the path" is a claim about your **data**, and it is true: the
+relay carries ciphertext it cannot read, and most connections do not touch a
+relay at all. It is not a claim that nothing is contacted. With default
+settings iroh publishes address records to n0's discovery service and may
+ask your router for a UPnP/NAT-PMP mapping, both before any client connects.
+
+`--relay` does **not** turn either of those off, and v0 has no switch that
+does. It replaces the relay and nothing else: discovery still publishes to
+and resolves from n0's DNS, and the port-mapping attempt still happens. It
+is also a `serve`-side flag only — the connect side always uses the public
+relays and the public discovery service. If contacting n0 at all is the
+thing you need to avoid, v0 is not yet the tool for it; that is an honest
+gap rather than a setting you have missed.
+
+A relay operator, when one is used, sees endpoint identities, both IP
+addresses, timing and volume. Observability is not readability — and it is
+not nothing. [`SECURITY.md`](SECURITY.md) says what else modelpipe does and
+does not defend against, including the one most people miss: the token is
+equivalent to full access to your backend, `/api/pull` included.
+
 ## Status
 
-Pre-implementation. The API sketch in `modelpipe/src/lib.rs` and this README
-are the contract under review; implementation follows a two-week dogfooding
-gate of the manual dumbpipe equivalent. Issues and opinions welcome.
+**0.1.0: the commands above work.** A request crosses the pipe, the bearer
+check runs before a byte reaches your backend, streaming arrives as it is
+produced, and a client that hangs up takes the backend's work with it.
+
+Early, and honestly so. It has not been dogfooded across real networks for
+long, it has not been audited, and the ticket format — though specified,
+vectored and CI-checked — has no second implementation yet. The API is `0.x`
+and will move if using it teaches us something. Issues and opinions welcome;
+if you are building a non-Rust client and
+[the spec](docs/ticket-format-v0.md) leaves you a question, that is a spec
+bug.

@@ -1,11 +1,17 @@
 # modelpipe ticket format, version 0
 
-Status: **draft for review** — this is the byte-level spec the README's
-ticket-format section promises. Once merged it is the contract a non-Rust
-client implements against; the test vectors at the bottom are normative,
-and `scripts/ticket_vectors.py` is the executable reference that
-regenerates them. `scripts/ticket_vectors.py --check` asserts the two
-agree, and runs in CI, so they cannot drift.
+Status: **shipped in 0.1.0**. This is the contract a non-Rust client
+implements against. The test vectors at the bottom are normative,
+`scripts/ticket_vectors.py` is the executable reference that regenerates
+them, and `scripts/ticket_vectors.py --check` asserts the two agree on every
+CI run — as does the Rust codec, which hard-codes the same vectors rather
+than generating them, so three independent implementations have to agree
+before anything is released.
+
+A v0 ticket will always parse as a v0 ticket. Changing any of what follows
+means a new version byte and a new section beneath this one, never an edit
+to this one — which is why the reference implementation refuses to have an
+`--update` flag.
 
 Why the bytes are laid out explicitly rather than serialized from the
 transport's own types is recorded in

@@ -220,13 +220,52 @@ jobs:
       - name: Run clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
 
+  # The suite has never run anywhere but Linux, and this crate is now mostly
+  # sockets, process lifetime and teardown ordering — the three things that
+  # differ most between platforms. `cargo install modelpipe-cli` is what the
+  # README tells someone to run on the *other* machine, which is as likely to
+  # be a Mac as anything.
+  #
+  # PR-only and gated behind `test`, matching `clippy-cross-os`: no sense
+  # spending macOS and Windows minutes on a tree ubuntu has already rejected.
+  # The tradeoff inherited with that shape is real — a push straight to main
+  # gets no cross-OS run — and is accepted because everything lands by PR.
+  test-cross-os:
+    name: Test (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    if: github.event_name == 'pull_request'
+    needs: [test]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            os: macos-14
+          - target: x86_64-pc-windows-msvc
+            os: windows-2022
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Rust toolchain
+        run: rustup show
+
+      - name: Setup Rust cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: "ci-test-${{ matrix.target }}"
+          cache-on-failure: true
+
+      - name: Run tests
+        run: cargo test --workspace --no-fail-fast
+
   # The single required status check. Branch protection points at this one job,
   # so adding a job above needs no settings change — only a line in `needs:`.
   ci-success:
     name: CI Success
     runs-on: ubuntu-latest
     if: always()
-    needs: [fmt, clippy, test, rustdoc, clippy-cross-os]
+    needs: [fmt, clippy, test, rustdoc, clippy-cross-os, test-cross-os]
     steps:
       - name: Check all jobs succeeded
         run: |

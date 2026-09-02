@@ -83,16 +83,38 @@ jobs:
           cache-on-failure: true
 
       # ci.yml triggers on pushes to main and on pull requests, so a tag push
-      # runs none of it. The gate is repeated here — fmt, the workflow lint,
-      # clippy, tests, rustdoc — so a tag on a stale commit still gets
-      # checked; the one piece not repeated is the cross-OS clippy matrix.
+      # runs none of it. Every gate ci.yml runs is repeated here, so a tag on
+      # a commit CI never saw is still checked; the only piece not repeated
+      # is the cross-OS matrix, which needs runners this job does not have.
       # (What binds the tag to a commit that actually PASSED ci.yml is the
-      # ancestry check above plus branch protection on main, not this job.)
+      # ancestry check above plus branch protection on main, not this job —
+      # and `--is-ancestor` accepts intermediate commits of a merged branch,
+      # which is precisely why the gates are repeated rather than assumed.)
+      # This job exists to be the last point at which nothing is true yet, and
+      # cargo publishes a crate full of `todo!()` exactly as happily as a
+      # working one. Publishing is irreversible; a grep is not.
+      - name: Refuse to publish unimplemented code
+        run: |
+          if grep -rn --include='*.rs' -E '\b(todo!|unimplemented!)\(' modelpipe/src modelpipe-cli/src; then
+            echo "::error::the tree above still has unimplemented bodies"
+            exit 1
+          fi
+          echo "no unimplemented bodies"
+
       - name: Check formatting
         run: cargo fmt --all -- --check
 
       - name: Validate workflow YAML
         run: ./scripts/check_workflow_yaml.sh
+
+      # The architecture gates, which need no toolchain: the file-size budget
+      # and the ticket vectors. The second is the one that matters most here
+      # — docs/ticket-format-v0.md ships in the published tarball as
+      # normative surface that other languages implement against, and nothing
+      # else on the path that publishes it checks the page against the
+      # reference implementation.
+      - name: Run the architecture gates
+        run: make enforce
 
       - name: Run clippy
         run: cargo clippy --all-targets --all-features --locked -- -D warnings
@@ -104,6 +126,16 @@ jobs:
         env:
           RUSTDOCFLAGS: -D warnings
         run: cargo doc -p modelpipe --no-deps --document-private-items --locked
+
+      # And again as docs.rs builds it. Not a duplicate: an intra-doc link
+      # from a public item to a private one RESOLVES under
+      # --document-private-items and 404s on the published page, so the step
+      # above cannot see the one audience that matters. The 0.1.0 page is
+      # built once and never rebuilt, which makes a broken link permanent.
+      - name: Check rustdoc as docs.rs builds it
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc -p modelpipe --no-deps --locked
 
       # A tag that disagrees with the manifest publishes a version nobody asked
       # for under a tag that will forever point at the wrong tree. Cheap to
