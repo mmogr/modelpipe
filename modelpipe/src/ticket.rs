@@ -219,10 +219,7 @@ impl Ticket {
             // `None` is a tag this version does not know: already stepped
             // over, and deliberately absent from the result. The parsed list
             // is therefore allowed to be shorter than `count`.
-            if let Some(addr) = TicketAddr::read(body, &mut pos)?
-                && !addrs.contains(&addr)
-            {
-                // Duplicates collapse — the parsed result is a set.
+            if let Some(addr) = TicketAddr::read(body, &mut pos)? {
                 addrs.push(addr);
             }
         }
@@ -233,11 +230,18 @@ impl Ticket {
         if pos != body.len() {
             return Err(TicketParseError::Malformed);
         }
-        Ok(Self {
-            endpoint_id,
-            addrs,
-            backend,
-        })
+        // Through `new`, never a struct literal. The spec says a decoder
+        // accepts addresses in any order and that "a duplicated address
+        // collapses — the parsed result is a set", and that an encoder emits
+        // them sorted "so equal tickets compare equal as strings".
+        // `Display` is an encoder, so building the fields directly here made
+        // parse-then-print reproduce whatever order arrived, and made two
+        // tickets naming one pairing compare unequal.
+        //
+        // `new` also collapses duplicates by encoded bytes, which is the key
+        // its sort already uses; the loop above did it by `PartialEq`, a
+        // second and subtly different rule for the same job.
+        Ok(Self::new(endpoint_id, addrs, backend))
     }
 }
 
