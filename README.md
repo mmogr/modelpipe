@@ -133,7 +133,14 @@ relay carries ciphertext it cannot read, and most connections do not touch a
 relay at all. It is not a claim that nothing is contacted. With default
 settings iroh publishes address records to n0's discovery service and may
 ask your router for a UPnP/NAT-PMP mapping, both before any client connects.
-Run `--relay` with your own if that matters to you.
+
+`--relay` does **not** turn either of those off, and v0 has no switch that
+does. It replaces the relay and nothing else: discovery still publishes to
+and resolves from n0's DNS, and the port-mapping attempt still happens. It
+is also a `serve`-side flag only — the connect side always uses the public
+relays and the public discovery service. If contacting n0 at all is the
+thing you need to avoid, v0 is not yet the tool for it; that is an honest
+gap rather than a setting you have missed.
 
 A relay operator, when one is used, sees endpoint identities, both IP
 addresses, timing and volume. Observability is not readability — and it is

@@ -65,7 +65,15 @@ sees endpoint identities, both IP addresses, timing and volume.
 default settings, iroh publishes address records to n0's discovery service
 and may solicit a UPnP/NAT-PMP port mapping on your LAN. "No cloud in the
 path" is a claim about your data — which is true — not a claim that nothing
-is contacted. Use `--relay` to run your own relay.
+is contacted.
+
+**And `--relay` does not change that.** It swaps the relay map and nothing
+else: the discovery publisher and resolver still point at n0's DNS, and the
+port-mapping attempt is untouched. It applies to `serve` only, so a connect
+side always uses the public relays and the public discovery service
+regardless. v0 offers no way to disable discovery. This is worth stating
+plainly because the flag reads like the mitigation for this paragraph and
+is not one.
 
 **Anything reachable from the local port on the connect side.** That port is
 the one hop with no encryption in front of it. It binds to loopback by
