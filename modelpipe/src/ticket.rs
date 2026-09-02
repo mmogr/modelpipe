@@ -17,11 +17,13 @@ use std::str::FromStr;
 /// Contains the serve side's endpoint identity (endpoint id plus a set of
 /// transport addresses) and a backend-kind hint — and deliberately *not*
 /// the bearer token, which travels separately so that a leaked ticket
-/// alone cannot make a request. The format is versioned; see the README
-/// for the payload shape and the current status of the wire spec.
+/// alone cannot make a request. The format is versioned; the byte-level
+/// contract, test vectors and refusal taxonomy included, is
+/// `docs/ticket-format-v0.md`.
 #[derive(Clone)]
 pub struct Ticket {
-    // Field layout is private; the README's table is the public contract.
+    // Field layout is private; docs/ticket-format-v0.md is the public
+    // contract.
     _private: (),
 }
 
@@ -64,7 +66,8 @@ impl FromStr for Ticket {
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum TicketParseError {
-    /// Not base32, truncated, or checksum failure.
+    /// Bad base32, truncated, checksum failure — any of the re-copy-it
+    /// failures the format spec routes here.
     Malformed,
     /// Parsed, but a format version this build doesn't speak.
     UnsupportedVersion(u8),
