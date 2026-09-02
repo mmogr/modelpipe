@@ -18,6 +18,46 @@ use std::net::SocketAddr;
 use tokio::net::TcpStream;
 
 use crate::ServeError;
+
+/// Why a resolution produced no address to dial.
+///
+/// Two failures that have to stay apart, because they get opposite retry
+/// verdicts: a resolver that is briefly unavailable is a machine condition
+/// worth trying again, and a name that resolves only to addresses this
+/// listener may not dial is the operator's to fix. Folding them into one
+/// `io::Error` and telling them apart by message text is how the
+/// distinction rots.
+#[derive(Debug)]
+enum Unreachable {
+    /// Lookup itself failed.
+    Lookup(std::io::Error),
+    /// Lookup succeeded and nothing it returned may be dialled.
+    NotLocal,
+}
+
+impl Unreachable {
+    /// The public error for this failure at `serve` time.
+    fn into_serve_error(self, url: &str) -> ServeError {
+        let url = url.to_owned();
+        match self {
+            Self::Lookup(_) => ServeError::BackendUnresolvable { url },
+            Self::NotLocal => ServeError::BackendNotLocal { url },
+        }
+    }
+}
+
+impl From<Unreachable> for std::io::Error {
+    /// Per-request, where the distinction has no caller to serve: the edge
+    /// answers a backend it cannot reach with a 502 either way.
+    fn from(e: Unreachable) -> Self {
+        match e {
+            Unreachable::Lookup(e) => e,
+            Unreachable::NotLocal => {
+                Self::other("no resolved address may be reached by this listener")
+            }
+        }
+    }
+}
 use crate::exchange::Backend;
 use crate::locality::{admits, classify};
 
@@ -44,44 +84,81 @@ impl TcpBackend {
     /// requests later. That first answer is not cached: it is a check, and
     /// every connection screens again.
     pub(crate) async fn new(url: &str, allow_private: bool) -> Result<Self, ServeError> {
-        let not_local = || ServeError::BackendNotLocal {
+        // Three different objections, and they used to be one. "Not a
+        // local address" is a verdict about an address; it cannot be the
+        // answer for a string that is not a URL, or for a scheme, and
+        // saying so sent the operator to `--allow-private-backend`.
+        let invalid = || ServeError::InvalidBackendUrl {
             url: url.to_owned(),
         };
-        let parsed = url::Url::parse(url).map_err(|_| not_local())?;
+        let parsed = url::Url::parse(url).map_err(|_| invalid())?;
         if parsed.scheme() != "http" {
             // Only `http`. The hop that matters is already encrypted by
             // QUIC, and accepting `https` would mean either verifying a
             // certificate for a loopback name or not verifying one at all.
-            return Err(not_local());
+            return Err(invalid());
         }
-        let host = parsed.host_str().ok_or_else(not_local)?.to_owned();
+        // `host_str` keeps an IPv6 literal's brackets, and nothing that
+        // resolves a host accepts them: neither `Ipv6Addr::from_str` nor
+        // `getaddrinfo` reads `[::1]`, so `http://[::1]:11434` — the
+        // canonical loopback, which `locality` classifies as `Loopback` and
+        // tests as such — was refused as "not a local address". The
+        // brackets belong to the URL syntax, not to the host.
+        let host = parsed.host_str().ok_or_else(invalid)?;
+        let host = host
+            .strip_prefix('[')
+            .and_then(|h| h.strip_suffix(']'))
+            .unwrap_or(host)
+            .to_owned();
         let port = parsed.port().unwrap_or(80);
+        // The `Host` header, on the other hand, needs them back: RFC 3986
+        // brackets an IPv6 literal in an authority, and a backend reading
+        // `::1:11434` cannot tell the address from the port.
+        let authority = if host.parse::<std::net::Ipv6Addr>().is_ok() {
+            format!("[{host}]:{port}")
+        } else {
+            format!("{host}:{port}")
+        };
 
         let this = Self {
-            authority: format!("{host}:{port}"),
             host,
             port,
+            authority,
             allow_private,
         };
         // The startup check. A URL that resolves to nothing admissible now
-        // is one the operator should hear about now.
-        this.resolve().await.map_err(|_| not_local())?;
-        Ok(this)
+        // is one the operator should hear about now — and *which* nothing
+        // matters: a resolver that is briefly unavailable is a machine
+        // condition a supervisor should retry, while an address this
+        // listener may not dial is the operator's to fix.
+        match this.resolve().await {
+            Ok(_) => Ok(this),
+            Err(e) => Err(e.into_serve_error(url)),
+        }
     }
 
-    /// Resolve, and return the first address this listener may dial.
+    /// Resolve, and return every address this listener may dial, in order.
     ///
-    /// Returns the `SocketAddr` itself, never the name, because that value
-    /// is what the caller connects to. This signature is the mechanism: a
-    /// caller physically cannot re-resolve, because it never had a name.
-    async fn resolve(&self) -> std::io::Result<SocketAddr> {
-        let candidates = tokio::net::lookup_host((self.host.as_str(), self.port)).await?;
-        screen(candidates, self.allow_private).ok_or_else(|| {
-            std::io::Error::other(format!(
-                "{} did not resolve to an address this listener may reach",
-                self.authority
-            ))
-        })
+    /// Returns `SocketAddr`s, never the name, because those values are what
+    /// the caller connects to. This signature is the mechanism: a caller
+    /// physically cannot re-resolve, because it never had a name.
+    ///
+    /// All of them rather than the first, because the first is not always
+    /// the one that answers. `localhost` resolves to `::1` before
+    /// `127.0.0.1` on most systems and Ollama binds `127.0.0.1` by default,
+    /// so taking only the first turned `serve http://localhost:11434` into
+    /// a listener that started cleanly and failed every request. Screening
+    /// is unchanged: an address that is not admissible is never in this
+    /// list, whatever position it held.
+    async fn resolve(&self) -> Result<Vec<SocketAddr>, Unreachable> {
+        let candidates = tokio::net::lookup_host((self.host.as_str(), self.port))
+            .await
+            .map_err(Unreachable::Lookup)?;
+        let admissible = screen(candidates, self.allow_private);
+        if admissible.is_empty() {
+            return Err(Unreachable::NotLocal);
+        }
+        Ok(admissible)
     }
 }
 
@@ -93,26 +170,41 @@ impl Backend for TcpBackend {
     }
 
     async fn connect(&self) -> std::io::Result<TcpStream> {
-        // One expression, and deliberately so: the address screened is the
-        // address dialled, with nothing in between that could resolve again.
-        TcpStream::connect(self.resolve().await?).await
+        // Every address dialled came out of `resolve`, and nothing in
+        // between could resolve again — the name never leaves that method.
+        let mut last = None;
+        for addr in self.resolve().await? {
+            match TcpStream::connect(addr).await {
+                Ok(stream) => return Ok(stream),
+                Err(e) => last = Some(e),
+            }
+        }
+        Err(last.unwrap_or_else(|| {
+            std::io::Error::other(format!("{} resolved to no address", self.authority))
+        }))
     }
 }
 
-/// The first address in `candidates` this listener may dial.
+/// The addresses in `candidates` this listener may dial, in the order given.
 ///
 /// Pure, and separated from the resolution around it so the rule can be
-/// tested exhaustively without DNS. Every candidate is screened — a name
-/// resolving to a loopback address *and* a public one is not made
-/// acceptable by the loopback entry, it is made dangerous by the public
-/// one, so the public entry is skipped rather than the whole set accepted.
+/// tested exhaustively without DNS. Every candidate is screened on its own
+/// merits: a name resolving to a loopback address *and* a public one is not
+/// made acceptable by the loopback entry, so the public one is dropped
+/// rather than the whole set being taken — and it is dropped whatever
+/// position it held, which is the property that stops a hostile resolver
+/// ordering its way past the rule.
+///
+/// Returns every admissible address rather than the first because the
+/// caller has to be able to try the next one; see [`TcpBackend::connect`].
 pub(crate) fn screen(
     candidates: impl IntoIterator<Item = SocketAddr>,
     allow_private: bool,
-) -> Option<SocketAddr> {
+) -> Vec<SocketAddr> {
     candidates
         .into_iter()
-        .find(|addr| admits(classify(addr.ip()), allow_private))
+        .filter(|addr| admits(classify(addr.ip()), allow_private))
+        .collect()
 }
 
 #[cfg(test)]

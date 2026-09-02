@@ -104,6 +104,46 @@ async fn trailers_after_the_terminal_chunk_are_forwarded() {
     assert_eq!(out, input);
 }
 
+/// A trailer is a header field that arrives after the body, so the edge's
+/// header rules apply to it. Without this a peer could restate anything the
+/// head strip had just removed — the strip applied and then undone a few
+/// hundred bytes later, on the one part of the message nothing was
+/// filtering.
+#[tokio::test]
+async fn a_trailer_cannot_restate_a_header_the_head_strip_removes() {
+    let input = b"3\r\nabc\r\n0\r\n\
+                  X-Forwarded-For: 203.0.113.9\r\n\
+                  Connection: keep-alive\r\n\
+                  Transfer-Encoding: chunked\r\n\
+                  X-Checksum: 1\r\n\r\n";
+    let (_, out) = run(b"", input, Framing::Chunked).await.unwrap();
+    let text = String::from_utf8(out).expect("ascii");
+    assert!(
+        !text.contains("203.0.113.9"),
+        "a forwarding chain reached the far side through the trailers: {text}"
+    );
+    for stripped in ["Connection:", "Transfer-Encoding:"] {
+        assert!(!text.contains(stripped), "{stripped} survived: {text}");
+    }
+    // The point is a filter, not a deletion: an ordinary trailer is still
+    // the peer's to send.
+    assert!(text.contains("X-Checksum: 1"), "{text}");
+    assert!(text.ends_with("\r\n\r\n"), "the body still ends: {text:?}");
+}
+
+/// A trailer line the edge cannot read as a field is not forwarded, on the
+/// rule `http_head::collect` already applies to header values: passing on
+/// bytes this edge could not parse is how a value means one thing here and
+/// another downstream.
+#[tokio::test]
+async fn a_trailer_that_is_not_a_field_is_dropped() {
+    let input = b"0\r\nnot a header line\r\nX-Kept: 1\r\n\r\n";
+    let (_, out) = run(b"", input, Framing::Chunked).await.unwrap();
+    let text = String::from_utf8(out).expect("ascii");
+    assert!(!text.contains("not a header line"), "{text}");
+    assert!(text.contains("X-Kept: 1"), "{text}");
+}
+
 /// Chunk extensions are not this edge's to interpret, and must survive.
 #[tokio::test]
 async fn chunk_extensions_pass_through_uninterpreted() {

@@ -10,6 +10,7 @@
 //! answer it gets.
 
 use super::*;
+use crate::ServeError;
 
 fn addrs(list: &[&str]) -> Vec<SocketAddr> {
     list.iter().map(|s| s.parse().expect("addr")).collect()
@@ -20,30 +21,26 @@ fn addrs(list: &[&str]) -> Vec<SocketAddr> {
 #[test]
 fn loopback_is_dialable_without_any_flag() {
     for a in ["127.0.0.1:11434", "127.0.0.2:80", "[::1]:11434"] {
-        assert_eq!(
-            screen(addrs(&[a]), false),
-            Some(a.parse().unwrap()),
-            "{a} needs no flag"
-        );
+        assert_eq!(screen(addrs(&[a]), false), addrs(&[a]), "{a} needs no flag");
     }
 }
 
 #[test]
 fn a_private_address_needs_the_flag() {
     let a = addrs(&["192.168.1.5:11434"]);
-    assert_eq!(screen(a.clone(), false), None, "refused bare");
-    assert_eq!(
-        screen(a.clone(), true),
-        Some(a[0]),
-        "admitted with the flag"
-    );
+    assert_eq!(screen(a.clone(), false), addrs(&[]), "refused bare");
+    assert_eq!(screen(a.clone(), true), a, "admitted with the flag");
 }
 
 #[test]
 fn a_public_address_is_never_dialable() {
     for a in ["8.8.8.8:80", "[2606:4700::1111]:443"] {
-        assert_eq!(screen(addrs(&[a]), false), None, "{a}");
-        assert_eq!(screen(addrs(&[a]), true), None, "{a} even with the flag");
+        assert_eq!(screen(addrs(&[a]), false), addrs(&[]), "{a}");
+        assert_eq!(
+            screen(addrs(&[a]), true),
+            addrs(&[]),
+            "{a} even with the flag"
+        );
     }
 }
 
@@ -54,8 +51,12 @@ fn the_metadata_endpoint_is_never_dialable_however_it_is_spelled() {
         "[::ffff:169.254.169.254]:80",
         "[fe80::1]:80",
     ] {
-        assert_eq!(screen(addrs(&[a]), false), None, "{a}");
-        assert_eq!(screen(addrs(&[a]), true), None, "{a} even with the flag");
+        assert_eq!(screen(addrs(&[a]), false), addrs(&[]), "{a}");
+        assert_eq!(
+            screen(addrs(&[a]), true),
+            addrs(&[]),
+            "{a} even with the flag"
+        );
     }
 }
 
@@ -68,25 +69,22 @@ fn every_candidate_is_screened_and_not_merely_the_first() {
     let mixed = addrs(&["8.8.8.8:11434", "127.0.0.1:11434"]);
     assert_eq!(
         screen(mixed, false),
-        Some("127.0.0.1:11434".parse().unwrap()),
+        addrs(&["127.0.0.1:11434"]),
         "the public candidate is skipped, the loopback one taken"
     );
 
     // Loopback first: the public one must never be reached for.
     let mixed = addrs(&["127.0.0.1:11434", "8.8.8.8:11434"]);
-    assert_eq!(
-        screen(mixed, false),
-        Some("127.0.0.1:11434".parse().unwrap())
-    );
+    assert_eq!(screen(mixed, false), addrs(&["127.0.0.1:11434"]));
 
     // Nothing admissible at all, however many candidates there are.
     let all_bad = addrs(&["8.8.8.8:80", "169.254.169.254:80", "0.0.0.0:80"]);
-    assert_eq!(screen(all_bad, true), None);
+    assert_eq!(screen(all_bad, true), addrs(&[]));
 }
 
 #[test]
 fn a_name_that_resolves_to_nothing_is_not_dialable() {
-    assert_eq!(screen(addrs(&[]), true), None);
+    assert_eq!(screen(addrs(&[]), true), addrs(&[]));
 }
 
 // ── URL handling ─────────────────────────────────────────────────────────
@@ -176,4 +174,102 @@ async fn a_screened_address_is_the_address_actually_dialled() {
 
     let peer = accepted.await.expect("task").expect("accept");
     assert!(peer.ip().is_loopback(), "and the caller came from loopback");
+}
+
+/// Every admissible address, not just the first, because the first is not
+/// always the one that answers.
+///
+/// `localhost` resolves to `::1` before `127.0.0.1` on most systems and
+/// Ollama binds `127.0.0.1` by default, so a screen that returned one
+/// address turned `serve http://localhost:11434` into a listener that
+/// started cleanly and failed every request afterwards.
+#[test]
+fn every_admissible_address_is_offered_in_order() {
+    let mixed = addrs(&["[::1]:11434", "8.8.8.8:11434", "127.0.0.1:11434"]);
+    assert_eq!(
+        screen(mixed, false),
+        addrs(&["[::1]:11434", "127.0.0.1:11434"]),
+        "both loopback candidates, in the order the resolver gave them, \
+         and the public one dropped from between them"
+    );
+}
+
+// ── URL shapes ───────────────────────────────────────────────────────────
+
+/// `::1` is the canonical IPv6 loopback and `locality` classifies it as
+/// such. It was still refused, because `Url::host_str` keeps an IPv6
+/// literal's brackets and nothing that resolves a host accepts them — so
+/// the message an operator got for the most local address there is was
+/// "not a local address".
+#[tokio::test]
+async fn an_ipv6_literal_backend_is_accepted_and_keeps_its_brackets() {
+    let backend = TcpBackend::new("http://[::1]:11434", false)
+        .await
+        .expect("::1 is loopback");
+    assert_eq!(
+        backend.authority(),
+        "[::1]:11434",
+        "the Host header needs the brackets back — `::1:11434` cannot be \
+         read as an address and a port"
+    );
+}
+
+/// The brackets are stripped for resolution and restored for the header,
+/// which is two different jobs; an IPv4 literal exercises neither and must
+/// be untouched by both.
+#[tokio::test]
+async fn an_ipv4_literal_backend_gains_no_brackets() {
+    let backend = TcpBackend::new("http://127.0.0.1:11434", false)
+        .await
+        .expect("loopback");
+    assert_eq!(backend.authority(), "127.0.0.1:11434");
+}
+
+/// "Not a local address" is a verdict about an address, and it was the
+/// answer for three things that are not addresses.
+///
+/// Reporting a scheme objection that way told the operator their loopback
+/// URL was not loopback, and pointed them at `--allow-private-backend`,
+/// which fixes none of these.
+#[tokio::test]
+async fn a_url_this_crate_cannot_use_is_not_reported_as_a_locality_verdict() {
+    for url in [
+        "not a url at all",
+        "https://127.0.0.1:11434",
+        "http://",
+        "ftp://127.0.0.1:11434",
+    ] {
+        match TcpBackend::new(url, false).await {
+            Err(ServeError::InvalidBackendUrl { url: named }) => {
+                assert_eq!(named, url, "the error must name what was refused");
+            }
+            other => panic!("{url} should be InvalidBackendUrl, got {other:?}"),
+        }
+    }
+}
+
+/// A locality refusal keeps its own variant, so the split cannot pass by
+/// everything having become `InvalidBackendUrl`.
+#[tokio::test]
+async fn an_address_this_listener_may_not_dial_is_still_a_locality_verdict() {
+    match TcpBackend::new("http://8.8.8.8:11434", false).await {
+        Err(e @ ServeError::BackendNotLocal { .. }) => {
+            assert!(!e.is_retryable(), "the operator's to fix: {e}");
+        }
+        other => panic!("expected BackendNotLocal, got {other:?}"),
+    }
+}
+
+/// A resolver outage is a machine condition, and inheriting
+/// `BackendNotLocal`'s permanence told a supervisor to give up on a backend
+/// that was about to come back.
+#[tokio::test]
+async fn a_host_that_resolves_to_nothing_is_retryable() {
+    // `.invalid` is reserved by RFC 2606 precisely so it never resolves.
+    match TcpBackend::new("http://nothing.invalid:11434", false).await {
+        Err(e @ ServeError::BackendUnresolvable { .. }) => {
+            assert!(e.is_retryable(), "a resolver outage clears: {e}");
+        }
+        other => panic!("expected BackendUnresolvable, got {other:?}"),
+    }
 }

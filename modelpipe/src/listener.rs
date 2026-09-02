@@ -83,13 +83,26 @@ impl ServeState {
     }
 }
 
-/// Accept connections until the endpoint stops yielding them.
+/// Accept connections until teardown begins or the endpoint stops yielding
+/// them.
 ///
-/// Returns when the endpoint is closed, which is how teardown ends this
-/// loop: `shutdown` closes the endpoint, `accept` yields `None`, and the
-/// loop falls out rather than being cancelled mid-exchange.
+/// Both halves matter, and the first is what makes the drain possible.
+/// Closing the endpoint would also end this loop — that is what it used to
+/// rely on — but it ends every in-flight exchange with it, so a `shutdown`
+/// that wants to drain has nothing left to drain by the time it asks. The
+/// loop watches the lifecycle instead, so admission stops while the work
+/// already admitted runs on.
 pub(crate) async fn accept_loop(state: std::sync::Arc<ServeState>) {
-    while let Some(incoming) = state.endpoint.accept().await {
+    loop {
+        let incoming = tokio::select! {
+            // Biased so teardown wins a tie: a `shutdown` racing an
+            // incoming connection should stop admitting rather than take
+            // one more. The same shape `dialer::local_loop` uses.
+            biased;
+            () = state.lifecycle.wait_until_closed() => break,
+            incoming = state.endpoint.accept() => incoming,
+        };
+        let Some(incoming) = incoming else { break };
         let state = state.clone();
         tokio::spawn(async move {
             // A connection that fails to establish is not an event worth
@@ -128,7 +141,15 @@ async fn serve_connection(
         });
     let peer = state.add_peer(path);
 
-    while let Ok((send, recv)) = connection.accept_bi().await {
+    loop {
+        // Same rule one level down: teardown stops this peer being given
+        // new streams, without touching the exchanges it already has.
+        let accepted = tokio::select! {
+            biased;
+            () = state.lifecycle.wait_until_closed() => break,
+            accepted = connection.accept_bi() => accepted,
+        };
+        let Ok((send, recv)) = accepted else { break };
         let state = state.clone();
         // Registered before the task is spawned, so a `shutdown` racing an
         // accept cannot observe zero in flight and return while this
@@ -140,21 +161,67 @@ async fn serve_connection(
             // that these two halves came from QUIC.
             let mut stream = tokio::io::join(recv, send);
             let _ = exchange::serve_exchange(&mut stream, &state.credential, &state.backend).await;
+            deliver(stream).await;
         });
     }
 
     state.remove_peer(peer);
 }
 
-/// Close the endpoint and wait for the drain.
+/// Wait until the peer actually has the response, then let the guard go.
 ///
-/// The order is the contract. New streams stop being accepted first, then
-/// in-flight exchanges are allowed to finish, and only then is the pipe
-/// marked torn down — so a caller that rebinds the port immediately after
-/// finds it free.
+/// The edge is finished when its last `write_all` returns, and that only
+/// means the bytes reached the local QUIC send buffer. `wait_until_drained`
+/// released on that, and the `endpoint.close()` after it discards whatever
+/// has not been transmitted — QUIC's close is documented as abandoning data
+/// the peer has not yet been given, acknowledged or not. So a drain could
+/// report success while the tail of a streaming response was still sitting
+/// in a buffer about to be thrown away, and the client, reading an
+/// `UntilClose` body, could not tell truncation from completion.
+///
+/// `finish` marks the stream complete and `stopped` resolves once the peer
+/// has taken it or given up on it. Errors are ignored on purpose: every one
+/// of them means the peer is already gone, which is the same answer as
+/// delivery for the purpose of releasing the guard.
+///
+/// This is the one place the exchange's streams are named as iroh types
+/// again, which is why it lives here and not in the edge.
+async fn deliver(stream: tokio::io::Join<iroh::endpoint::RecvStream, iroh::endpoint::SendStream>) {
+    let (_recv, mut send) = stream.into_inner();
+    let _ = send.finish();
+    let _ = send.stopped().await;
+}
+
+/// Stop admitting, drain, and only then close the endpoint.
+///
+/// The order is the contract, and it is the whole of it. `close()` is what
+/// stops new work — both accept loops watch it — and the drain is what lets
+/// the work already admitted finish. Closing the endpoint has to come last
+/// because iroh documents it as closing every open connection with error
+/// code 0: doing it first ends the exchanges this function exists to
+/// protect, and then the drain returns instantly because there is nothing
+/// left in flight.
+///
+/// Measured, before the order was corrected: a client streaming a 200-frame
+/// response was cut at frame 5.
 pub(crate) async fn shutdown(state: &ServeState) {
     state.lifecycle.close();
-    state.endpoint.close().await;
     state.lifecycle.wait_until_drained().await;
+    state.endpoint.close().await;
     state.lifecycle.mark_torn_down();
+}
+
+/// [`shutdown`] with a deadline on the drain, reporting whether it was met.
+///
+/// Same order for the same reason. The deadline covers the drain alone —
+/// wrapping the endpoint close as well would make the returned `bool` a
+/// statement about teardown latency rather than about the requests.
+pub(crate) async fn shutdown_timeout(state: &ServeState, grace: std::time::Duration) -> bool {
+    state.lifecycle.close();
+    let drained = tokio::time::timeout(grace, state.lifecycle.wait_until_drained())
+        .await
+        .is_ok();
+    state.endpoint.close().await;
+    state.lifecycle.mark_torn_down();
+    drained
 }

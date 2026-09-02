@@ -66,13 +66,20 @@ fn the_options_structs_are_constructible_from_outside() {
 }
 
 /// The opacity promise from the crate docs: a caller can walk to the
-/// transport's own error, and finds a `std` trait object rather than
-/// anything belonging to iroh.
+/// machine's own error, and finds a `std` type rather than anything
+/// belonging to iroh.
 #[test]
-fn a_transport_failure_exposes_its_cause_and_nothing_of_the_transport() {
-    let e = ServeError::Transport("relay handshake failed".into());
-    let cause = e.source().expect("Transport must expose its source");
-    assert_eq!(cause.to_string(), "relay handshake failed");
+fn a_machine_failure_exposes_its_cause_and_nothing_of_the_transport() {
+    let e = ServeError::Bind(std::io::Error::other("no sockets left"));
+    let cause = e.source().expect("Bind must expose its source");
+    assert_eq!(cause.to_string(), "no sockets left");
+    // And it is not also interpolated into Display: `anyhow` prints the
+    // top-level Display and then the source chain, so a variant that does
+    // both prints the OS error twice.
+    assert!(
+        !e.to_string().contains("no sockets left"),
+        "the source must not be duplicated into Display: {e}"
+    );
 
     // The user-fixable variants deliberately have no source: there is no
     // underlying failure, only a value the operator got wrong.
