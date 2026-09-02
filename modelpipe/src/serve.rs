@@ -15,15 +15,41 @@ use crate::transport;
 
 /// Why [`serve`] failed.
 ///
-/// The variants are the caller's retry policy:
-/// [`BackendNotLocal`](Self::BackendNotLocal) and
-/// [`InvalidRelay`](Self::InvalidRelay) are permanent and user-fixable,
-/// the rest describe the machine underneath.
+/// The variants are the caller's retry policy: everything the operator
+/// typed is permanent and theirs to fix, and everything about the machine
+/// underneath is worth trying again. [`is_retryable`](Self::is_retryable)
+/// is that split, decided here rather than at a downstream `match`.
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum ServeError {
-    /// The backend URL did not resolve to an accepted address. Loopback
-    /// always passes; RFC 1918 / `fc00::/7` only with
+    /// The backend URL is not one this crate can use at all — it does not
+    /// parse, it names no host, or its scheme is not `http`.
+    ///
+    /// Separate from [`BackendNotLocal`](Self::BackendNotLocal), which is a
+    /// verdict about an *address*. Reporting these as "not a local address"
+    /// was worse than imprecise: it pointed the operator at
+    /// `allow_private_backend`, which fixes none of them, and it said
+    /// `https://127.0.0.1:11434` was not local when the objection is the
+    /// scheme. Only `http` is accepted, because the hop that matters is
+    /// already encrypted by QUIC and accepting `https` would mean either
+    /// verifying a certificate for a loopback name or not verifying one.
+    InvalidBackendUrl {
+        /// The offending URL, for the error message.
+        url: String,
+    },
+    /// The backend URL parsed, but its host resolved to nothing.
+    ///
+    /// Retryable, and that is the whole reason it is not folded into
+    /// [`BackendNotLocal`](Self::BackendNotLocal): a resolver outage is a
+    /// machine condition that clears, and reporting it as a permanent
+    /// verdict about the operator's URL told a supervisor to give up on a
+    /// backend that was about to come back.
+    BackendUnresolvable {
+        /// The offending URL, for the error message.
+        url: String,
+    },
+    /// The backend URL resolved, and to no address this listener may dial.
+    /// Loopback always passes; RFC 1918 / `fc00::/7` only with
     /// [`ServeOptions::allow_private_backend`]; link-local
     /// (`169.254.0.0/16`, `fe80::/10` — where cloud instance metadata
     /// lives) and public addresses, never. The check runs against the
@@ -43,11 +69,10 @@ pub enum ServeError {
         /// The offending URL, for the error message.
         url: String,
     },
-    /// The p2p listener could not be set up.
+    /// The p2p listener could not be set up. The inner error is the
+    /// machine's own: naming iroh's types here would put them in the
+    /// public surface, so it arrives as `io::Error` and nothing more.
     Bind(std::io::Error),
-    /// The transport failed. The inner error is deliberately opaque:
-    /// naming iroh's types here would put them in the public surface.
-    Transport(Box<dyn std::error::Error + Send + Sync>),
 }
 
 impl ServeError {
@@ -65,13 +90,16 @@ impl ServeError {
     /// `matches!` would compile past a new variant and is banned here.
     pub const fn is_retryable(&self) -> bool {
         match self {
-            // Both are the operator's to fix, and no amount of waiting
-            // changes either one.
-            Self::BackendNotLocal { .. } | Self::InvalidRelay { .. } => false,
-            // Nothing here names an address the caller chose — `serve`
-            // takes no bind option — so a failure is a machine condition,
-            // and transient resource exhaustion is the common shape.
-            Self::Bind(_) | Self::Transport(_) => true,
+            // Everything the operator typed. No amount of waiting changes
+            // a URL, a scheme or a relay value.
+            Self::InvalidBackendUrl { .. }
+            | Self::BackendNotLocal { .. }
+            | Self::InvalidRelay { .. } => false,
+            // Everything about the machine underneath. `serve` takes no
+            // bind option, so no address here was caller-chosen, and both
+            // transient resource exhaustion and a resolver that is briefly
+            // unavailable are the common shapes.
+            Self::Bind(_) | Self::BackendUnresolvable { .. } => true,
         }
     }
 }
@@ -79,6 +107,13 @@ impl ServeError {
 impl fmt::Display for ServeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::InvalidBackendUrl { url } => write!(
+                f,
+                "{url} is not a backend URL modelpipe can use — it must be http:// with a host, e.g. http://127.0.0.1:11434"
+            ),
+            Self::BackendUnresolvable { url } => {
+                write!(f, "the host in {url} did not resolve to any address")
+            }
             Self::BackendNotLocal { url } => write!(
                 f,
                 "backend {url} is not a local address — modelpipe exposes your own server, not the network behind it"
@@ -89,8 +124,11 @@ impl fmt::Display for ServeError {
                     "{url} does not parse as a relay URL — check the value passed as the relay"
                 )
             }
-            Self::Bind(e) => write!(f, "could not set up the p2p listener: {e}"),
-            Self::Transport(e) => write!(f, "transport failure: {e}"),
+            // Deliberately not interpolating `e`: it is returned from
+            // `source()`, and `anyhow`'s `Termination` prints the top-level
+            // Display and then the chain — so naming it here printed the OS
+            // error twice.
+            Self::Bind(_) => f.write_str("could not set up the p2p listener"),
         }
     }
 }
@@ -98,9 +136,11 @@ impl fmt::Display for ServeError {
 impl std::error::Error for ServeError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Self::BackendNotLocal { .. } | Self::InvalidRelay { .. } => None,
+            Self::InvalidBackendUrl { .. }
+            | Self::BackendUnresolvable { .. }
+            | Self::BackendNotLocal { .. }
+            | Self::InvalidRelay { .. } => None,
             Self::Bind(e) => Some(e),
-            Self::Transport(e) => Some(&**e),
         }
     }
 }
@@ -225,6 +265,9 @@ mod tests {
     #[test]
     fn a_user_fixable_serve_error_is_not_retryable() {
         for e in [
+            ServeError::InvalidBackendUrl {
+                url: "https://127.0.0.1:11434".to_owned(),
+            },
             ServeError::BackendNotLocal {
                 url: "http://example.com".to_owned(),
             },
@@ -242,7 +285,9 @@ mod tests {
     fn a_machine_serve_error_is_retryable() {
         for e in [
             ServeError::Bind(std::io::Error::other("no sockets left")),
-            ServeError::Transport("relay handshake failed".into()),
+            ServeError::BackendUnresolvable {
+                url: "http://ollama.local:11434".to_owned(),
+            },
         ] {
             assert!(e.is_retryable(), "{e} should be retryable");
         }

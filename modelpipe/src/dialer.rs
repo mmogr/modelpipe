@@ -38,6 +38,24 @@ pub(crate) async fn dial(
     ticket: &Ticket,
     bind: Option<SocketAddr>,
 ) -> Result<(Arc<ConnectState>, TcpListener), ConnectError> {
+    // The caller's own values first, which is the order `serve` states as a
+    // rule: "checking the cheap, user-fixable things first means a typo is
+    // reported as a typo rather than after a socket has been opened". This
+    // side had it backwards, so an occupied `--bind` port plus an
+    // unreachable peer spent thirty seconds dialling and then reported the
+    // retryable `PeerUnreachable` — sending a supervisor into a
+    // thirty-second-per-attempt spin over a port it could have been told
+    // about immediately.
+    //
+    // Loopback by default. The local port is the one hop with no encryption
+    // in front of it, so leaving this machine is a choice the caller makes
+    // explicitly rather than one the default makes for them.
+    let requested = bind.unwrap_or_else(|| SocketAddr::from(([127, 0, 0, 1], 0)));
+    let listener = TcpListener::bind(requested)
+        .await
+        .map_err(ConnectError::Bind)?;
+    let local_addr = listener.local_addr().map_err(ConnectError::Bind)?;
+
     let addr = transport::addr_from(ticket)?;
     let endpoint = transport::bind(None).await?;
 
@@ -49,15 +67,6 @@ pub(crate) async fn dial(
         // serve side that restarted is a different endpoint and this reaches
         // nobody rather than reaching someone who refuses.
         .map_err(|_| ConnectError::PeerUnreachable)?;
-
-    // Loopback by default. The local port is the one hop with no encryption
-    // in front of it, so leaving this machine is a choice the caller makes
-    // explicitly rather than one the default makes for them.
-    let requested = bind.unwrap_or_else(|| SocketAddr::from(([127, 0, 0, 1], 0)));
-    let listener = TcpListener::bind(requested)
-        .await
-        .map_err(ConnectError::Bind)?;
-    let local_addr = listener.local_addr().map_err(ConnectError::Bind)?;
 
     Ok((
         Arc::new(ConnectState {

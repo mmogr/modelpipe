@@ -10,6 +10,7 @@
 //! answer it gets.
 
 use super::*;
+use crate::ServeError;
 
 fn addrs(list: &[&str]) -> Vec<SocketAddr> {
     list.iter().map(|s| s.parse().expect("addr")).collect()
@@ -222,4 +223,53 @@ async fn an_ipv4_literal_backend_gains_no_brackets() {
         .await
         .expect("loopback");
     assert_eq!(backend.authority(), "127.0.0.1:11434");
+}
+
+/// "Not a local address" is a verdict about an address, and it was the
+/// answer for three things that are not addresses.
+///
+/// Reporting a scheme objection that way told the operator their loopback
+/// URL was not loopback, and pointed them at `--allow-private-backend`,
+/// which fixes none of these.
+#[tokio::test]
+async fn a_url_this_crate_cannot_use_is_not_reported_as_a_locality_verdict() {
+    for url in [
+        "not a url at all",
+        "https://127.0.0.1:11434",
+        "http://",
+        "ftp://127.0.0.1:11434",
+    ] {
+        match TcpBackend::new(url, false).await {
+            Err(ServeError::InvalidBackendUrl { url: named }) => {
+                assert_eq!(named, url, "the error must name what was refused");
+            }
+            other => panic!("{url} should be InvalidBackendUrl, got {other:?}"),
+        }
+    }
+}
+
+/// A locality refusal keeps its own variant, so the split cannot pass by
+/// everything having become `InvalidBackendUrl`.
+#[tokio::test]
+async fn an_address_this_listener_may_not_dial_is_still_a_locality_verdict() {
+    match TcpBackend::new("http://8.8.8.8:11434", false).await {
+        Err(e @ ServeError::BackendNotLocal { .. }) => {
+            assert!(!e.is_retryable(), "the operator's to fix: {e}");
+        }
+        other => panic!("expected BackendNotLocal, got {other:?}"),
+    }
+}
+
+/// A resolver outage is a machine condition, and inheriting
+/// `BackendNotLocal`'s permanence told a supervisor to give up on a backend
+/// that was about to come back.
+#[tokio::test]
+async fn a_host_that_resolves_to_nothing_is_retryable() {
+    // `.invalid` is reserved by RFC 2606 precisely so it never resolves.
+    match TcpBackend::new("http://nothing.invalid:11434", false).await {
+        Err(e @ ServeError::BackendUnresolvable { .. }) => {
+            assert!(e.is_retryable(), "a resolver outage clears: {e}");
+        }
+        other => panic!("expected BackendUnresolvable, got {other:?}"),
+    }
 }

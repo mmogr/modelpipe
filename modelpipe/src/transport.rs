@@ -73,15 +73,21 @@ impl From<BindFailure> for ServeError {
 impl From<BindFailure> for ConnectError {
     fn from(e: BindFailure) -> Self {
         match e {
-            // The connect side has no `InvalidRelay`: it is not configured
-            // with a relay, so a value that fails to parse here came from a
-            // ticket, and a ticket naming a relay this build cannot use is
-            // one more path lost rather than a pairing refused. Reported as
-            // transport, which is what it is.
-            BindFailure::InvalidRelay(url) => {
-                Self::Transport(format!("relay {url} is not a relay URL").into())
-            }
-            BindFailure::Io(e) => Self::Bind(e),
+            // The connect side has no `InvalidRelay` of its own: it is not
+            // configured with a relay, so this arm is unreachable from
+            // `dial`, which calls `bind(None)`. It is still written out
+            // rather than collapsed with a wildcard — a wildcard here would
+            // silently absorb a variant added later, which is the mistake
+            // the `is_retryable` matches avoid for the same reason.
+            BindFailure::InvalidRelay(url) => Self::Endpoint(std::io::Error::other(format!(
+                "relay {url} is not a relay URL"
+            ))),
+            // Not `Bind`. That variant means the address the *caller* named
+            // through `ConnectOptions::bind`, and is classified permanent
+            // on exactly that basis; this is the p2p endpoint, which nobody
+            // chose, and which `serve` reports as the retryable
+            // `ServeError::Bind`.
+            BindFailure::Io(e) => Self::Endpoint(e),
         }
     }
 }
