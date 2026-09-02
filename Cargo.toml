@@ -47,6 +47,12 @@ unsafe_code = "deny"
 # lint enforces; what this buys is that `pub` describes the real surface that
 # discipline has to cover.)
 unreachable_pub = "deny"
+# The library's docs.rs page IS its documentation — there is no book, no wiki
+# and no module READMEs — so an undocumented public item is a hole in the only
+# reference that exists. Denied rather than warned because it costs nothing:
+# the tree passed this on the day it was added, so it is a ratchet that starts
+# green rather than a debt to work off.
+missing_docs = "deny"
 
 [workspace.lints.clippy]
 all = { level = "warn", priority = -1 }

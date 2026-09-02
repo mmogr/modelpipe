@@ -77,29 +77,32 @@ does not re-export someone else's server.
 
 ## Ticket format (v0 — draft)
 
-A ticket is a base32 string encoding a versioned payload:
+A ticket is a base32 string carrying a version, the serve side's endpoint
+id, a set of transport addresses, and a backend hint. The bearer token is
+**not** in it — it travels separately, which is what makes it a second
+lock.
 
-| field | contents |
-|---|---|
-| `version` | ticket format version (u8) |
-| `endpoint` | iroh endpoint id + a set of transport addresses (relay URLs and/or direct socket addresses) |
-| `backend` | hint: `openai-compatible` (only value in v0) |
+The field-by-field layout deliberately does not appear here. It lives in
+one place, [docs/ticket-format-v0.md](docs/ticket-format-v0.md), with
+normative test vectors, a refusal taxonomy, and an executable reference
+implementation that CI checks the page against — a copy in this README
+would be a third description of the same bytes with nothing keeping it
+honest. Why the bytes are hand-specified rather than serialized from
+iroh's own types is
+[ADR 0001](docs/adr/0001-an-explicit-ticket-byte-layout.md).
 
-The bearer token is **not** in the ticket — it travels separately, which
-is what makes it a second lock.
-
-This table is the shape of the payload, not yet a wire spec: the base32
-alphabet, payload codec, field framing and integrity check get pinned down
-by the implementation (most likely following
-[iroh-tickets](https://crates.io/crates/iroh-tickets)' conventions —
-base32-nopad over postcard). One constraint is recorded now, with QR codes
-in mind: QR alphanumeric mode only fits uppercase, so the spec will either
-render tickets uppercase or require parsers to accept both cases, letting a
-display layer upcase for the QR without breaking round-trips. Until a byte-level spec with test vectors
-lands here, a non-Rust client cannot interoperate from this document
-alone. If you want to build one — mobile apps via iroh's official
-Swift/Kotlin bindings are the obvious case — open an issue and the spec
-gets written with you.
+The short version: the string form follows
+[iroh-tickets](https://crates.io/crates/iroh-tickets)' conventions — a
+lowercase `pipe` prefix, then base32-nopad — with one addition for QR
+codes: parsers accept the whole string case-insensitively, so a display
+layer can upcase a ticket into QR alphanumeric mode without breaking the
+round-trip. The bytes are an explicit, language-neutral layout with a
+CRC-32C transcription check, and every address body is length-prefixed so
+a client that meets a transport it does not know skips it rather than
+failing. A non-Rust client — mobile apps via iroh's
+official Swift/Kotlin bindings are the obvious case — implements from
+that one page alone; if you're building one and the page leaves you a
+question, that's a spec bug: open an issue.
 
 ## Non-goals (v0)
 
