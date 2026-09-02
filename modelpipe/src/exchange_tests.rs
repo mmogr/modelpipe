@@ -375,20 +375,25 @@ async fn a_streaming_response_reaches_the_client_frame_by_frame() {
             .unwrap()
     });
 
-    let mut seen = vec![0u8; 65];
-    tokio::time::timeout(
-        std::time::Duration::from_secs(5),
-        client.read_exact(&mut seen),
-    )
+    // Read until the frame appears rather than a fixed number of bytes.
+    // What is under test is that it arrives while the backend is still
+    // producing; a hardcoded length additionally asserts the response head's
+    // size, which breaks the moment a header is added to it.
+    let mut text = String::new();
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        let mut buf = [0u8; 512];
+        loop {
+            let n = client.read(&mut buf).await.expect("read");
+            assert!(n > 0, "the stream ended early: {text}");
+            text.push_str(&String::from_utf8_lossy(&buf[..n]));
+            if text.contains("data: first") {
+                return;
+            }
+        }
+    })
     .await
-    .expect("the head and first frame must arrive before the backend finishes")
-    .expect("read");
-    let text = String::from_utf8_lossy(&seen);
+    .unwrap_or_else(|_| panic!("the first frame must arrive before the backend finishes: {text}"));
     assert!(text.contains("200 OK"), "{text}");
-    assert!(
-        text.contains("data: first"),
-        "the first frame arrived early: {text}"
-    );
 
     released.notify_one();
     assert_eq!(pump.await.unwrap(), Outcome::Forwarded);

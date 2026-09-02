@@ -575,3 +575,34 @@ async fn a_client_that_disconnects_mid_stream_stops_the_backend() {
     connected.shutdown().await;
     serving.shutdown().await;
 }
+
+// ── Connection reuse ─────────────────────────────────────────────────────
+
+/// One bi-stream carries one exchange, so a client must not put a second
+/// request on the same local connection — it would go down a stream the
+/// serve side has finished with, and hang until the client's timeout.
+///
+/// Real `OpenAI` clients pool connections by default, so this is not an edge
+/// case: it is what the first SDK to point at modelpipe would do. Telling
+/// the client is the whole mechanism, and it is one header.
+#[tokio::test]
+async fn a_response_tells_the_client_not_to_reuse_the_connection() {
+    let backend = MockBackend::json(200, OK_BODY).await;
+    let (serving, connected, url) = paired(&backend, TokenPolicy::Generate).await;
+
+    let response = within(
+        "a request must cross the pipe",
+        request(&url, "/v1/models", Some(&bearer(&serving))),
+    )
+    .await
+    .expect("request");
+
+    assert!(
+        response.to_ascii_lowercase().contains("connection: close"),
+        "a pooling client will otherwise send its next request down a \
+         stream nobody is reading: {response}"
+    );
+
+    connected.shutdown().await;
+    serving.shutdown().await;
+}

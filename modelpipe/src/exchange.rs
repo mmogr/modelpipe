@@ -173,6 +173,19 @@ where
         return refuse(stream, refusal::bad_gateway(), Outcome::BadGateway).await;
     };
     headers::strip_hop_by_hop(&mut response.headers);
+    // One bi-stream carries one exchange, so the client must not put a
+    // second request on the same local connection: that stream is finished
+    // and nobody is reading it, and the request would hang until the
+    // client's own timeout.
+    //
+    // Every OpenAI client pools connections by default, so this is not an
+    // edge case — it is what the first SDK to point at modelpipe does. The
+    // header is added after the hop-by-hop strip, which removes whatever
+    // the backend said about its own connection; what is being described
+    // here is *this* hop, which is over.
+    response
+        .headers
+        .push(("Connection".to_owned(), "close".to_owned()));
 
     stream
         .write_all(&http_head::serialize_response(&response, response_framing))
