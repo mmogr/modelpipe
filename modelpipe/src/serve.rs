@@ -117,12 +117,13 @@ pub struct ServeOptions {
     /// [`ServeError::InvalidRelay`] up front; a well-formed URL naming
     /// the wrong relay still fails later, as transport.
     pub relay: Option<String>,
-    /// Loopback always passes and never needs this. Set it to also
-    /// accept a backend on a private (RFC 1918 / `fc00::/7`) address.
-    /// Off by default: `serve` extends trust outward from this machine,
-    /// and pointing it into the LAN is a decision the operator should
-    /// make explicitly. Link-local ranges are never accepted regardless;
-    /// see [`ServeError::BackendNotLocal`].
+    /// Widen the backend rule to accept a private address as well as
+    /// loopback. Off by default: pointing `serve` into the LAN is a
+    /// decision the operator should make explicitly.
+    ///
+    /// This moves exactly one class and nothing else — link-local and
+    /// public addresses are refused whatever it is set to. The full rule
+    /// is on [`ServeError::BackendNotLocal`].
     pub allow_private_backend: bool,
 }
 
@@ -153,10 +154,9 @@ impl fmt::Debug for ServeOptions {
 /// ([`TokenPolicy::InsecureNoAuth`]) is the one exception: nothing is
 /// enforced, and [`ServeHandle::token`] returns `None`.
 ///
-/// The backend must be local. Loopback always passes; private-range
-/// addresses only with [`ServeOptions::allow_private_backend`]; anything
-/// else is [`ServeError::BackendNotLocal`]. This crate extends trust
-/// outward, it does not re-export someone else's server.
+/// The backend must be local: this crate extends trust outward from your
+/// machine, it does not re-export someone else's server. Which addresses
+/// count, and what widens that, is on [`ServeError::BackendNotLocal`].
 ///
 /// After a successful return, per-request trouble — the backend down or
 /// refusing, a re-resolved backend address failing the locality check —
