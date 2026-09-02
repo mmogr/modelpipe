@@ -38,7 +38,16 @@ enum Command {
         // Backtick-free for the same reason as backend_url above: clap
         // prints this verbatim, and backticks would appear as backticks.
         #[expect(clippy::doc_markdown, reason = "clap help text, not rustdoc")]
-        #[arg(long, env = "MODELPIPE_TOKEN", conflicts_with = "insecure_no_auth")]
+        // `hide_env_values` because clap otherwise renders the variable's
+        // *value* into `--help`: an operator running `modelpipe serve
+        // --help` with MODELPIPE_TOKEN set printed the credential to their
+        // terminal, and into whatever they pasted the help text into.
+        #[arg(
+            long,
+            env = "MODELPIPE_TOKEN",
+            hide_env_values = true,
+            conflicts_with = "insecure_no_auth"
+        )]
         token: Option<String>,
         /// Read the bearer token from this file, trimming trailing newline
         #[arg(long, conflicts_with_all = ["insecure_no_auth", "token"])]
@@ -75,6 +84,15 @@ fn token_policy(
     insecure: bool,
 ) -> anyhow::Result<TokenPolicy> {
     Ok(match (token, token_file, insecure) {
+        // An empty value is a misconfiguration, not an empty credential —
+        // the same verdict `--token-file` has always given an empty file.
+        // `MODELPIPE_TOKEN=` set but empty is the common way in: clap reads
+        // an exported-but-empty variable as present, so the listener came
+        // up enforcing `"Bearer "`, printed a blank `token:` line, and 401'd
+        // every request afterwards with nothing to say why.
+        (Some(t), _, _) if t.trim().is_empty() => {
+            anyhow::bail!("the bearer token is empty — unset MODELPIPE_TOKEN or pass a value")
+        }
         (Some(t), _, _) => TokenPolicy::Supplied(t),
         (None, Some(path), _) => {
             let raw = std::fs::read_to_string(&path)
@@ -113,11 +131,11 @@ fn qr(ticket: &Ticket) -> Option<String> {
 /// `Relayed` is worth surfacing: it explains latency, and a user who does
 /// not know their traffic is going through a relay has no way to guess why
 /// the pipe feels slow.
-async fn park(mut status: impl AsyncStatus) -> anyhow::Result<()> {
+async fn park(mut status: impl AsyncStatus, interrupt: &mut Interrupt) -> anyhow::Result<()> {
     loop {
         tokio::select! {
-            signal = tokio::signal::ctrl_c() => {
-                signal?;
+            r = interrupt.next() => {
+                r?;
                 return Ok(());
             }
             next = status.changed() => {
@@ -126,6 +144,46 @@ async fn park(mut status: impl AsyncStatus) -> anyhow::Result<()> {
                     return Ok(());
                 }
             }
+        }
+    }
+}
+
+/// A SIGINT listener that outlives `park`.
+///
+/// tokio installs its handler on first use and documents that it stays
+/// installed for the life of the process — "even if this `Signal` instance
+/// is dropped, subsequent SIGINT deliveries will end up captured by Tokio,
+/// and the default platform behavior will NOT be reset". So a `park` that
+/// created its own listener and returned left every later Ctrl-C going
+/// nowhere: the first one entered `shutdown`, and if that took a while the
+/// operator's only remaining option was `kill` from another terminal.
+/// Keeping one listener alive across both phases is what makes the second
+/// interrupt mean something.
+struct Interrupt(tokio::signal::unix::Signal);
+
+impl Interrupt {
+    fn new() -> anyhow::Result<Self> {
+        use tokio::signal::unix::{SignalKind, signal};
+        Ok(Self(signal(SignalKind::interrupt())?))
+    }
+
+    async fn next(&mut self) -> anyhow::Result<()> {
+        self.0.recv().await;
+        Ok(())
+    }
+}
+
+/// Shut down gracefully, unless the operator asks again.
+///
+/// The graceful path can legitimately take a while — it is waiting for
+/// admitted requests to finish, which is the whole promise — so the second
+/// Ctrl-C has to be able to stop waiting. Dropping the handle is the cut,
+/// and returning from here does exactly that.
+async fn shut_down(handle: impl Future<Output = ()>, interrupt: &mut Interrupt) {
+    tokio::select! {
+        () = handle => {}
+        _ = interrupt.next() => {
+            eprintln!("interrupted again — cutting rather than waiting");
         }
     }
 }
@@ -154,6 +212,10 @@ impl AsyncStatus for modelpipe::ConnectHandle {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
+    // Created before either subcommand runs and held across both phases, so
+    // the interrupt that asks for shutdown and the one that gives up
+    // waiting are heard by the same listener.
+    let mut interrupt = Interrupt::new()?;
     match cli.command {
         Command::Serve {
             backend_url,
@@ -187,8 +249,8 @@ async fn main() -> anyhow::Result<()> {
             if !no_qr && let Some(code) = qr(&ticket) {
                 println!("\n{code}");
             }
-            park(&mut handle).await?;
-            handle.shutdown().await;
+            park(&mut handle, &mut interrupt).await?;
+            shut_down(handle.shutdown(), &mut interrupt).await;
         }
         Command::Connect { ticket, bind } => {
             let ticket: Ticket = ticket.parse()?;
@@ -206,8 +268,8 @@ async fn main() -> anyhow::Result<()> {
             opts.bind = bind;
             let mut handle = modelpipe::connect(&ticket, opts).await?;
             println!("{}", handle.base_url());
-            park(&mut handle).await?;
-            handle.shutdown().await;
+            park(&mut handle, &mut interrupt).await?;
+            shut_down(handle.shutdown(), &mut interrupt).await;
         }
     }
     Ok(())

@@ -86,3 +86,50 @@ fn the_qr_encodes_an_uppercased_ticket_that_still_parses() {
     );
     assert!(qr(&ticket).is_some(), "and it must fit a QR code");
 }
+
+/// An empty value is a misconfiguration, not an empty credential.
+///
+/// `--token-file` has always said so about an empty file; `--token` and
+/// `MODELPIPE_TOKEN` did not, and clap reads an exported-but-empty variable
+/// as present. So `export MODELPIPE_TOKEN=` — one stray keystroke in a
+/// shell profile — brought up a listener enforcing exactly `"Bearer "`,
+/// which httparse's trailing-whitespace trim makes unpresentable, printed a
+/// blank `token:` line, and refused every request afterwards with nothing
+/// to say why.
+#[test]
+fn an_empty_supplied_token_is_refused_rather_than_enforced() {
+    for empty in ["", " ", "\t", "\n"] {
+        assert!(
+            token_policy(Some(empty.to_owned()), None, false).is_err(),
+            "{empty:?} must not become a credential"
+        );
+    }
+    // And the guard is narrow: a token that merely *contains* whitespace is
+    // the operator's business, not ours.
+    assert!(matches!(
+        token_policy(Some(" sk-real ".to_owned()), None, false).unwrap(),
+        TokenPolicy::Supplied(t) if t == " sk-real "
+    ));
+}
+
+/// `--help` must not print the credential. clap renders `[env: NAME=value]`
+/// by default, so an operator asking how the flag works got the token
+/// echoed into their terminal — and into wherever they pasted the output.
+#[test]
+fn the_help_text_never_renders_the_environment_token() {
+    use clap::CommandFactory;
+
+    let serve = Cli::command();
+    let serve = serve
+        .get_subcommands()
+        .find(|c| c.get_name() == "serve")
+        .expect("serve");
+    let token = serve
+        .get_arguments()
+        .find(|a| a.get_id() == "token")
+        .expect("--token");
+    assert!(
+        token.is_hide_env_values_set(),
+        "`--help` would print the value of MODELPIPE_TOKEN"
+    );
+}
