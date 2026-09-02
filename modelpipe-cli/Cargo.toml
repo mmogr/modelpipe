@@ -22,4 +22,8 @@ workspace = true
 modelpipe = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "signal"] }
 anyhow = { workspace = true }
-clap = { version = "4", features = ["derive"] }
+clap = { version = "4", features = ["derive", "env"] }
+# Terminal QR rendering only — no image or SVG backends. The README
+# promises a QR beside the ticket, and a phone reading one is the difference
+# between pairing in a second and retyping ninety-six characters.
+qrcode = { version = "0.14", default-features = false }

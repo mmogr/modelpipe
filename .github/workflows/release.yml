@@ -88,6 +88,17 @@ jobs:
       # checked; the one piece not repeated is the cross-OS clippy matrix.
       # (What binds the tag to a commit that actually PASSED ci.yml is the
       # ancestry check above plus branch protection on main, not this job.)
+      # This job exists to be the last point at which nothing is true yet, and
+      # cargo publishes a crate full of `todo!()` exactly as happily as a
+      # working one. Publishing is irreversible; a grep is not.
+      - name: Refuse to publish unimplemented code
+        run: |
+          if grep -rn --include='*.rs' -E '\b(todo!|unimplemented!)\(' modelpipe/src modelpipe-cli/src; then
+            echo "::error::the tree above still has unimplemented bodies"
+            exit 1
+          fi
+          echo "no unimplemented bodies"
+
       - name: Check formatting
         run: cargo fmt --all -- --check
 

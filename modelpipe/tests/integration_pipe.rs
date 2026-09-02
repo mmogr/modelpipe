@@ -513,3 +513,65 @@ async fn a_live_pairing_reports_a_transport_path_on_both_sides() {
     connected.shutdown().await;
     serving.shutdown().await;
 }
+
+// ── Cancellation ─────────────────────────────────────────────────────────
+
+/// The failure that is invisible to every other test in this file.
+///
+/// A client that hangs up mid-generation must take the backend's work with
+/// it. If it does not, the model keeps producing tokens for a request
+/// nobody is waiting for — and every functional assertion still passes,
+/// because the request "worked". The only way to see it is to count what
+/// the backend produced after the client left.
+#[tokio::test]
+async fn a_client_that_disconnects_mid_stream_stops_the_backend() {
+    let (backend, frames_written) = MockBackend::endless_stream().await;
+    let (serving, connected, url) = paired(&backend, TokenPolicy::Generate).await;
+
+    let authority = url
+        .trim_start_matches("http://")
+        .trim_end_matches("/v1")
+        .to_owned();
+    let auth = bearer(&serving);
+
+    // Open a request, read enough to know the stream is flowing, then hang
+    // up without reading the rest.
+    {
+        let mut socket = tokio::net::TcpStream::connect(&authority)
+            .await
+            .expect("connect");
+        let request = format!(
+            "GET /v1/chat/completions HTTP/1.1\r\nHost: {authority}\r\n\
+             Authorization: {auth}\r\n\r\n"
+        );
+        tokio::io::AsyncWriteExt::write_all(&mut socket, request.as_bytes())
+            .await
+            .expect("write");
+
+        let mut seen = vec![0u8; 64];
+        within(
+            "the stream must start",
+            tokio::io::AsyncReadExt::read(&mut socket, &mut seen),
+        )
+        .await
+        .expect("read");
+        // Dropped here: the client is gone mid-generation.
+    }
+
+    // Let the news travel, then see whether the backend is still producing.
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let after_disconnect = frames_written.load(std::sync::atomic::Ordering::SeqCst);
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let later = frames_written.load(std::sync::atomic::Ordering::SeqCst);
+
+    assert_eq!(
+        later,
+        after_disconnect,
+        "the backend produced {} more frames after the client left; a \
+         cancelled request must not leave a generation running",
+        later - after_disconnect
+    );
+
+    connected.shutdown().await;
+    serving.shutdown().await;
+}

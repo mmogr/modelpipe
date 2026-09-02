@@ -30,6 +30,20 @@ use crate::framing::{self, Framing};
 use crate::head_read;
 use crate::headers;
 use crate::http_head::{self, HeadError};
+
+/// How long a peer may take to send a complete request head.
+///
+/// The third of the three bounds on what a ticket-holder can cost before
+/// authenticating — the other two being the head's size and the number of
+/// streams one peer may have in flight. A stream that is opened and then
+/// left silent holds a task and a buffer indefinitely otherwise, and it
+/// costs an attacker nothing to open thousands.
+///
+/// Generous by design: this is not a request timeout. A slow phone on a
+/// slow network sends a few hundred bytes well inside it, and a request
+/// that has been *admitted* is never cut by it — an inference call may run
+/// for many minutes, which is the whole product.
+const HEAD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 use crate::refusal;
 
 /// Where the serve side gets a connection to the backend.
@@ -59,6 +73,9 @@ pub(crate) enum Outcome {
     /// Refused on the head — unparseable, oversized, or framed
     /// ambiguously. The backend was not contacted.
     BadRequest,
+    /// The peer opened a stream and never finished asking. Nothing was
+    /// written back, and the backend was not contacted.
+    TimedOut,
     /// The backend was contacted and the exchange failed there — it would
     /// not take the connection, or answered with something this edge
     /// cannot read. The client was told so; distinct from
@@ -83,7 +100,14 @@ where
     // 1. The head, bounded. A ticket-holder can open a stream and type
     //    headers; without a bound that is an unbounded allocation for the
     //    price of a connection.
-    let Ok((mut head, leftover)) = head_read::request(stream, Vec::new()).await? else {
+    let asked = tokio::time::timeout(HEAD_TIMEOUT, head_read::request(stream, Vec::new())).await;
+    let Ok(asked) = asked else {
+        // Nothing is written back. A peer that never finished asking is not
+        // owed an answer, and a reply would only confirm that something is
+        // listening here.
+        return Ok(Outcome::TimedOut);
+    };
+    let Ok((mut head, leftover)) = asked? else {
         return refuse(stream, refusal::bad_request(), Outcome::BadRequest).await;
     };
 

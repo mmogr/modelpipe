@@ -21,6 +21,17 @@ use crate::credential::Credential;
 use crate::exchange;
 use crate::lifecycle::{Lifecycle, PeerPath, aggregate};
 
+/// How many exchanges one peer may have in flight at once.
+///
+/// Backpressure rather than refusal: a peer may open more streams, and they
+/// wait. What is bounded is the work and the memory a single ticket-holder
+/// can command, which — with the head size and the head timeout — is the
+/// whole of what a leaked ticket is worth before it authenticates.
+///
+/// Deliberately generous. A client pipelining a page of requests is normal;
+/// a client with sixty-four in flight is not a client.
+const MAX_CONCURRENT_STREAMS_PER_PEER: usize = 64;
+
 /// Everything a live listener shares.
 ///
 /// One `Arc`, held by the handle, the accept loop, and every in-flight
@@ -140,6 +151,7 @@ async fn serve_connection(
             }
         });
     let peer = state.add_peer(path);
+    let slots = std::sync::Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_STREAMS_PER_PEER));
 
     loop {
         // Same rule one level down: teardown stops this peer being given
@@ -151,11 +163,19 @@ async fn serve_connection(
         };
         let Ok((send, recv)) = accepted else { break };
         let state = state.clone();
+        // Acquired before the stream is taken on, so a peer opening streams
+        // faster than they complete waits here rather than accumulating
+        // tasks. `acquire_owned` cannot fail: the semaphore lives as long as
+        // this loop and is never closed.
+        let Ok(slot) = slots.clone().acquire_owned().await else {
+            break;
+        };
         // Registered before the task is spawned, so a `shutdown` racing an
         // accept cannot observe zero in flight and return while this
         // exchange is starting.
         let guard = state.lifecycle.enter();
         tokio::spawn(async move {
+            let _slot = slot;
             let _guard = guard;
             // `join` is what lets the edge stay generic: it never learns
             // that these two halves came from QUIC.

@@ -657,3 +657,71 @@ async fn a_backend_that_answers_before_reading_the_body_is_still_heard() {
     );
     assert!(text.ends_with("no"), "body included: {text}");
 }
+
+// ── Bounds before authentication ─────────────────────────────────────────
+
+/// A stream opened and then left silent must not hold a task forever. This
+/// is the third bound on what a leaked ticket is worth before it
+/// authenticates, alongside the head's size and the per-peer stream cap.
+#[tokio::test(start_paused = true)]
+async fn a_peer_that_never_finishes_asking_is_timed_out() {
+    let backend = CountingBackend::new(OK_RESPONSE);
+    let (mut client, mut edge) = duplex(64 * 1024);
+
+    // A head that begins and never ends: valid so far, so the parser keeps
+    // asking for more.
+    client
+        .write_all(b"GET /v1/models HTTP/1.1\r\nHost: x\r\n")
+        .await
+        .unwrap();
+
+    let (credential, _) = Credential::new(&supplied()).expect("a usable token");
+    // `start_paused` advances the clock only when everything is idle, so
+    // this resolves the moment the timeout is the only thing left to wait
+    // on — no real thirty seconds pass.
+    let outcome = serve_exchange(&mut edge, &credential, &backend)
+        .await
+        .expect("a timeout is not a transport failure");
+
+    assert_eq!(outcome, Outcome::TimedOut);
+    assert_eq!(backend.connects(), 0, "and the backend never heard of it");
+
+    drop(edge);
+    let mut seen = Vec::new();
+    client.read_to_end(&mut seen).await.unwrap();
+    assert!(
+        seen.is_empty(),
+        "a peer that never finished asking is owed no answer: {seen:?}"
+    );
+}
+
+/// The timeout bounds the *head*, not the request. An admitted inference
+/// call may run for many minutes, which is the product.
+#[tokio::test(start_paused = true)]
+async fn a_slow_head_that_arrives_in_time_is_served_normally() {
+    let backend = CountingBackend::new(OK_RESPONSE);
+    let (mut client, mut edge) = duplex(64 * 1024);
+    let auth = format!("Bearer {TOKEN}");
+
+    tokio::spawn(async move {
+        client
+            .write_all(b"GET /v1/models HTTP/1.1\r\nHost: x\r\n")
+            .await
+            .unwrap();
+        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+        client
+            .write_all(format!("Authorization: {auth}\r\n\r\n").as_bytes())
+            .await
+            .unwrap();
+        // Held open so the response has somewhere to go. Not a round
+        // minute, which clippy reads as a unit that wants rewriting.
+        tokio::time::sleep(std::time::Duration::from_secs(45)).await;
+    });
+
+    let (credential, _) = Credential::new(&supplied()).expect("a usable token");
+    let outcome = serve_exchange(&mut edge, &credential, &backend)
+        .await
+        .expect("no transport failure");
+    assert_eq!(outcome, Outcome::Forwarded);
+    assert_eq!(backend.connects(), 1);
+}
