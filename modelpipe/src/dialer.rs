@@ -15,10 +15,12 @@ use std::sync::Arc;
 
 use iroh::Endpoint;
 use iroh::endpoint::Connection;
+use tokio::io::AsyncWriteExt as _;
 use tokio::net::TcpListener;
 
 use crate::ConnectError;
-use crate::lifecycle::Lifecycle;
+use crate::lifecycle::{Lifecycle, PeerPath, aggregate};
+use crate::refusal;
 use crate::ticket::Ticket;
 use crate::transport;
 
@@ -26,7 +28,7 @@ use crate::transport;
 pub(crate) struct ConnectState {
     /// Kept so the endpoint outlives the connection opened on it.
     _endpoint: Endpoint,
-    connection: Connection,
+    pub(crate) connection: Connection,
     pub(crate) local_addr: SocketAddr,
     pub(crate) lifecycle: Lifecycle,
 }
@@ -68,8 +70,34 @@ pub(crate) async fn dial(
     ))
 }
 
+/// How this side is reaching the peer, read from the live connection.
+///
+/// The serve side has had this since it landed; this side published nothing
+/// at all, so `status()` was permanently `Idle` on a working pipe and
+/// `Direct`/`Relayed` were unreachable here however the traffic actually
+/// flowed. Same snapshot semantics as the serve side, and the same honest
+/// limit: a path that migrates after this is read is not followed yet.
+fn peer_path(connection: &Connection) -> PeerPath {
+    connection
+        .paths()
+        .iter()
+        .find(iroh::endpoint::Path::is_selected)
+        .map_or(PeerPath::Relayed, |p| {
+            if p.remote_addr().is_relay() {
+                PeerPath::Relayed
+            } else {
+                PeerPath::Direct
+            }
+        })
+}
+
 /// Accept local connections and pair each with its own bi-stream.
 pub(crate) async fn local_loop(state: Arc<ConnectState>, listener: TcpListener) {
+    // Published before the first accept, so a caller that reads `status()`
+    // as soon as `connect` returns sees the path it actually has.
+    state
+        .lifecycle
+        .set_status(aggregate(&[peer_path(&state.connection)]));
     loop {
         let accepted = tokio::select! {
             // Biased so that teardown wins a tie: a `shutdown` racing an
@@ -79,15 +107,27 @@ pub(crate) async fn local_loop(state: Arc<ConnectState>, listener: TcpListener) 
             () = state.lifecycle.wait_until_closed() => break,
             accepted = listener.accept() => accepted,
         };
-        let Ok((local, _)) = accepted else { break };
+        let local = match accepted {
+            Ok((local, _)) => local,
+            // A transient accept failure is not the end of the listener.
+            // `ECONNABORTED` is a client that reset between SYN and accept
+            // — routine on any open port — and `EMFILE`/`ENFILE` are a
+            // process-wide condition that clears. Breaking here unbound the
+            // advertised port while `local_addr` went on naming it, left
+            // the status at `Idle` forever, and freed the port for any
+            // local process to take, with the next request's bearer token
+            // in it.
+            Err(e) if transient(&e) => continue,
+            Err(_) => break,
+        };
 
         let state = state.clone();
         // Registered before the spawn, so a drain cannot observe zero while
-        // this exchange is starting.
+        // this exchange is starting. `carry` owns it from here and releases
+        // it early for a connection that turns out not to be an exchange.
         let guard = state.lifecycle.enter();
         tokio::spawn(async move {
-            let _guard = guard;
-            let _ = carry(&state, local).await;
+            let _ = carry(&state, local, guard).await;
         });
     }
 
@@ -96,16 +136,65 @@ pub(crate) async fn local_loop(state: Arc<ConnectState>, listener: TcpListener) 
     // port is free" if the value that holds it is gone first — which is the
     // whole reason `mark_torn_down` is separate from publishing `Closed`.
     drop(listener);
+    // The loop can also end without anyone asking — a permanent accept
+    // failure. The pipe is over either way, and a watcher that is never told
+    // waits on a status that will not change again.
+    state.lifecycle.close();
     state.lifecycle.mark_torn_down();
 }
 
+/// Whether an accept failure is worth retrying rather than ending the
+/// listener over.
+fn transient(e: &std::io::Error) -> bool {
+    use std::io::ErrorKind::{ConnectionAborted, Interrupted, OutOfMemory, WouldBlock};
+    matches!(
+        e.kind(),
+        ConnectionAborted | Interrupted | WouldBlock | OutOfMemory
+    ) || e.raw_os_error() == Some(24)  // EMFILE
+        || e.raw_os_error() == Some(23) // ENFILE
+}
+
 /// Carry one local connection over one bi-stream.
-async fn carry(state: &ConnectState, mut local: tokio::net::TcpStream) -> std::io::Result<()> {
-    let (send, recv) = state
-        .connection
-        .open_bi()
-        .await
-        .map_err(|e| std::io::Error::other(e.to_string()))?;
+///
+/// `guard` is the in-flight registration taken at accept, and this function
+/// is where it is decided whether that registration means anything. A
+/// socket that has been accepted but has said nothing is not an exchange:
+/// an SDK preconnect or a health probe is exactly that shape, and
+/// `copy_bidirectional` never returns for one, so holding the guard made a
+/// single silent connection wedge `shutdown`'s drain permanently.
+async fn carry(
+    state: &ConnectState,
+    mut local: tokio::net::TcpStream,
+    guard: crate::lifecycle::InFlight,
+) -> std::io::Result<()> {
+    // Wait for the client to say something, or for teardown, whichever
+    // comes first. `peek` leaves the byte where it is for the copy below.
+    let mut first = [0u8; 1];
+    tokio::select! {
+        biased;
+        () = state.lifecycle.wait_until_closed() => return Ok(()),
+        peeked = local.peek(&mut first) => {
+            if peeked? == 0 {
+                return Ok(());
+            }
+        }
+    }
+    // Only now is this an exchange the drain must wait for.
+    let _guard = guard;
+
+    let opened = state.connection.open_bi().await;
+    let Ok((send, recv)) = opened else {
+        // The serve edge answers a backend it cannot reach with a 502, and
+        // this end owes a client whose tunnel is gone the same. The socket
+        // used to be dropped unread, so an SDK saw a connection reset with
+        // no status: "the tunnel is down" and "nothing is listening here"
+        // were the same event. `open_bi` fails only when the connection is
+        // dead — stream-budget exhaustion back-pressures instead — so this
+        // arm is exactly that case.
+        local.write_all(&refusal::bad_gateway()).await?;
+        local.flush().await?;
+        return Ok(());
+    };
     let mut remote = tokio::io::join(recv, send);
 
     // Opaque in both directions. `copy_bidirectional` finishes when both
@@ -126,6 +215,23 @@ pub(crate) async fn shutdown(state: &ConnectState) {
     // that rebinds immediately gets EADDRINUSE — which is not a theoretical
     // hazard: it is what the integration test caught.
     state.lifecycle.wait_until_torn_down().await;
+}
+
+/// [`shutdown`] with a deadline on the drain, reporting whether it was met.
+///
+/// The deadline covers the drain and nothing else. `mark_torn_down` is not
+/// called here and must not be: `local_loop` still owns the `TcpListener`,
+/// and it is the loop that knows when the port is free. Setting the latch
+/// from outside returned `true` with the port still bound — and left the
+/// latch set, so a later `shutdown` lost the same guarantee.
+pub(crate) async fn shutdown_timeout(state: &ConnectState, grace: std::time::Duration) -> bool {
+    state.lifecycle.close();
+    let drained = tokio::time::timeout(grace, state.lifecycle.wait_until_drained())
+        .await
+        .is_ok();
+    state.connection.close(0u32.into(), b"shutdown");
+    state.lifecycle.wait_until_torn_down().await;
+    drained
 }
 
 /// The URL to point a client at.
@@ -149,64 +255,5 @@ pub(crate) fn base_url(addr: SocketAddr) -> String {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// A wildcard bind names no reachable host, so the URL must name one
-    /// that is.
-    #[test]
-    fn a_wildcard_bind_renders_as_loopback() {
-        assert_eq!(
-            base_url("0.0.0.0:8080".parse().unwrap()),
-            "http://127.0.0.1:8080/v1"
-        );
-        assert_eq!(
-            base_url("[::]:8080".parse().unwrap()),
-            "http://[::1]:8080/v1"
-        );
-    }
-
-    #[test]
-    fn a_concrete_bind_is_rendered_as_it_is() {
-        assert_eq!(
-            base_url("127.0.0.1:8080".parse().unwrap()),
-            "http://127.0.0.1:8080/v1"
-        );
-        assert_eq!(
-            base_url("192.168.1.5:9000".parse().unwrap()),
-            "http://192.168.1.5:9000/v1"
-        );
-    }
-
-    /// IPv6 needs brackets in a URL, and no URL parser accepts a zone id.
-    #[test]
-    fn an_ipv6_address_is_bracketed_and_loses_its_zone() {
-        assert_eq!(
-            base_url("[::1]:8080".parse().unwrap()),
-            "http://[::1]:8080/v1"
-        );
-        let zoned = SocketAddr::V6(std::net::SocketAddrV6::new(
-            "fe80::1".parse().unwrap(),
-            8080,
-            0,
-            7,
-        ));
-        assert_eq!(
-            base_url(zoned),
-            "http://[fe80::1]:8080/v1",
-            "the zone id must not reach a URL"
-        );
-    }
-
-    /// The URL is meant to be pasted into a client, so it must carry the
-    /// `/v1` an OpenAI-compatible one expects — for every shape of address,
-    /// not just the common one.
-    #[test]
-    fn every_rendering_names_the_openai_compatible_base_path() {
-        for addr in ["127.0.0.1:8080", "0.0.0.0:80", "[::1]:1", "[::]:65535"] {
-            let url = base_url(addr.parse().expect("addr"));
-            assert!(url.ends_with("/v1"), "{addr} rendered as {url}");
-            assert!(url.starts_with("http://"), "{addr} rendered as {url}");
-        }
-    }
-}
+#[path = "dialer_tests.rs"]
+mod dialer_tests;
