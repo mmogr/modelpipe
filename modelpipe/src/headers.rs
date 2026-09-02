@@ -10,18 +10,6 @@
 //! observable, so collapsing them into a map would silently rewrite traffic
 //! this crate has no business rewriting.
 
-// Scoped to the non-test build: the tests below are currently the only
-// callers, so an unconditional expectation is itself unfulfilled when they
-// compile. When the real caller lands this goes unfulfilled in turn, which
-// is the reminder to delete it.
-#![cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the request edge applies these; until it exists only tests call them"
-    )
-)]
-
 /// Headers that describe *this* connection rather than the message, and so
 /// must not be forwarded onto a different one. RFC 9110 §7.6.1.
 ///

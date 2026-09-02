@@ -1,0 +1,179 @@
+//! Tests for [`super`] — screening what the backend URL resolves to.
+//!
+//! Split out via `#[path]` so `backend.rs` stays inside the file-size
+//! budget.
+//!
+//! The screening rule is tested against address lists directly rather than
+//! through DNS. That is not avoidance: a test that depended on what
+//! `evil.example` resolves to today would be testing the internet, and the
+//! property worth pinning is what this code does with an answer, not what
+//! answer it gets.
+
+use super::*;
+
+fn addrs(list: &[&str]) -> Vec<SocketAddr> {
+    list.iter().map(|s| s.parse().expect("addr")).collect()
+}
+
+// ── Screening ────────────────────────────────────────────────────────────
+
+#[test]
+fn loopback_is_dialable_without_any_flag() {
+    for a in ["127.0.0.1:11434", "127.0.0.2:80", "[::1]:11434"] {
+        assert_eq!(
+            screen(addrs(&[a]), false),
+            Some(a.parse().unwrap()),
+            "{a} needs no flag"
+        );
+    }
+}
+
+#[test]
+fn a_private_address_needs_the_flag() {
+    let a = addrs(&["192.168.1.5:11434"]);
+    assert_eq!(screen(a.clone(), false), None, "refused bare");
+    assert_eq!(
+        screen(a.clone(), true),
+        Some(a[0]),
+        "admitted with the flag"
+    );
+}
+
+#[test]
+fn a_public_address_is_never_dialable() {
+    for a in ["8.8.8.8:80", "[2606:4700::1111]:443"] {
+        assert_eq!(screen(addrs(&[a]), false), None, "{a}");
+        assert_eq!(screen(addrs(&[a]), true), None, "{a} even with the flag");
+    }
+}
+
+#[test]
+fn the_metadata_endpoint_is_never_dialable_however_it_is_spelled() {
+    for a in [
+        "169.254.169.254:80",
+        "[::ffff:169.254.169.254]:80",
+        "[fe80::1]:80",
+    ] {
+        assert_eq!(screen(addrs(&[a]), false), None, "{a}");
+        assert_eq!(screen(addrs(&[a]), true), None, "{a} even with the flag");
+    }
+}
+
+/// The heart of the rule. A name that resolves to several addresses is not
+/// made acceptable by the loopback entry among them — the public one is
+/// skipped, and only an address that passes on its own is ever returned.
+#[test]
+fn every_candidate_is_screened_and_not_merely_the_first() {
+    // Public first: it must be skipped rather than taken or fatal.
+    let mixed = addrs(&["8.8.8.8:11434", "127.0.0.1:11434"]);
+    assert_eq!(
+        screen(mixed, false),
+        Some("127.0.0.1:11434".parse().unwrap()),
+        "the public candidate is skipped, the loopback one taken"
+    );
+
+    // Loopback first: the public one must never be reached for.
+    let mixed = addrs(&["127.0.0.1:11434", "8.8.8.8:11434"]);
+    assert_eq!(
+        screen(mixed, false),
+        Some("127.0.0.1:11434".parse().unwrap())
+    );
+
+    // Nothing admissible at all, however many candidates there are.
+    let all_bad = addrs(&["8.8.8.8:80", "169.254.169.254:80", "0.0.0.0:80"]);
+    assert_eq!(screen(all_bad, true), None);
+}
+
+#[test]
+fn a_name_that_resolves_to_nothing_is_not_dialable() {
+    assert_eq!(screen(addrs(&[]), true), None);
+}
+
+// ── URL handling ─────────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn a_loopback_backend_is_accepted_and_names_its_own_authority() {
+    let backend = TcpBackend::new("http://127.0.0.1:11434", false)
+        .await
+        .expect("loopback must be accepted");
+    assert_eq!(
+        backend.authority(),
+        "127.0.0.1:11434",
+        "the Host header names the backend, port included"
+    );
+}
+
+/// `localhost` is the spelling most people type, and it resolves without
+/// leaving the machine.
+#[tokio::test]
+async fn a_named_loopback_backend_is_accepted() {
+    let backend = TcpBackend::new("http://localhost:11434", false)
+        .await
+        .expect("localhost must be accepted");
+    assert_eq!(backend.authority(), "localhost:11434");
+}
+
+#[tokio::test]
+async fn the_default_port_is_supplied_when_the_url_omits_it() {
+    let backend = TcpBackend::new("http://127.0.0.1", false)
+        .await
+        .expect("ok");
+    assert_eq!(backend.authority(), "127.0.0.1:80");
+}
+
+/// A misconfigured backend fails at `serve` time with a message naming the
+/// URL, rather than as a stream of failed requests later.
+#[tokio::test]
+async fn a_public_backend_is_refused_before_the_listener_starts() {
+    let err = TcpBackend::new("http://8.8.8.8:80", true)
+        .await
+        .expect_err("a public backend must be refused");
+    match &err {
+        ServeError::BackendNotLocal { url } => assert_eq!(url, "http://8.8.8.8:80"),
+        other => panic!("expected BackendNotLocal, got {other:?}"),
+    }
+    assert!(!err.is_retryable(), "and it is the operator's to fix");
+}
+
+/// Only `http`. The hop that matters is already encrypted by QUIC, and
+/// accepting `https` would mean either verifying a certificate for a
+/// loopback name or not verifying one at all.
+#[tokio::test]
+async fn a_non_http_backend_is_refused() {
+    for url in [
+        "https://127.0.0.1:11434",
+        "file:///etc/passwd",
+        "ftp://127.0.0.1",
+        "not a url",
+        "",
+    ] {
+        assert!(
+            TcpBackend::new(url, true).await.is_err(),
+            "{url:?} must be refused"
+        );
+    }
+}
+
+// ── Connecting ───────────────────────────────────────────────────────────
+
+/// The one test that opens a socket. What it checks is that the screened
+/// address is the address dialled — the connection lands on a listener
+/// bound to exactly the address `resolve` returned.
+#[tokio::test]
+async fn a_screened_address_is_the_address_actually_dialled() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind");
+    let bound = listener.local_addr().expect("addr");
+
+    let backend = TcpBackend::new(&format!("http://127.0.0.1:{}", bound.port()), false)
+        .await
+        .expect("loopback");
+
+    let accepted = tokio::spawn(async move { listener.accept().await.map(|(_, peer)| peer) });
+    let stream = backend.connect().await.expect("connect");
+    assert_eq!(stream.peer_addr().expect("peer"), bound);
+
+    let peer = accepted.await.expect("task").expect("accept");
+    assert!(peer.ip().is_loopback(), "and the caller came from loopback");
+}

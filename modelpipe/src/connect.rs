@@ -2,12 +2,13 @@
 //! what it is given, and how it fails.
 //!
 //! Orchestration. The live listener you get back lives in
-//! [`crate::handle`]; this module owns the call and its inputs.
+//! [`crate::connect_handle`]; this module owns the call and its inputs.
 
 use std::fmt;
 use std::net::SocketAddr;
 
-use crate::handle::ConnectHandle;
+use crate::connect_handle::ConnectHandle;
+use crate::dialer;
 use crate::ticket::Ticket;
 
 /// Why [`connect`] failed. Same contract as [`ServeError`](crate::ServeError): variants a
@@ -93,8 +94,9 @@ pub struct ConnectOptions {
 /// OpenAI-compatible client at [`ConnectHandle::base_url`], with the
 /// serve side's bearer token as the API key.
 pub async fn connect(ticket: &Ticket, opts: ConnectOptions) -> Result<ConnectHandle, ConnectError> {
-    let _ = (ticket, opts);
-    todo!()
+    let (state, listener) = dialer::dial(ticket, opts.bind).await?;
+    tokio::spawn(dialer::local_loop(state.clone(), listener));
+    Ok(ConnectHandle::new(state))
 }
 
 #[cfg(test)]
