@@ -1757,7 +1757,10 @@ dependencies = [
 name = "modelpipe"
 version = "0.0.1"
 dependencies = [
+ "getrandom 0.4.3",
+ "httparse",
  "iroh",
+ "subtle",
  "tokio",
 ]
 

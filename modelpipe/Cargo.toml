@@ -23,6 +23,20 @@ workspace = true
 
 [dependencies]
 iroh = { workspace = true }
+# Constant-time comparison for the bearer check. Taken rather than
+# hand-rolled: the README promises the comparison is constant time, and at
+# `opt-level = 2` with `lto = "thin"`, under `unsafe_code = "deny"` and with
+# no `black_box` discipline, a hand-written loop is an unverifiable claim
+# rather than asceticism. Already in the graph via iroh's `aes-gcm`, so this
+# costs no additional compilation.
+subtle = { version = "2", default-features = false }
+# The OS CSPRNG, for minting tokens. Also already in the graph.
+getrandom = "0.4"
+# HTTP/1.1 head parsing. Hand-rolling a framer inside an authentication
+# boundary is where CL-vs-TE request smuggling gets in; this is the one place
+# in the crate where asceticism about dependencies would be the wrong call.
+# Already in the graph via iroh's relay client.
+httparse = "1"
 # `rt` is load-bearing and was missing: both `serve` and `connect` return a
 # handle over a background accept loop, so the first real body spawns, and
 # `tokio::spawn` is gated on it. It currently compiles anyway — iroh enables
@@ -32,3 +46,8 @@ iroh = { workspace = true }
 # surface as a confusing error in a release that changed nothing here. Declared
 # because it is used, not because it is currently absent.
 tokio = { workspace = true, features = ["net", "io-util", "rt", "sync", "time"] }
+
+[dev-dependencies]
+# `macros` for #[tokio::test]; `rt-multi-thread` because a test that pumps a
+# stream while reading the other end needs a second task to make progress.
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "io-util"] }

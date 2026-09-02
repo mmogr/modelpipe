@@ -25,10 +25,14 @@ use std::time::Duration;
 
 // Pure: no I/O, no async.
 mod base32;
+mod body;
 mod crc32c;
 mod credential;
+mod exchange;
 mod headers;
+mod http_head;
 mod locality;
+mod refusal;
 mod status;
 mod ticket;
 mod ticket_addr;
