@@ -362,3 +362,154 @@ async fn shutting_down_twice_is_harmless() {
     connected.shutdown().await;
     within("nor on the connect side", connected.shutdown()).await;
 }
+
+// ── Teardown, observed rather than announced ─────────────────────────────
+
+/// `shutdown` drains rather than cuts, and the only way to see the
+/// difference is to have something in flight while it runs.
+///
+/// Every teardown assertion before this one checked that the status became
+/// `Closed` — which `lifecycle.close()` sets with no transport involved —
+/// so reducing `listener::shutdown` to `close(); mark_torn_down();` left
+/// the whole suite green. Measured before the order was corrected: the
+/// client was cut at frame 5 of 200.
+#[tokio::test]
+async fn a_serve_shutdown_lets_an_admitted_request_finish() {
+    let backend = MockBackend::streaming(&[
+        "data: one\n\n",
+        "data: two\n\n",
+        "data: three\n\n",
+        "data: [DONE]\n\n",
+    ])
+    .await;
+    let (serving, connected, url) = paired(&backend, TokenPolicy::Generate).await;
+    let auth = bearer(&serving);
+    let authority = url
+        .trim_start_matches("http://")
+        .trim_end_matches("/v1")
+        .to_owned();
+
+    // Start the request and wait until the first frame has arrived, so the
+    // exchange is provably admitted and provably unfinished.
+    let reading = tokio::spawn(async move {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let mut socket = tokio::net::TcpStream::connect(&authority)
+            .await
+            .expect("connect");
+        socket
+            .write_all(
+                format!(
+                    "GET /v1/chat/completions HTTP/1.1\r\nHost: x\r\n\
+                     Authorization: {auth}\r\n\r\n"
+                )
+                .as_bytes(),
+            )
+            .await
+            .expect("write");
+        let mut seen = Vec::new();
+        socket.read_to_end(&mut seen).await.expect("read");
+        String::from_utf8_lossy(&seen).into_owned()
+    });
+    tokio::time::sleep(Duration::from_millis(40)).await;
+
+    within("the drain must not hang", serving.shutdown()).await;
+
+    let body = within("the admitted request must complete", reading)
+        .await
+        .expect("reader");
+    assert!(
+        body.contains("data: [DONE]"),
+        "shutdown promises the drain, so an admitted request runs to \
+         completion; the client got: {body}"
+    );
+
+    connected.shutdown().await;
+}
+
+/// One accepted-but-silent TCP connection must not hold the drain open.
+///
+/// This is what every `OpenAI` SDK does on its first call — open the socket,
+/// then think — and what any health probe does deliberately. The in-flight
+/// guard used to be taken at accept, and `copy_bidirectional` never returns
+/// for a socket that says nothing, so a single one wedged `shutdown`
+/// permanently. In the CLI that is unrecoverable: tokio keeps the SIGINT
+/// handler installed, so the second Ctrl-C is swallowed too.
+#[tokio::test]
+async fn an_idle_local_connection_does_not_wedge_the_connect_side_drain() {
+    let backend = MockBackend::json(200, OK_BODY).await;
+    let (serving, connected, url) = paired(&backend, TokenPolicy::Generate).await;
+    let authority = url
+        .trim_start_matches("http://")
+        .trim_end_matches("/v1")
+        .to_owned();
+
+    let _idle = tokio::net::TcpStream::connect(&authority)
+        .await
+        .expect("an SDK preconnect");
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    within(
+        "one silent connection must not hold the drain open",
+        connected.shutdown(),
+    )
+    .await;
+
+    serving.shutdown().await;
+}
+
+/// `shutdown_timeout` returning must mean the port is free, exactly as
+/// `shutdown` does — and it must leave a later `shutdown` able to say the
+/// same. It used to set the teardown latch itself while the accept loop
+/// still owned the listener, so it returned `true` with the port bound and
+/// poisoned the latch for every call after it.
+#[tokio::test]
+async fn a_connect_shutdown_timeout_releases_the_port_and_leaves_the_latch_honest() {
+    let backend = MockBackend::json(200, OK_BODY).await;
+    let (serving, connected, _url) = paired(&backend, TokenPolicy::Generate).await;
+    let port = connected.local_addr();
+
+    let drained = within(
+        "nothing is in flight, so the drain must succeed",
+        connected.shutdown_timeout(Duration::from_secs(5)),
+    )
+    .await;
+    assert!(drained, "there was nothing to wait for");
+    tokio::net::TcpListener::bind(port)
+        .await
+        .expect("the port must be free the moment shutdown_timeout returns");
+
+    // And the promise survives: a later `shutdown` must not resolve against
+    // a latch someone else already set.
+    within("a second call must not hang", connected.shutdown()).await;
+    serving.shutdown().await;
+}
+
+/// A live pairing reports the path it is actually using, on both sides.
+///
+/// The connect side published no status at all: `Direct` and `Relayed` were
+/// unreachable there, so `status()` said `Idle` on a working pipe and
+/// `status_changed()` never fired. Deleting the serve side's peer
+/// registration — the crate's only other producer — also left the suite
+/// green, because every other status assertion checks only `Closed`.
+#[tokio::test]
+async fn a_live_pairing_reports_a_transport_path_on_both_sides() {
+    let backend = MockBackend::json(200, OK_BODY).await;
+    let (serving, connected, url) = paired(&backend, TokenPolicy::Generate).await;
+
+    within(
+        "a request must cross the pipe",
+        request(&url, "/v1/models", Some(&bearer(&serving))),
+    )
+    .await
+    .expect("request");
+
+    for (side, status) in [("serve", serving.status()), ("connect", connected.status())] {
+        assert!(
+            matches!(status, PipeStatus::Direct | PipeStatus::Relayed),
+            "the {side} side is carrying traffic and reports {status:?}"
+        );
+    }
+
+    connected.shutdown().await;
+    serving.shutdown().await;
+}

@@ -176,13 +176,7 @@ impl ServeHandle {
     /// unbounded call would have to reach for the drop path and lose the
     /// drain entirely.
     pub async fn shutdown_timeout(&self, grace: Duration) -> bool {
-        self.state.lifecycle.close();
-        self.state.endpoint.close().await;
-        let drained = tokio::time::timeout(grace, self.state.lifecycle.wait_until_drained())
-            .await
-            .is_ok();
-        self.state.lifecycle.mark_torn_down();
-        drained
+        listener::shutdown_timeout(&self.state, grace).await
     }
 }
 
