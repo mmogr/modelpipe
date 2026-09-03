@@ -46,7 +46,13 @@ pub(crate) fn framing(
     let mut lengths = fields
         .iter()
         .filter(|(name, _)| name.eq_ignore_ascii_case("content-length"))
-        .map(|(_, value)| value.trim());
+        // OWS is SP and HTAB, per RFC 9110 §5.6.3 — not `str::trim`, which
+        // also removes Unicode whitespace. A value of NBSP followed by `5`
+        // trimmed to `5` here and was forwarded with the NBSP intact, so
+        // this edge framed a five-byte body from a value the next hop reads
+        // differently or refuses outright. The digits check below is only
+        // worth having if it sees what actually goes on the wire.
+        .map(|(_, value)| value.trim_matches([' ', '\t']));
     let mut codings = fields
         .iter()
         .filter(|(name, _)| name.eq_ignore_ascii_case("transfer-encoding"))
@@ -86,6 +92,16 @@ pub(crate) fn framing(
         if other != first {
             return Err(HeadError::ConflictingFraming);
         }
+    }
+    // Digits and nothing else, checked before parsing. RFC 9112 §6.2 makes
+    // a `Content-Length` `1*DIGIT`, and `u64::from_str` is more generous
+    // than that: it accepts a leading `+`, so `Content-Length: +5` framed a
+    // five-byte body here and was forwarded verbatim to a backend whose
+    // parser may well read it as no length at all. That is exactly the
+    // "two implementations could read this differently" shape this function
+    // exists to refuse, and refusing it costs one line.
+    if first.is_empty() || !first.bytes().all(|b| b.is_ascii_digit()) {
+        return Err(HeadError::ConflictingFraming);
     }
     let length = first
         .parse::<u64>()

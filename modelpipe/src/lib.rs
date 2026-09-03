@@ -67,6 +67,7 @@ mod status;
 mod ticket;
 mod ticket_addr;
 mod ticket_string;
+mod token_policy;
 mod transport;
 
 // Orchestration: the two entry points, and the live pipes they return.
@@ -81,12 +82,12 @@ mod serve_handle;
 // this block is the one edit in the crate that cannot be walked back.
 pub use connect::{ConnectError, ConnectOptions, connect};
 pub use connect_handle::ConnectHandle;
-pub use credential::TokenPolicy;
 pub use serve::{ServeOptions, serve};
 pub use serve_error::ServeError;
 pub use serve_handle::ServeHandle;
 pub use status::PipeStatus;
 pub use ticket::{Ticket, TicketParseError};
+pub use token_policy::TokenPolicy;
 
 // Auto-trait promises, pinned. The handles and the ticket live inside
 // consumers' `select!` arms, spawned tasks and daemon state, and the error

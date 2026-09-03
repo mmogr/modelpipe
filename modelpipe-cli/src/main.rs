@@ -42,7 +42,8 @@ struct Cli {
 enum Command {
     /// Expose a local OpenAI-compatible server; prints a pairing ticket + token
     Serve {
-        /// Backend base URL, e.g. http://127.0.0.1:11434. Must resolve to
+        /// Backend base URL, e.g. http://127.0.0.1:11434. Host and port
+        /// only — the request path comes from the client. Must resolve to
         /// loopback (or a private address, with --allow-private-backend)
         // Bare URL on purpose: clap prints this doc comment verbatim as
         // `--help` text, where rustdoc's `<…>` link syntax would show up as

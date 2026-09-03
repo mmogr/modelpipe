@@ -115,6 +115,8 @@ async fn a_trailer_cannot_restate_a_header_the_head_strip_removes() {
                   X-Forwarded-For: 203.0.113.9\r\n\
                   Connection: keep-alive\r\n\
                   Transfer-Encoding: chunked\r\n\
+                  Content-Length: 99\r\n\
+                  Host: elsewhere.example\r\n\
                   X-Checksum: 1\r\n\r\n";
     let (_, out) = run(b"", input, Framing::Chunked).await.unwrap();
     let text = String::from_utf8(out).expect("ascii");
@@ -122,7 +124,19 @@ async fn a_trailer_cannot_restate_a_header_the_head_strip_removes() {
         !text.contains("203.0.113.9"),
         "a forwarding chain reached the far side through the trailers: {text}"
     );
-    for stripped in ["Connection:", "Transfer-Encoding:"] {
+    // `Content-Length` and `Host` are the two this test did not cover and
+    // the filter did not catch: neither is hop-by-hop and neither is a
+    // forwarding header, so `is_stripped` passed them straight through
+    // while the comment above the filter named `Content-Length` as an
+    // example of what it stopped. A second length arriving after the body,
+    // on a message already framed as chunked, is the framing confusion the
+    // whole strip exists to avoid creating.
+    for stripped in [
+        "Connection:",
+        "Transfer-Encoding:",
+        "Content-Length:",
+        "Host:",
+    ] {
         assert!(!text.contains(stripped), "{stripped} survived: {text}");
     }
     // The point is a filter, not a deletion: an ordinary trailer is still
@@ -250,4 +264,74 @@ async fn a_frame_reaches_the_destination_before_the_source_has_finished() {
     drop(src_tx);
     let forwarded = pump.await.unwrap().unwrap();
     assert_eq!(forwarded, 27);
+}
+
+/// A trailer line may not carry an embedded line terminator.
+///
+/// `read_line` ends a line at CRLF, and `dropped` inspects only the field
+/// name before the first colon. So a *bare LF* inside a trailer is not a
+/// line ending here and is not looked past: everything after it rides
+/// through on the strength of the name in front of it. A recipient that
+/// treats a bare LF as a terminator — many do — then reads a second field
+/// this edge never filtered, which is the whole shape of request smuggling
+/// and precisely what the trailer filter exists to prevent.
+#[tokio::test]
+async fn a_trailer_cannot_smuggle_a_second_field_behind_a_bare_lf() {
+    let input = b"0\r\nX-Ok: 1\nContent-Length: 99\r\n\r\n";
+    let (_, out) = run(b"", input, Framing::Chunked).await.unwrap();
+    let text = String::from_utf8(out).expect("ascii");
+    assert!(
+        !text.contains("Content-Length"),
+        "a second field rode through behind a bare LF: {text:?}"
+    );
+}
+
+/// The negative control for the bare-LF refusal: an ordinary trailer, on a
+/// line with no embedded terminator, is still the peer's to send.
+///
+/// Without this the fix could be "drop every trailer", which would satisfy
+/// the test above and silently discard the checksums this edge is supposed
+/// to forward.
+#[tokio::test]
+async fn an_ordinary_trailer_still_survives_the_terminator_check() {
+    let input = b"3\r\nabc\r\n0\r\nX-Checksum: 1\r\nX-Other: 2\r\n\r\n";
+    let (_, out) = run(b"", input, Framing::Chunked).await.unwrap();
+    let text = String::from_utf8(out).expect("ascii");
+    assert!(text.contains("X-Checksum: 1"), "{text:?}");
+    assert!(text.contains("X-Other: 2"), "{text:?}");
+}
+
+/// A chunk size is `1*HEXDIG` (RFC 9112 §7.1), and `from_str_radix` is more
+/// generous than that.
+///
+/// The same laxness `framing` refuses in a `Content-Length`, on the other
+/// half of the same job: `+a` framed a ten-byte chunk while the size line
+/// went to the next hop verbatim, for it to read its own way.
+#[tokio::test]
+async fn a_chunk_size_that_is_not_plain_hexadecimal_is_refused() {
+    for bad in ["+a\r\nabcdefghij\r\n0\r\n\r\n", "-1\r\n\r\n0\r\n\r\n"] {
+        let err = run(b"", bad.as_bytes(), Framing::Chunked)
+            .await
+            .expect_err("must be refused");
+        assert!(
+            err.to_string().contains("hexadecimal"),
+            "{bad:?} gave {err}"
+        );
+    }
+}
+
+/// The negative control: ordinary hex sizes, in either case, still frame.
+#[tokio::test]
+async fn an_ordinary_chunk_size_is_still_hexadecimal() {
+    for (input, body) in [
+        ("3\r\nabc\r\n0\r\n\r\n", "abc"),
+        ("A\r\n0123456789\r\n0\r\n\r\n", "0123456789"),
+        ("a\r\n0123456789\r\n0\r\n\r\n", "0123456789"),
+    ] {
+        let (n, out) = run(b"", input.as_bytes(), Framing::Chunked)
+            .await
+            .unwrap_or_else(|e| panic!("{input:?} must frame: {e}"));
+        assert_eq!(n, body.len() as u64, "{input:?}");
+        assert!(String::from_utf8(out).unwrap().contains(body), "{input:?}");
+    }
 }

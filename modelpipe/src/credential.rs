@@ -18,6 +18,7 @@ use subtle::ConstantTimeEq;
 
 use crate::ServeError;
 use crate::base32;
+use crate::token_policy::TokenPolicy;
 
 /// Bytes of entropy in a generated token: 256 bits, which is not a number
 /// anyone needs to reason about again.
@@ -25,90 +26,6 @@ const MINTED_ENTROPY_BYTES: usize = 32;
 
 /// The scheme, with its trailing space, as it appears in the header.
 const BEARER_PREFIX: &str = "Bearer ";
-
-/// How the serve side authenticates requests.
-///
-/// One field, only valid states — the contradictory combinations a
-/// bool-plus-option pair would allow simply don't exist. Embedders with
-/// an existing bearer credential (an API key their clients already
-/// present) use [`Supplied`](Self::Supplied): the same key is then
-/// enforced at the tunnel edge, before a byte reaches the backend, and
-/// the embedder keeps exactly one credential.
-#[derive(Default)]
-#[non_exhaustive]
-pub enum TokenPolicy {
-    /// Generate a fresh random token at listen time; read it back with
-    /// [`ServeHandle::token`](crate::ServeHandle::token). The recommended default for standalone
-    /// use.
-    #[default]
-    Generate,
-    /// Enforce this caller-supplied token instead of generating one.
-    /// Rotating a supplied credential belongs to the caller — push the
-    /// replacement into a running listener with
-    /// [`ServeHandle::set_token`](crate::ServeHandle::set_token).
-    Supplied(String),
-    /// Serve without a bearer token. The ticket becomes the only lock,
-    /// which is exactly the failure mode this crate exists to close —
-    /// hence the name. Loudly discouraged.
-    InsecureNoAuth,
-}
-
-impl fmt::Debug for TokenPolicy {
-    // Hand-written for the same reason `Debug for Ticket` is, one screen
-    // up: a derive over `Supplied(String)` copies the credential into
-    // every downstream panic message and `tracing` line. This type is
-    // also the reason the derive cannot simply be omitted — without a
-    // `Debug` at all, an embedder holding a `ServeOptions` in their own
-    // struct cannot `#[derive(Debug)]` on it, and the obvious fix they
-    // reach for is the one that leaks.
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Generate => f.write_str("Generate"),
-            Self::Supplied(_) => f.write_str("Supplied(<redacted>)"),
-            Self::InsecureNoAuth => f.write_str("InsecureNoAuth"),
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// Distinctive enough that finding it anywhere in a rendering is
-    /// unambiguous, and not a substring of any word the formatter emits.
-    const SECRET: &str = "sk-zzq-a-very-distinctive-credential-value";
-
-    /// A derived `Debug` would inline the credential, putting it into
-    /// every downstream panic message and `tracing` line — the same
-    /// failure the hand-written `Debug for Ticket` exists to prevent, on
-    /// the other type in this crate that holds a secret.
-    #[test]
-    fn debug_for_token_policy_never_renders_the_supplied_token() {
-        let rendered = format!("{:?}", TokenPolicy::Supplied(SECRET.to_owned()));
-        assert!(
-            !rendered.contains(SECRET),
-            "the token leaked into Debug output: {rendered}"
-        );
-        // Asserting the positive too, so the test cannot pass because the
-        // impl rendered nothing at all.
-        assert!(
-            rendered.contains("Supplied") && rendered.contains("redacted"),
-            "Debug should still say which variant it is: {rendered}"
-        );
-    }
-
-    /// The variants carrying no secret must still be legible — a redacting
-    /// `Debug` that redacted everything would be useless and would quietly
-    /// pass the test above.
-    #[test]
-    fn debug_for_token_policy_names_the_variants_that_hold_nothing() {
-        assert_eq!(format!("{:?}", TokenPolicy::Generate), "Generate");
-        assert_eq!(
-            format!("{:?}", TokenPolicy::InsecureNoAuth),
-            "InsecureNoAuth"
-        );
-    }
-}
 
 /// The credential a listener currently enforces, and the comparison
 /// against it.
@@ -119,16 +36,15 @@ pub(crate) struct Credential {
     enforced: RwLock<Option<Arc<Enforced>>>,
 }
 
-/// A credential in both the forms the edge needs.
+/// The token a listener enforces.
+///
+/// One field, since the scheme stopped being part of what is compared: the
+/// `Authorization` value is split at its single space and only the
+/// credential after it is matched, so the pre-built `"Bearer <token>"`
+/// string this used to carry beside the token had no reader left.
 struct Enforced {
     /// What [`ServeHandle::token`](crate::ServeHandle::token) reports.
     token: String,
-    /// The full `Bearer <token>` header value, pre-formatted so the
-    /// per-request check is a comparison and not an allocation. On a
-    /// streaming endpoint this runs once per request forever; building the
-    /// string each time would be a needless allocation on the hot path and,
-    /// worse, a needless copy of the secret.
-    header: String,
 }
 
 impl Credential {
@@ -162,11 +78,25 @@ impl Credential {
     /// carrying an empty value only in that neither is ever accepted while
     /// a credential is enforced.
     ///
-    /// The comparison is constant-time in the bytes, via `subtle`. Length is
-    /// not: an unequal-length value is rejected without comparing, which is
-    /// standard and deliberate — the length of the expected header is a
-    /// fixed parameter of the system, not a secret, and pretending otherwise
-    /// would mean comparing against a padded buffer for no gain.
+    /// The comparison is constant-time in the **token**, via `subtle`. Two
+    /// things deliberately are not, and both are public parameters of the
+    /// system rather than secrets: the length, so an unequal-length value is
+    /// rejected without comparing (the alternative is a padded buffer for no
+    /// gain), and the scheme, which is a fixed seven-byte string every
+    /// client sends in the clear.
+    ///
+    /// The scheme is matched case-insensitively because RFC 9110 §11.1 says
+    /// it is: `auth-scheme` is a token, and token comparison is
+    /// case-insensitive. This edge required `Bearer` exactly, so a client
+    /// sending the equally-valid `bearer` was told its key was invalid —
+    /// the least actionable 401 available, since the key really was correct
+    /// and nothing in the message pointed at the capitalisation.
+    ///
+    /// Split at the first space rather than trimmed, so the single
+    /// `SP` RFC 9110 §11.1 puts between scheme and credential stays exactly
+    /// one: the whitespace refusals this type has always made are still
+    /// made, and a token that begins with a space is still a different
+    /// token.
     pub(crate) fn admits(&self, offered: Option<&[u8]>) -> bool {
         // The Arc is cloned and the lock released before comparing, so a
         // rotation is never blocked behind an in-flight request.
@@ -177,8 +107,18 @@ impl Credential {
         let Some(offered) = offered else {
             return false;
         };
-        let expected = enforced.header.as_bytes();
-        expected.len() == offered.len() && bool::from(expected.ct_eq(offered))
+        // `BEARER_PREFIX` carries the space, so this splits scheme from
+        // credential in one step and a value shorter than the scheme cannot
+        // index past its end.
+        let scheme = BEARER_PREFIX.len();
+        if offered.len() <= scheme
+            || !offered[..scheme].eq_ignore_ascii_case(BEARER_PREFIX.as_bytes())
+        {
+            return false;
+        }
+        let expected = enforced.token.as_bytes();
+        let presented = &offered[scheme..];
+        expected.len() == presented.len() && bool::from(expected.ct_eq(presented))
     }
 
     /// What the listener currently enforces, or `None` when serving open.
@@ -248,10 +188,7 @@ impl fmt::Debug for Credential {
 
 impl Enforced {
     fn new(token: String) -> Arc<Self> {
-        Arc::new(Self {
-            header: format!("{BEARER_PREFIX}{token}"),
-            token,
-        })
+        Arc::new(Self { token })
     }
 }
 
