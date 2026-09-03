@@ -22,7 +22,7 @@ use std::net::SocketAddr;
 use std::str::FromStr;
 
 use iroh::endpoint::presets;
-use iroh::{Endpoint, EndpointAddr, EndpointId, RelayMode, RelayUrl, TransportAddr};
+use iroh::{Endpoint, EndpointAddr, EndpointId, RelayMode, RelayUrl, SecretKey, TransportAddr};
 
 use crate::ticket::{BackendHint, Ticket};
 use crate::ticket_addr::TicketAddr;
@@ -97,8 +97,21 @@ impl From<BindFailure> for ConnectError {
 /// `relay` is the operator's own relay, or `None` for the defaults. It is
 /// passed as the string it arrived as — see [`validate_relay`] for why the
 /// value is never handed through a parsed URL type.
-pub(crate) async fn bind(relay: Option<&str>) -> Result<Endpoint, BindFailure> {
+///
+/// `key` is the endpoint's secret key, or `None` to let iroh generate one
+/// for this process. Supplying it is what makes a ticket survive a restart,
+/// because the public half of this key *is* the address a ticket carries.
+/// It arrives as bare bytes rather than as an iroh type so that
+/// [`crate::identity`] — which decides where those bytes come from and who
+/// may read them — needs to know nothing about the transport.
+pub(crate) async fn bind(
+    relay: Option<&str>,
+    key: Option<[u8; crate::identity::KEY_BYTES]>,
+) -> Result<Endpoint, BindFailure> {
     let mut builder = Endpoint::builder(presets::N0).alpns(vec![ALPN.to_vec()]);
+    if let Some(bytes) = key {
+        builder = builder.secret_key(SecretKey::from_bytes(&bytes));
+    }
     if let Some(url) = relay {
         let parsed =
             RelayUrl::from_str(url).map_err(|_| BindFailure::InvalidRelay(url.to_owned()))?;

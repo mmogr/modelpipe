@@ -192,7 +192,7 @@ fn validation_yields_a_verdict_and_never_a_normalized_url() {
 /// registered, not anything about connectivity.
 #[tokio::test]
 async fn an_endpoint_binds_and_reports_its_own_identity() {
-    let endpoint = bind(None).await.expect("binding must succeed");
+    let endpoint = bind(None, None).await.expect("binding must succeed");
     let addr = endpoint.addr();
 
     let ticket = ticket_from(&addr);
@@ -209,7 +209,7 @@ async fn an_endpoint_binds_and_reports_its_own_identity() {
 /// surfacing later as an unexplained transport failure.
 #[tokio::test]
 async fn binding_with_an_unparseable_relay_fails_before_the_endpoint_exists() {
-    let Err(failure) = bind(Some("not a url")).await else {
+    let Err(failure) = bind(Some("not a url"), None).await else {
         panic!("an unparseable relay must be refused");
     };
     let err = ServeError::from(failure);
@@ -218,4 +218,54 @@ async fn binding_with_an_unparseable_relay_fails_before_the_endpoint_exists() {
         other => panic!("expected InvalidRelay, got {other:?}"),
     }
     assert!(!err.is_retryable(), "and it is the operator's to fix");
+}
+
+/// The bridge the whole of `--identity` rests on: the same key bytes bind
+/// to the same endpoint id, so the same ticket keeps naming this listener
+/// across restarts.
+///
+/// `identity.rs` proves the bytes survive a restart and this proves what
+/// they are worth — neither half means anything alone. Two endpoints are
+/// bound rather than one, because "the same key gives the same id" is only
+/// interesting next to a different key giving a different one.
+#[tokio::test]
+async fn the_same_key_binds_to_the_same_endpoint_and_a_different_one_does_not() {
+    let key = [7u8; crate::identity::KEY_BYTES];
+    let other = [9u8; crate::identity::KEY_BYTES];
+
+    let first = bind(None, Some(key)).await.expect("binds");
+    let again = bind(None, Some(key)).await.expect("binds");
+    let elsewhere = bind(None, Some(other)).await.expect("binds");
+
+    assert_eq!(
+        ticket_from(&first.addr()).endpoint_id(),
+        ticket_from(&again.addr()).endpoint_id(),
+        "a stored key is what makes a ticket outlive the process"
+    );
+    assert_ne!(
+        ticket_from(&first.addr()).endpoint_id(),
+        ticket_from(&elsewhere.addr()).endpoint_id(),
+        "and a different key is a different listener"
+    );
+
+    first.close().await;
+    again.close().await;
+    elsewhere.close().await;
+}
+
+/// The control for the default: no key means a fresh identity every time,
+/// which is the disposable ticket every version before this one had.
+#[tokio::test]
+async fn binding_without_a_key_mints_a_new_identity_each_time() {
+    let first = bind(None, None).await.expect("binds");
+    let second = bind(None, None).await.expect("binds");
+
+    assert_ne!(
+        ticket_from(&first.addr()).endpoint_id(),
+        ticket_from(&second.addr()).endpoint_id(),
+        "the default must stay ephemeral"
+    );
+
+    first.close().await;
+    second.close().await;
 }
