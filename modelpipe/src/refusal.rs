@@ -7,10 +7,14 @@
 //!
 //! For [`unauthorized`] and [`bad_request`] the stronger statement holds:
 //! at the point they are written the backend has not been contacted at all.
-//! [`bad_gateway`] is the deliberate exception, and has to be — it reports
-//! what happened *at* the backend, so it cannot be produced before reaching
-//! one. It is still synthesized here rather than relayed, which is what
-//! keeps it distinguishable from a 502 the backend itself sent.
+//! [`bad_gateway`] and [`incomplete_request`] are the two deliberate
+//! exceptions, and both have to be. The first reports what happened *at*
+//! the backend, so it cannot be produced before reaching one. The second
+//! reports a request body that stopped short, and a body can only stop
+//! short after its head has already gone upstream — which is precisely why
+//! it is not [`bad_request`], whose promise it would break. Both are still
+//! synthesized here rather than relayed, which is what keeps them
+//! distinguishable from a status the backend itself sent.
 //!
 //! Every one closes the connection. A stream carries exactly one exchange
 //! and a refused exchange is over.
@@ -62,6 +66,31 @@ pub(crate) fn bad_gateway() -> Vec<u8> {
     out
 }
 
+/// The 400 for a request body that never arrived whole.
+///
+/// A client error, and deliberately not [`bad_request`]: that one promises
+/// the backend was never contacted, and this one can only be written after
+/// the head has gone upstream. The distinction is not pedantry — it is the
+/// difference between "your request was malformed" and "your request was
+/// fine and your upload stopped", and only the second tells the operator to
+/// look at the network rather than at their JSON.
+///
+/// 400 rather than 408: no timeout expired. Rather than 499, which is not a
+/// status. The client is often gone by now — a truncated upload usually
+/// means it hung up — but a body this edge could not go on *reading*, an
+/// unreadable chunk-size line, leaves it there and owed an answer.
+pub(crate) fn incomplete_request() -> Vec<u8> {
+    let body =
+        br#"{"error":{"message":"the request body did not arrive complete","code":"incomplete_request"}}"#;
+    let mut out = Vec::new();
+    out.extend_from_slice(b"HTTP/1.1 400 Bad Request\r\n");
+    out.extend_from_slice(b"Content-Type: application/json\r\n");
+    out.extend_from_slice(format!("Content-Length: {}\r\n", body.len()).as_bytes());
+    out.extend_from_slice(b"Connection: close\r\n\r\n");
+    out.extend_from_slice(body);
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -77,6 +106,7 @@ mod tests {
             ("unauthorized", unauthorized(), 401),
             ("bad request", bad_request(), 400),
             ("bad gateway", bad_gateway(), 502),
+            ("incomplete request", incomplete_request(), 400),
         ] {
             let (head, consumed) = parse_response(&bytes)
                 .unwrap_or_else(|e| panic!("{name} must parse: {e:?}"))
@@ -109,5 +139,15 @@ mod tests {
     fn a_backend_failure_is_not_reported_as_a_client_error() {
         let (head, _) = parse_response(&bad_gateway()).unwrap().unwrap();
         assert!((500..600).contains(&head.status), "5xx, not 4xx");
+    }
+
+    /// The mirror of the test above, and the reason both exist: an upload
+    /// that stopped is the client's, so reporting it as a gateway failure
+    /// would send the same person to the same wrong side of the tunnel —
+    /// hunting a backend that was working the whole time.
+    #[test]
+    fn a_client_failure_is_not_reported_as_a_backend_error() {
+        let (head, _) = parse_response(&incomplete_request()).unwrap().unwrap();
+        assert!((400..500).contains(&head.status), "4xx, not 5xx");
     }
 }
