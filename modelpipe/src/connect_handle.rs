@@ -3,7 +3,7 @@
 //! The twin of [`crate::serve_handle`]; see that module for why they are
 //! separate files.
 
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -55,7 +55,7 @@ impl ConnectHandle {
     /// renders as loopback, and an IPv6 zone id is dropped rather than
     /// emitted in a form no URL parser accepts.
     pub fn base_url(&self) -> String {
-        dialer::base_url(self.state.local_addr)
+        base_url(self.state.local_addr)
     }
 
     /// Current transport status, for `status` output.
@@ -112,9 +112,33 @@ impl Drop for ConnectHandle {
         // documented `Drop` cut immediately. `Connection::close` is
         // synchronous, so unlike the serve side this needs no runtime.
         self.state.lifecycle.close();
-        self.state.connection.close(0u32.into(), b"dropped");
+        self.state.peer.close(b"dropped");
         // Marking teardown complete is still not ours: the accept loop
         // holds the listener, and it is the loop that says when the port is
         // free.
     }
 }
+
+/// The URL to point a client at.
+///
+/// Not the bind address verbatim. A wildcard bind is a listen address, not
+/// a destination — nobody can connect to `0.0.0.0` — so it renders as
+/// loopback, which is a place the client can actually reach. An IPv6 zone
+/// id is dropped rather than emitted, because no URL parser accepts one.
+pub(crate) fn base_url(addr: SocketAddr) -> String {
+    let host = match addr.ip() {
+        ip if ip.is_unspecified() => match ip {
+            IpAddr::V4(_) => "127.0.0.1".to_owned(),
+            IpAddr::V6(_) => "[::1]".to_owned(),
+        },
+        IpAddr::V4(v4) => v4.to_string(),
+        // Formatting the address rather than the socket address is what
+        // drops the zone: `SocketAddrV6`'s own `Display` would include it.
+        IpAddr::V6(v6) => format!("[{v6}]"),
+    };
+    format!("http://{host}:{}/v1", addr.port())
+}
+
+#[cfg(test)]
+#[path = "connect_handle_tests.rs"]
+mod connect_handle_tests;

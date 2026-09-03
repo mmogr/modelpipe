@@ -48,6 +48,22 @@ async fn paired(
     (serving, connected, url)
 }
 
+/// Wait until the connect side reports `wanted`.
+///
+/// Polled rather than driven by `status_changed`, and the difference is the
+/// subject of the test below. That method snapshots at the moment it is
+/// *polled* and then waits for a change, which is exactly right for a
+/// watcher already parked on the handle and exactly wrong for a caller that
+/// arrives after the transition: measured here, the connection's death was
+/// noticed and published before `ServeHandle::shutdown` had even returned,
+/// so a `status_changed` called afterwards waited for a second change that
+/// was never coming.
+async fn settles_on(handle: &modelpipe::ConnectHandle, wanted: PipeStatus) {
+    while handle.status() != wanted {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+}
+
 fn bearer(handle: &modelpipe::ServeHandle) -> String {
     format!("Bearer {}", handle.token().expect("a token is enforced"))
 }
@@ -605,4 +621,57 @@ async fn a_response_tells_the_client_not_to_reuse_the_connection() {
 
     connected.shutdown().await;
     serving.shutdown().await;
+}
+
+/// A connect side whose peer has gone says so, and goes on looking.
+///
+/// Before this it did neither. `dial` opened one connection and held it for
+/// life, so a serve side that went away left the client machine answering
+/// 502 to every request while `status()` still read `direct` — the one
+/// place a user could have found out, saying the opposite of the truth.
+/// Measured: the serve process killed, the connect process left running,
+/// still `direct` and still 502ing with no reconnection ever attempted.
+///
+/// `Idle` is what `ConnectHandle`'s own documentation has always promised
+/// for this and no code could reach. Note what is *not* asserted: that the
+/// pipe comes back. It cannot here — the endpoint key is minted per
+/// process, so a restarted listener is a different peer that this ticket
+/// has no relation to. Surviving a restart is a re-pairing, and needs an
+/// identity that outlives the process.
+#[tokio::test]
+async fn a_connect_side_whose_peer_goes_away_reports_idle_rather_than_pretending() {
+    let backend = MockBackend::json(200, OK_BODY).await;
+    let (serving, connected, url) = paired(&backend, TokenPolicy::Generate).await;
+
+    // A working pipe first, so the status this starts from is a real one.
+    assert!(
+        matches!(connected.status(), PipeStatus::Direct | PipeStatus::Relayed),
+        "a live pairing reports the path it is using: {:?}",
+        connected.status()
+    );
+
+    serving.shutdown().await;
+
+    within(
+        "the connect side must notice its peer has gone",
+        settles_on(&connected, PipeStatus::Idle),
+    )
+    .await;
+    assert_ne!(
+        connected.status(),
+        PipeStatus::Closed,
+        "and this side is still up and still looking, not gone"
+    );
+
+    // The client is told, rather than left holding a socket that never
+    // answers.
+    let refused = within(
+        "a request with no peer must still be answered",
+        request(&url, "/v1/models", Some("Bearer whatever")),
+    )
+    .await
+    .expect("request");
+    assert!(refused.starts_with("HTTP/1.1 502"), "got: {refused}");
+
+    connected.shutdown().await;
 }

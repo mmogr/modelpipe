@@ -9,6 +9,7 @@ use std::net::SocketAddr;
 
 use crate::connect_handle::ConnectHandle;
 use crate::dialer;
+use crate::peer;
 use crate::ticket::Ticket;
 
 /// Why [`connect`] failed. Same contract as [`ServeError`](crate::ServeError): variants a
@@ -107,6 +108,12 @@ pub struct ConnectOptions {
 pub async fn connect(ticket: &Ticket, opts: ConnectOptions) -> Result<ConnectHandle, ConnectError> {
     let (state, listener) = dialer::dial(ticket, opts.bind).await?;
     tokio::spawn(dialer::local_loop(state.clone(), listener));
+    // The reconnect loop takes the two halves it needs by reference, so
+    // the `Arc` that keeps them alive is held here rather than threaded
+    // through `peer`, which has no business knowing how the connect side
+    // stores its state.
+    let watching = state.clone();
+    tokio::spawn(async move { peer::keep_connected(&watching.peer, &watching.lifecycle).await });
     Ok(ConnectHandle::new(state))
 }
 

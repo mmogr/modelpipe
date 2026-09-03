@@ -20,6 +20,7 @@ use crate::backend::TcpBackend;
 use crate::credential::Credential;
 use crate::exchange;
 use crate::lifecycle::{Lifecycle, PeerPath, aggregate};
+use crate::peer;
 
 /// How many exchanges one peer may have in flight at once.
 ///
@@ -131,26 +132,13 @@ async fn serve_connection(
     state: std::sync::Arc<ServeState>,
     connection: iroh::endpoint::Connection,
 ) {
-    // The path in use right now. Paths migrate — a connection that starts
-    // relayed may hole-punch a moment later — and following that is
-    // `paths_stream`'s job, which is a refinement rather than a correction:
+    // The path in use right now, by the rule both sides share — see
+    // `peer::path_of`, which this side and the connect side had written out
+    // identically until it moved there. Paths migrate, a connection that
+    // starts relayed may hole-punch a moment later, and following that is
+    // `paths_stream`'s job: a refinement rather than a correction, since
     // this snapshot is honest about the moment it was taken.
-    //
-    // No selected path means nothing is established yet, and the
-    // conservative reading is the one the aggregate rule already takes:
-    // report the worse of the two.
-    let path = connection
-        .paths()
-        .iter()
-        .find(iroh::endpoint::Path::is_selected)
-        .map_or(PeerPath::Relayed, |p| {
-            if p.remote_addr().is_relay() {
-                PeerPath::Relayed
-            } else {
-                PeerPath::Direct
-            }
-        });
-    let peer = state.add_peer(path);
+    let peer = state.add_peer(peer::path_of(&connection));
     let slots = std::sync::Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_STREAMS_PER_PEER));
 
     loop {
