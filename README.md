@@ -131,11 +131,11 @@ serialized from iroh's types is
 
 ## Relationship to gglib
 
-modelpipe was extracted from [gglib](https://github.com/mmogr/gglib)'s
-`gglib remote` feature and is used by it. gglib is AGPL-3.0; both projects
-have the same author and copyright holder, and this extraction is
-relicensed MIT by that holder so that clients and other servers can embed
-it. gglib's licensing does not apply here.
+modelpipe was extracted from [gglib](https://github.com/mmogr/gglib) to
+become the transport behind its `gglib remote` feature. gglib is AGPL-3.0;
+both projects have the same author and copyright holder, and this
+extraction is relicensed MIT by that holder so that clients and other
+servers can embed it. gglib's licensing does not apply here.
 
 ## Seeing what it is doing
 
