@@ -65,6 +65,23 @@ pub(crate) fn targets(verbosity: u8) -> Targets {
     }
 }
 
+/// Whether a line names the target it came from.
+///
+/// Pure and separate for the same reason [`targets`] is: it is a decision
+/// with an argument behind it, and the argument is checkable without a
+/// process or a global subscriber.
+///
+/// The column is worth its width only when more than one target can appear.
+/// That is the second `-v` — and *any* `RUST_LOG`, which is the case that
+/// makes this a function rather than a comparison. `RUST_LOG` replaces the
+/// ladder wholesale, and `Targets` accepts a bare level, so the ordinary
+/// `RUST_LOG=debug` admits the entire dependency graph. Keying the column
+/// off the `-v` count alone hid it in precisely the configuration with the
+/// most targets to tell apart.
+pub(crate) const fn shows_target(verbosity: u8, env_in_force: bool) -> bool {
+    verbosity >= 2 || env_in_force
+}
+
 /// Install the subscriber for this run.
 ///
 /// **stderr, not stdout**, and that is load-bearing rather than
@@ -89,17 +106,20 @@ pub(crate) fn install(verbosity: u8) {
             .inspect_err(|e| eprintln!("warning: ignoring RUST_LOG, which does not parse: {e}"))
             .ok()
     });
+    // Whether the ladder is in force at all decides the target column
+    // below, so the two cannot drift apart.
+    let env_in_force = from_env.is_some();
     let filter = from_env.unwrap_or_else(|| targets(verbosity));
 
     // No ANSI: these lines may be going to a file or a pipe as readily as
     // to a terminal, and escape codes in a log file are what makes `grep`
-    // miss. The target is shown only once something other than this
-    // workspace can appear, where telling `modelpipe` from `iroh` at a
-    // glance is the whole point of having asked for it.
+    // miss.
+    //
+    // See `shows_target` for when the target column earns its width.
     let layer = tracing_subscriber::fmt::layer()
         .with_writer(std::io::stderr)
         .with_ansi(false)
-        .with_target(verbosity >= 2);
+        .with_target(shows_target(verbosity, env_in_force));
 
     tracing_subscriber::registry()
         .with(layer)

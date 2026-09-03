@@ -27,12 +27,12 @@ clap = { version = "4", features = ["derive", "env"] }
 # which leaves exactly one place in this workspace allowed to choose where
 # they go, and this is the binary that is it.
 #
-# Unlike the library's `tracing`, this is **new compilation**: it reaches
-# `Cargo.lock` only through a `cfg(loom)` edge of `cordyceps` that is never
-# built, so `cargo tree -i tracing-subscriber` prints nothing at all. Saying
-# so rather than reusing the "already in the graph" line the other
-# dependencies carry, because that line is the justification and it does not
-# apply here.
+# Unlike the library's `tracing`, this is **new compilation**. Before this
+# dependency existed it reached `Cargo.lock` only through a `cfg(loom)` edge
+# of `cordyceps` that is never built, so nothing in the workspace compiled
+# it. Saying so rather than reusing the "already in the graph" line the
+# other dependencies carry, because that line is the justification and it
+# does not apply here.
 #
 # `default-features = false` earns most of it back. `fmt` (which implies
 # `registry`) is the whole of what is needed; `ansi` is left off because

@@ -113,11 +113,21 @@ where
         let elapsed_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
         match &result {
             Ok(outcome) => tracing::info!(outcome = outcome.as_str(), elapsed_ms, "exchange"),
-            // A refusal is an `Ok` with an outcome; an `Err` is the local
-            // stream itself failing, which is the peer going away
-            // mid-exchange rather than anything the request did. The
-            // listener discards it — there is nobody left to tell — so
-            // this is the only place it is ever visible.
+            // A refusal is an `Ok` carrying an outcome. An `Err` is a
+            // transport failure with nothing left to say to anybody, and
+            // it can come from either half: the local stream, or the
+            // backend connection once the head is already upstream —
+            // `run` propagates both, and by here which of them gave out
+            // is no longer recoverable. Deliberately not claimed to be
+            // the client's doing. A backend that declares ten body bytes
+            // and closes after five arrives exactly here, with the client
+            // still connected and nothing wrong at its end.
+            //
+            // The backend failures that *can* be told apart are told
+            // apart before this, as `BadGateway` and `Unfinished`; what
+            // reaches this arm is the residue neither of those can
+            // describe. The listener discards the error, so this line is
+            // the only record of it anywhere.
             Err(error) => tracing::warn!(%error, elapsed_ms, "exchange failed"),
         }
         result

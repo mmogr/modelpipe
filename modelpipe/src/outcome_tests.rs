@@ -5,13 +5,12 @@
 
 use super::Outcome;
 
-/// Every variant, so a new one cannot be added without deciding what it is
-/// called here.
+/// Every variant, listed by hand because nothing derives it.
 ///
 /// The `match` in `as_str` is exhaustive, so the *compiler* already refuses
-/// a variant with no arm. What it cannot refuse is a variant nobody thought
-/// to add to this list, which is why the list is written out rather than
-/// derived — and why the assertion below counts it.
+/// a variant with no arm there. What no compiler can check is whether this
+/// list is complete — so the check is made a compile error instead, by
+/// `a_new_variant_cannot_be_added_without_visiting_this_file` below.
 const EVERY: &[Outcome] = &[
     Outcome::Forwarded,
     Outcome::Unauthorized,
@@ -45,13 +44,39 @@ fn no_two_outcomes_log_the_same_word() {
 /// a broken `as_str` returning `""` for everything would fail that one, but
 /// a broken `EVERY` listing a single variant six times would *pass* it.
 #[test]
-fn the_list_above_names_every_variant_exactly_once() {
+fn the_list_above_repeats_no_variant() {
     let mut seen: Vec<Outcome> = EVERY.to_vec();
     seen.dedup_by_key(|o| o.as_str());
     assert_eq!(seen.len(), EVERY.len(), "EVERY repeats a variant");
-    // A count, so adding a variant to the enum and forgetting this file is
-    // a failing test rather than a silently narrower assertion above.
-    assert_eq!(EVERY.len(), 6, "a variant was added without naming it here");
+}
+
+/// Adding a variant to [`Outcome`] must stop this file compiling.
+///
+/// The match below is exhaustive with no wildcard arm, so a new variant is
+/// a compile error *here* — which is the event that sends whoever added it
+/// to `EVERY` above. That is the only mechanism available: nothing derives
+/// the variant list, so no assertion executed at run time can notice a
+/// variant missing from a hand-written const.
+///
+/// A length assertion cannot do this job, and the one that used to sit
+/// here was worse than useless. `assert_eq!(EVERY.len(), 6)` is a property
+/// of the literal rather than of the enum: it stayed silent in exactly the
+/// case its message described — a variant added, `EVERY` left stale — and
+/// fired only on somebody correctly extending the list. It alarmed on the
+/// right state and passed on the wrong one.
+#[test]
+fn a_new_variant_cannot_be_added_without_visiting_this_file() {
+    for outcome in EVERY {
+        // No wildcard arm, deliberately. This is the whole test.
+        match outcome {
+            Outcome::Forwarded
+            | Outcome::Unauthorized
+            | Outcome::BadRequest
+            | Outcome::TimedOut
+            | Outcome::BadGateway
+            | Outcome::Unfinished => {}
+        }
+    }
 }
 
 /// An operator greps these, so they are a lower-case, underscore-separated

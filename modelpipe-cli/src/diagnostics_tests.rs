@@ -11,7 +11,7 @@
 
 use tracing::Level;
 
-use super::targets;
+use super::{shows_target, targets};
 
 /// The claim of level 0: quieter than a flag, but not silent.
 ///
@@ -118,5 +118,41 @@ fn no_verbosity_turns_on_the_rest_of_the_graph() {
                 "-v x{verbosity} turned on {stranger}"
             );
         }
+    }
+}
+
+/// The target column has to follow the filter actually installed, not the
+/// flag that usually chooses it.
+///
+/// `RUST_LOG` replaces the ladder outright, and `Targets` accepts a bare
+/// level — so `RUST_LOG=debug` with no `-v` admits rustls, hickory, h2 and
+/// iroh all at once. Keying the column off the `-v` count alone printed
+/// those with no way to tell one from another, which is the single reason
+/// the column exists.
+#[test]
+fn the_target_column_appears_whenever_more_than_one_target_can() {
+    assert!(!shows_target(0, false), "one target, no column needed");
+    assert!(!shows_target(1, false), "still only this workspace");
+    assert!(shows_target(2, false), "-vv admits the transport");
+    // The case the flag alone got wrong.
+    assert!(shows_target(0, true), "RUST_LOG can admit anything at all");
+    assert!(shows_target(1, true));
+}
+
+/// The negative control for the test above: a predicate that simply
+/// returned `true` would pass every positive assertion in it.
+///
+/// Stated as the property rather than the arithmetic — the column is off
+/// exactly when the ladder is in force and has not yet reached `-vv`.
+#[test]
+fn the_quiet_ladder_steps_show_no_target_column() {
+    for verbosity in [0u8, 1] {
+        assert!(
+            !shows_target(verbosity, false),
+            "-v x{verbosity} on the ladder admits only this workspace"
+        );
+    }
+    for verbosity in [2u8, 3, u8::MAX] {
+        assert!(shows_target(verbosity, false), "-v x{verbosity}");
     }
 }

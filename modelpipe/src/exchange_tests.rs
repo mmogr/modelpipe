@@ -1272,9 +1272,12 @@ impl tracing_subscriber::fmt::MakeWriter<'_> for Sink {
 /// the shape of failure that reaches CI and not the developer.
 ///
 /// The cost of a global is that "no subscriber at all" stops existing in
-/// this binary. That case is not untested, it is tested elsewhere: every
-/// other test binary in the workspace — `api_surface`, `integration_pipe` —
-/// installs nothing and drives the same edge.
+/// this binary. That case is not untested, it is tested elsewhere:
+/// `tests/integration_pipe.rs` is a separate binary that installs nothing
+/// and drives this edge over a real pipe, end to end. (`tests/api_surface.rs`
+/// is a separate binary too, and also installs nothing, but it pins the
+/// exported surface at compile time and never runs an exchange — so it is
+/// not evidence for this and is not cited as such.)
 fn capturing() {
     static ONCE: std::sync::Once = std::sync::Once::new();
     ONCE.call_once(|| {
@@ -1424,8 +1427,8 @@ async fn a_refused_exchange_names_the_refusal_and_the_request() {
 /// exchange under it.
 ///
 /// The genuinely subscriber-free case is covered where it actually exists:
-/// `tests/api_surface.rs` and `tests/integration_pipe.rs` are separate
-/// binaries that install nothing and drive the same edge end to end.
+/// `tests/integration_pipe.rs` is a separate binary that installs no
+/// subscriber and drives this edge over a live pipe, end to end.
 #[tokio::test]
 async fn an_exchange_is_unchanged_by_being_watched() {
     let watched = CountingBackend::new(OK_RESPONSE);
@@ -1451,4 +1454,142 @@ async fn an_exchange_is_unchanged_by_being_watched() {
     assert_eq!(with_capture, without);
     assert_eq!(watched.connects(), unwatched.connects());
     assert!(String::from_utf8_lossy(&seen).starts_with("HTTP/1.1 200"));
+}
+
+/// A backend that answers with a head declaring more body than it sends.
+///
+/// The head is complete and correctly framed, so the edge forwards it to
+/// the client and starts on the body; the backend then closes with the body
+/// short. `body::forward_exact` turns that into `unexpected_eof`, which
+/// `run` propagates — and that is the one route to `serve_exchange`'s `Err`
+/// arm which is entirely the backend's doing, with the client still
+/// connected and owed nothing further.
+struct Truncating(Mutex<Option<DuplexStream>>);
+
+impl Truncating {
+    fn new() -> Self {
+        let (mine, mut theirs) = duplex(1024);
+        tokio::spawn(async move {
+            let mut buf = [0u8; 256];
+            let mut seen = Vec::new();
+            while !seen.windows(4).any(|w| w == b"\r\n\r\n") {
+                match theirs.read(&mut buf).await {
+                    Ok(0) | Err(_) => return,
+                    Ok(n) => seen.extend_from_slice(&buf[..n]),
+                }
+            }
+            let _ = theirs
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 10\r\n\r\nfive!")
+                .await;
+            let _ = theirs.flush().await;
+            drop(theirs);
+        });
+        Self(Mutex::new(Some(mine)))
+    }
+}
+
+impl Backend for Truncating {
+    type Stream = DuplexStream;
+
+    fn authority(&self) -> &'static str {
+        "127.0.0.1:11434"
+    }
+
+    async fn connect(&self) -> std::io::Result<DuplexStream> {
+        Ok(self.0.lock().await.take().expect("connected once"))
+    }
+}
+
+/// Drive one exchange to a transport failure, capturing what was logged.
+///
+/// Separate from [`logged`] because every other helper in this file
+/// `.expect()`s the `Result`: the `Err` arm is the one outcome none of them
+/// can reach, and it was the one arm nothing exercised.
+async fn logged_failure<B: Backend + Sync>(
+    request: &[u8],
+    backend: &B,
+) -> (std::io::Error, String) {
+    capturing();
+    CAPTURED.with(|slot| *slot.borrow_mut() = Some(Vec::new()));
+
+    let (mut client, mut edge) = duplex(64 * 1024);
+    client.write_all(request).await.unwrap();
+    let (credential, _) = Credential::new(&supplied()).expect("a usable token");
+    let error = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        serve_exchange(&mut edge, &credential, backend),
+    )
+    .await
+    .expect("the exchange must not hang")
+    .expect_err("this exchange must fail at the transport");
+
+    let written = CAPTURED
+        .with(|slot| slot.borrow_mut().take())
+        .expect("armed just above");
+    (error, String::from_utf8(written).expect("utf-8"))
+}
+
+/// The `Err` arm, and the counterexample to what it must not claim.
+///
+/// A comment here used to say an `Err` means "the local stream itself
+/// failing, the peer going away mid-exchange rather than anything the
+/// request did". This test is the case that is false for: the backend
+/// declared ten bytes, sent five and closed, and the client is still
+/// connected with a 200 head already in hand. Nothing about it is the
+/// peer's doing.
+#[tokio::test]
+async fn a_backend_that_under_delivers_its_body_is_reported_as_a_failure() {
+    let backend = Truncating::new();
+    let (error, log) = logged_failure(&get(Some(&format!("Bearer {TOKEN}"))), &backend).await;
+
+    assert_eq!(
+        error.kind(),
+        std::io::ErrorKind::UnexpectedEof,
+        "the body ended before its declared length: {error}"
+    );
+    assert!(
+        log.contains("exchange failed"),
+        "no failure line in:\n{log}"
+    );
+    // Still attributable, for the reason a refusal is: a failure nobody can
+    // tie to a request tells an operator only that something, somewhere,
+    // broke.
+    assert!(log.contains("method=\"GET\""), "unattributable:\n{log}");
+    assert!(
+        log.contains("status=200"),
+        "the backend's head did arrive, and the line should say so:\n{log}"
+    );
+}
+
+/// The recording order that `span.record("status", …)` sits above the
+/// response-framing check for.
+///
+/// A backend answering `200` and framing it ambiguously is refused. Without
+/// the status on the line, that refusal reads as a bare gateway failure and
+/// sends whoever is debugging it to the backend's logic; with it, the line
+/// says the backend replied fine and framed it in a way this edge will not
+/// resolve. The comment and the commit message both defended this ordering
+/// and nothing tested it.
+///
+/// Its negative control is `a_refused_exchange_names_the_refusal_and_the_request`,
+/// which asserts a 401 carries no `status=` at all — so this cannot pass by
+/// the field being present unconditionally.
+#[tokio::test]
+async fn a_refused_backend_response_still_reports_the_status_it_sent() {
+    let backend = CountingBackend::new(
+        b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nTransfer-Encoding: chunked\r\n\r\n{}",
+    );
+    let (outcome, log) = logged(
+        &get(Some(&format!("Bearer {TOKEN}"))),
+        &supplied(),
+        &backend,
+    )
+    .await;
+
+    assert_eq!(outcome, Outcome::BadGateway);
+    assert!(log.contains("outcome=\"bad_gateway\""), "{log}");
+    assert!(
+        log.contains("status=200"),
+        "the status it refused is missing:\n{log}"
+    );
 }

@@ -314,3 +314,64 @@ fn rewriting_for_the_backend_replaces_the_connection_and_keeps_the_message() {
         &("Connection".to_owned(), "close".to_owned())
     );
 }
+
+/// The redaction primitive, tested where it lives rather than only through
+/// the exchange that calls it.
+///
+/// `path_only` is the sole point at which a request target is narrowed
+/// before it reaches a log field, so what it does and does not remove is
+/// worth pinning here — the end-to-end assertion in `exchange_tests`
+/// proves the Azure `?api-key=` case and nothing about the edges.
+#[test]
+fn a_target_loses_its_query_string_and_its_fragment() {
+    assert_eq!(path_only("/v1/models?api-key=secret"), "/v1/models");
+    assert_eq!(path_only("/v1/models#frag"), "/v1/models");
+    // The *first* delimiter wins, so a second one inside the discarded
+    // part cannot smuggle anything back.
+    assert_eq!(path_only("/v1/x?a=1?b=2#c"), "/v1/x");
+    assert_eq!(path_only("/v1/x#a?b=2"), "/v1/x");
+}
+
+/// The negative control: a target with nothing to remove comes back whole.
+///
+/// Without this, a `path_only` that returned `""` — or the first path
+/// segment, or any other truncation — would satisfy every assertion above
+/// while making the diagnostics useless.
+#[test]
+fn a_target_with_no_query_is_returned_unchanged() {
+    for target in ["/v1/models", "/", "", "*", "/v1/chat/completions"] {
+        assert_eq!(path_only(target), target, "{target:?} lost something");
+    }
+}
+
+/// A percent-encoded `?` is a path byte, not a delimiter.
+///
+/// The function splits on bytes and does no decoding, which is the
+/// intended behaviour: decoding here would mean this edge and the backend
+/// could disagree about where the path ends, which is the class of
+/// disagreement `framing` exists to refuse.
+#[test]
+fn an_encoded_delimiter_is_not_a_delimiter() {
+    assert_eq!(path_only("/v1/a%3Fb"), "/v1/a%3Fb");
+    assert_eq!(path_only("/v1/a%23b?q=1"), "/v1/a%23b");
+}
+
+/// What an absolute-form target keeps, stated as a test rather than left
+/// to be discovered.
+///
+/// RFC 9112 §3.2.2 requires a proxy to accept this form, and the query is
+/// still removed from it. The authority is not: it is text the client put
+/// in its request line, and this edge never reads it — the backend comes
+/// from what `serve` was started with. Pinned so that a later change which
+/// starts *routing* on it has to come past this test.
+#[test]
+fn an_absolute_form_target_loses_its_query_and_keeps_its_authority() {
+    assert_eq!(
+        path_only("http://example.test/v1/models?api-key=secret"),
+        "http://example.test/v1/models"
+    );
+    assert_eq!(
+        path_only("http://who:what@example.test/v1"),
+        "http://who:what@example.test/v1"
+    );
+}
