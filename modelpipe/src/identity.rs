@@ -155,6 +155,16 @@ fn check_private(path: &Path) -> Result<(), io::Error> {
 }
 
 /// The same, where there is no mode to inspect.
+///
+/// The signature is its unix twin's rather than its own: the caller chains
+/// this into a `Result`, and a stub that returned `()` here would make the
+/// call site itself `#[cfg]`-dependent — which is how the two platforms
+/// stop being the same code with one function swapped.
+#[expect(
+    clippy::unnecessary_wraps,
+    clippy::missing_const_for_fn,
+    reason = "the signature belongs to the unix twin, not to this body"
+)]
 #[cfg(not(unix))]
 fn check_private(_path: &Path) -> Result<(), io::Error> {
     Ok(())
