@@ -32,6 +32,24 @@ pr_labels = ["release"]
 # #2 stayed a draft across ten merges to main; closing it produced #20, not a
 # draft.
 pr_draft = true
+# Conventional Commits, from `feat(obs): …` onward. The subjects before that
+# carry no type at all, which is why the first changelog groups them under
+# "Other" — that is history, not a setting to fix.
+#
+# **The PR title is the commit subject.** This repository squash-merges, so
+# whatever the PR is called is what lands on main and what release-plz
+# parses; a branch named `fix(edge)/…` buys nothing on its own. #24 and #25
+# went in with their types stripped from the title and are bucketed under
+# "Other" for exactly that reason — two commits which say `feat` and `fix`
+# in their branch names and neither of which release-plz can see as one.
+# Nothing can be done about those two without rewriting main, and the point
+# of writing it down here is that the next one is avoidable.
+#
+# `feat:` must mean a minor bump, and on a 0.x version release-plz treats it
+# as a patch unless told otherwise. Without this line 0.1.0 + a feature is
+# 0.1.1, which is not what anybody typing `feat:` means and not what the
+# changelog would then say happened.
+features_always_increment_minor = true
 
 [[package]]
 name = "modelpipe"
