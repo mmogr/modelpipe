@@ -20,6 +20,18 @@ release_always = false
 # would just split one story in half.
 changelog_update = false
 pr_labels = ["release"]
+# Open the release PR as a draft: merging one pushes the version tag, and
+# release.yml carries a tag through to `cargo publish`, where a version can be
+# yanked but never replaced or reused. Marking the PR ready for review is the
+# deliberate act that starts a release, and nothing else should be able to.
+#
+# Set here rather than by hand, because a hand-set draft protects the PR and
+# not the repository. release-plz keeps one release PR open and force-updates
+# its branch, so the flag does survive the pushes — but the moment that PR is
+# closed or merged, the next run opens a new one, ready for review. Measured:
+# #2 stayed a draft across ten merges to main; closing it produced #20, not a
+# draft.
+pr_draft = true
 
 [[package]]
 name = "modelpipe"
