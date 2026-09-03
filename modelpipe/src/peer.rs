@@ -246,6 +246,11 @@ pub(crate) async fn keep_connected(peer: &Peer, lifecycle: &Lifecycle) {
             }
             peer.forget(&live);
             lifecycle.set_status(PipeStatus::Idle);
+            // The state change, said once. Every request from here until a
+            // re-dial succeeds is answered 502 by `dialer::carry`, and this
+            // is the line that explains all of them — which is why it is
+            // `info` while the individual attempts below are not.
+            tracing::info!("the peer went away, and this side is looking for it");
             backoff = FIRST_RETRY;
         }
 
@@ -256,9 +261,18 @@ pub(crate) async fn keep_connected(peer: &Peer, lifecycle: &Lifecycle) {
             dialed = peer.redial() => dialed,
         };
         if let Some(path) = dialed {
-            lifecycle.set_status(aggregate(&[path]));
+            let status = aggregate(&[path]);
+            lifecycle.set_status(status);
+            tracing::info!(path = status.as_str(), "the peer is back");
             continue;
         }
+        // `debug`, not `info`: a serve side that is off for the night is
+        // dialled until morning, and the fact worth an operator's attention
+        // is the one line above rather than every attempt under it.
+        tracing::debug!(
+            backoff_ms = u64::try_from(backoff.as_millis()).unwrap_or(u64::MAX),
+            "a re-dial found nobody"
+        );
         tokio::select! {
             biased;
             () = lifecycle.wait_until_closed() => return,

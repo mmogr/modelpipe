@@ -145,6 +145,37 @@ pub(crate) fn authorization(fields: &[(String, String)]) -> Option<&[u8]> {
         .map(|(_, value)| value.as_bytes())
 }
 
+/// The request target with its query string removed.
+///
+/// What a log line may say about which resource was asked for, and
+/// deliberately less than the whole target. A query string is text the
+/// caller controls and this edge forwards without reading, and the one
+/// thing it is *known* to carry in this crate's domain is a credential:
+/// Azure's OpenAI-compatible endpoints accept `?api-key=`, and any client
+/// at all may put a token in a query parameter whether or not it should.
+/// The path is what identifies the request; the rest is not worth the
+/// class of bug.
+///
+/// Truncated at the first `?` or `#` rather than parsed, because there is
+/// nothing here to interpret — the target is forwarded verbatim by
+/// [`serialize_request`], and this function exists only to decide how much
+/// of it a diagnostic may repeat. An empty or `*` target comes back
+/// unchanged, which is correct: neither has a query to remove.
+///
+/// It sanitizes nothing beyond that and is not a claim to. An
+/// absolute-form target — RFC 9112 §3.2.2, which a proxy is required to
+/// accept — keeps its authority, userinfo included. That is text a client
+/// chose to put in a request line, not anything this tunnel holds: the
+/// authority is never read here, because the serve side routes to the one
+/// backend it was started with. The four things this crate undertakes
+/// never to log are the token, the ticket, a header value and a query
+/// string, and none of them can arrive by that route.
+pub(crate) fn path_only(target: &str) -> &str {
+    target
+        .split_once(['?', '#'])
+        .map_or(target, |(path, _)| path)
+}
+
 /// Apply the edge's header rules in the order they must happen.
 pub(crate) fn rewrite_for_backend(head: &mut RequestHead, authority: &str) {
     headers::strip_hop_by_hop(&mut head.headers);

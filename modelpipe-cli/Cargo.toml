@@ -23,7 +23,31 @@ modelpipe = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "signal"] }
 anyhow = { workspace = true }
 clap = { version = "4", features = ["derive", "env"] }
+# The subscriber behind `-v`. The library emits events and installs nothing,
+# which leaves exactly one place in this workspace allowed to choose where
+# they go, and this is the binary that is it.
+#
+# Unlike the library's `tracing`, this is **new compilation**. Before this
+# dependency existed it reached `Cargo.lock` only through a `cfg(loom)` edge
+# of `cordyceps` that is never built, so nothing in the workspace compiled
+# it. Saying so rather than reusing the "already in the graph" line the
+# other dependencies carry, because that line is the justification and it
+# does not apply here.
+#
+# `default-features = false` earns most of it back. `fmt` (which implies
+# `registry`) is the whole of what is needed; `ansi` is left off because
+# these lines go to a terminal that may be a pipe, and `env-filter` is left
+# off because `filter::Targets` parses the same `a=debug,b=info` syntax
+# without pulling `regex-automata` and `matchers` in behind it.
+tracing-subscriber = { version = "0.3", default-features = false, features = ["std", "fmt", "registry"] }
 # Terminal QR rendering only — no image or SVG backends. The README
 # promises a QR beside the ticket, and a phone reading one is the difference
 # between pairing in a second and retyping ninety-six characters.
 qrcode = { version = "0.14", default-features = false }
+
+[dev-dependencies]
+# `Targets::would_enable` — the one honest way to ask a filter what it lets
+# through — takes a `tracing::Level`, so the tests need the name of the type
+# even though the binary itself never says it. Already compiled: the library
+# this CLI links depends on `tracing` directly.
+tracing = { version = "0.1", default-features = false }

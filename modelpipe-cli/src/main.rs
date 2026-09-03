@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use clap::{Parser, Subcommand};
 use modelpipe::{ConnectOptions, ServeOptions, Ticket, TokenPolicy};
 
+mod diagnostics;
 mod interrupt;
 mod park;
 
@@ -19,6 +20,20 @@ use park::{park, shut_down};
     about = "Your model server, from anywhere"
 )]
 struct Cli {
+    /// Print more about what the pipe is doing; repeat for more still
+    ///
+    /// Once is a line per request. Twice adds the transport, which is where
+    /// the answer lives when two machines will not pair. Set RUST_LOG to
+    /// choose targets and levels yourself instead.
+    // Backtick-free like the flags below: clap prints this verbatim.
+    #[expect(clippy::doc_markdown, reason = "clap help text, not rustdoc")]
+    // `global`, so it is accepted before or after the subcommand. An
+    // operator who has already typed the whole `serve` line and wants more
+    // detail appends `-v` to it, and a flag that only works in front of the
+    // subcommand fails them for a reason they cannot see.
+    #[arg(short, long, global = true, action = clap::ArgAction::Count)]
+    verbose: u8,
+
     #[command(subcommand)]
     command: Command,
 }
@@ -143,6 +158,11 @@ fn qr(ticket: &Ticket) -> Option<String> {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
+    // Before anything that might emit. The library's events go nowhere
+    // until a subscriber exists, so a line installed after the first call
+    // into `modelpipe` is a line that silently loses whatever happened
+    // during it.
+    diagnostics::install(cli.verbose);
     // Created before either subcommand runs and held across both phases, so
     // the interrupt that asks for shutdown and the one that gives up
     // waiting are heard by the same listener.

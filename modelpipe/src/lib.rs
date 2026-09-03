@@ -6,6 +6,26 @@
 //! failures arrive as [`ServeError`] / [`ConnectError`] variants a caller
 //! can match a retry policy against, with the transport's own error
 //! reachable only as an opaque [`source`](std::error::Error::source).
+//!
+//! # Diagnostics
+//!
+//! This crate emits [`tracing`] events and installs no subscriber. A
+//! library that installed one would take the choice away from the binary it
+//! is linked into, and would silence or duplicate whatever that binary had
+//! already set up; `modelpipe-cli` installs one under `-v`, and any other
+//! embedder does whatever it already does. Without a subscriber the events
+//! cost a global atomic read apiece and go nowhere.
+//!
+//! What they say is bounded on purpose. The serve side emits one `info`
+//! line per exchange — method, path, backend status, outcome, elapsed — and
+//! one per peer arriving and leaving. **No event carries a token, a ticket,
+//! a header value, or a query string**, which is the same discipline the
+//! hand-written [`Debug`](std::fmt::Debug) impls on [`Ticket`] and
+//! [`TokenPolicy`] exist for: a credential in a log file is a credential
+//! that leaked, and a log file is the easiest place in a system to forget
+//! that. The property is asserted rather than intended — the tests drive a
+//! request whose credential and query string are distinctive strings, and
+//! then look for them in the captured output.
 
 use std::time::Duration;
 
@@ -30,6 +50,7 @@ mod credential;
 mod dialer;
 mod exchange;
 mod fault;
+mod fingerprint;
 mod framing;
 mod head_read;
 mod headers;
@@ -38,6 +59,7 @@ mod identity;
 mod lifecycle;
 mod listener;
 mod locality;
+mod outcome;
 mod peer;
 mod refusal;
 mod request_body;

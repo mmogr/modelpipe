@@ -312,7 +312,7 @@ fn a_debug_rendering_never_contains_the_ticket_string() {
 #[test]
 fn a_fingerprint_is_short_and_is_not_the_whole_key() {
     let f = ticket(vec![]).fingerprint();
-    assert_eq!(f.len(), FINGERPRINT_BYTES * 2);
+    assert_eq!(f.len(), 12, "six bytes of endpoint id, hex-encoded");
     assert!(f.chars().all(|c| c.is_ascii_hexdigit()));
     assert!(
         ENDPOINT_ID_HEX.starts_with(&f) && f.len() < ENDPOINT_ID_HEX.len(),

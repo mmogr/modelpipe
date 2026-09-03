@@ -96,8 +96,20 @@ pub(crate) async fn local_loop(state: Arc<ConnectState>, listener: TcpListener) 
             // the status at `Idle` forever, and freed the port for any
             // local process to take, with the next request's bearer token
             // in it.
-            Err(e) if transient(&e) => continue,
-            Err(_) => break,
+            Err(e) if transient(&e) => {
+                // Worth a line, and worth being quiet about: `EMFILE` here
+                // is a process out of file descriptors, which is a real
+                // condition an operator can act on and is invisible from
+                // anywhere else — the loop swallows it and carries on by
+                // design. `ECONNABORTED` is routine on any open port, and
+                // logging it at `info` would bury the one that matters.
+                tracing::debug!(error = %e, "an accept failed, and the listener continues");
+                continue;
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "the local listener stopped accepting");
+                break;
+            }
         };
 
         let state = state.clone();
@@ -154,6 +166,12 @@ async fn carry(
         () = state.lifecycle.wait_until_closed() => return Ok(()),
         peeked = local.peek(&mut first) => {
             if peeked? == 0 {
+                // Not an exchange and not an error: an SDK preconnect or a
+                // health probe looks exactly like this. Logged at `debug`
+                // because a pooling client opens several per session, and
+                // an operator counting requests should not have to
+                // subtract them.
+                tracing::debug!("a local connection said nothing and was not an exchange");
                 return Ok(());
             }
         }
@@ -161,14 +179,18 @@ async fn carry(
     // Only now is this an exchange the drain must wait for.
     let _guard = guard;
 
-    let opened = match state.peer.current() {
-        Some(connection) => connection.open_bi().await,
-        // No connection at all right now — the peer is away and
-        // `keep_connected` is looking for it. Same answer as a dead one,
-        // for the same reason: this end owes the client a status rather
-        // than a reset.
-        None => return refuse_locally(&mut local).await,
+    // No connection at all right now — the peer is away and
+    // `keep_connected` is looking for it. Same answer as a dead one, for the
+    // same reason: this end owes the client a status rather than a reset.
+    //
+    // Said differently from the arm below, because the two are one status to
+    // the client and two different things to whoever is debugging: this is a
+    // serve side that is off, not a request that went wrong.
+    let Some(connection) = state.peer.current() else {
+        tracing::info!("refused a request: the peer is away");
+        return refuse_locally(&mut local).await;
     };
+    let opened = connection.open_bi().await;
     let Ok((send, recv)) = opened else {
         // The serve edge answers a backend it cannot reach with a 502, and
         // this end owes a client whose tunnel is gone the same. The socket
@@ -177,6 +199,7 @@ async fn carry(
         // were the same event. `open_bi` fails only when the connection is
         // dead — stream-budget exhaustion back-pressures instead — so this
         // arm is exactly that case.
+        tracing::info!("refused a request: the tunnel is down");
         return refuse_locally(&mut local).await;
     };
     let mut remote = tokio::io::join(recv, send);

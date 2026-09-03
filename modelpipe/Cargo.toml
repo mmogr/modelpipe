@@ -41,6 +41,19 @@ httparse = "1"
 # something other than what the operator wrote, which for this crate is a
 # security boundary rather than a papercut. Already in the graph via iroh.
 url = "2"
+# Structured diagnostics. Events only: this crate emits and never installs a
+# subscriber, because a library that installs one takes the choice away from
+# the binary it is linked into — and `modelpipe` is a library first. Already
+# in the graph, and not marginally: seventeen crates pull it, iroh among
+# them, with `attributes` and `std` already on. So this costs no additional
+# compilation, which is the same test the four dependencies above had to
+# pass.
+#
+# What it must never carry is the reason `tracing` is named three times in
+# this crate already, every time as the thing a derived `Debug` would leak
+# into — see `credential.rs` and `ticket.rs`. No span field and no event
+# field here holds a token, a ticket, or a header value.
+tracing = { version = "0.1", default-features = false, features = ["std", "attributes"] }
 # `rt` is load-bearing and was missing: both `serve` and `connect` return a
 # handle over a background accept loop, so the first real body spawns, and
 # `tokio::spawn` is gated on it. It currently compiles anyway — iroh enables
@@ -58,3 +71,15 @@ tokio = { workspace = true, features = ["net", "io-util", "rt", "sync", "time"] 
 # deliberately not part of any default: a timeout test that waited thirty real
 # seconds would be one nobody runs.
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "io-util", "test-util"] }
+# The capture subscriber the diagnostics tests read back. A dev-dependency
+# and deliberately not a normal one: this crate emits events and installs no
+# subscriber, so the only code here that may install one is a test asserting
+# what those events say — and, more to the point, what they never say.
+#
+# Unlike `tracing` above this is NOT already in the graph. Before this
+# dependency existed it reached `Cargo.lock` only through a `cfg(loom)` edge
+# that is never built, so nothing in the workspace compiled it. It is new
+# compilation, in the test profile only, and saying so is the point of these
+# comments — the "already in the graph" line the four dependencies above
+# carry is a justification, not a formula, and it does not apply here.
+tracing-subscriber = { version = "0.3", default-features = false, features = ["std", "fmt"] }
