@@ -178,14 +178,23 @@ pub(crate) fn path_only(target: &str) -> &str {
 
 /// Whether a request asks to be told before it sends its body.
 ///
-/// RFC 9110 §10.1.1: the expectation is a token, so it is matched without
-/// regard to case, and `100-continue` is the only one defined. Any other
-/// expectation is left alone here and travels to the backend, which is the
-/// party that can decide whether it can meet it.
+/// RFC 9110 §10.1.1 gives `Expect` the list grammar `#expectation`, so the
+/// value is split on commas and each member matched: `Expect:
+/// 100-continue, foo` asks for the continue as much as `Expect:
+/// 100-continue` does, and reading the whole value as one token would miss
+/// it. The expectation is itself a token, so the comparison ignores case.
+///
+/// Only `100-continue` is defined, and only it is answered here. An
+/// expectation this edge does not know travels on to the backend
+/// unmodified, which is the party that might be able to meet it — and,
+/// since the answer given here is interim, the backend can still refuse the
+/// whole request with a `417` afterwards.
 pub(crate) fn expects_continue(fields: &[(String, String)]) -> bool {
-    fields.iter().any(|(name, value)| {
-        name.eq_ignore_ascii_case("expect") && value.trim().eq_ignore_ascii_case("100-continue")
-    })
+    fields
+        .iter()
+        .filter(|(name, _)| name.eq_ignore_ascii_case("expect"))
+        .flat_map(|(_, value)| value.split(','))
+        .any(|expectation| expectation.trim().eq_ignore_ascii_case("100-continue"))
 }
 
 /// Apply the edge's header rules in the order they must happen.

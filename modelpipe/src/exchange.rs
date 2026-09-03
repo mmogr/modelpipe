@@ -16,12 +16,13 @@
 //! Every refusal *the client can cause* happens with the backend untouched.
 //! That is the difference between "returned 401" and "the backend never saw
 //! it", and only the second is what the README sells — so it is asserted
-//! with a connection counter rather than a status code. Two refusals are
-//! written after contact, and neither could have been produced before it:
-//! the 502, which by definition reports what happened at the backend, and
-//! the 400 for a request body that stopped short — a body can only fail
-//! once its head has already gone upstream, which is exactly why that
-//! refusal cannot be the `bad_request` the other client errors use.
+//! with a connection counter rather than a status code. Three refusals are
+//! written after contact, and none could have been produced before it: the
+//! 502 for a backend that would not take the connection, the 502 for one
+//! that took it and gave nothing usable back, and the 400 for a request
+//! body that stopped short — a body can only fail once its head has already
+//! gone upstream, which is exactly why that refusal cannot be the
+//! `bad_request` the other client errors use.
 
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use tracing::Instrument as _;

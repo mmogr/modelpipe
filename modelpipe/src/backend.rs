@@ -119,9 +119,18 @@ impl TcpBackend {
         // read it, which is the class of disagreement `framing` exists to
         // refuse. A backend that needs a prefix is one the client should
         // ask for by path.
+        // Userinfo goes with them, and for the same reason rather than a
+        // different one: `http://user:pass@127.0.0.1:11434` parses, and this
+        // crate has exactly one credential — the bearer token — with no
+        // route by which a username and password in a URL could ever be
+        // sent anywhere. Accepting it means accepting a secret the operator
+        // typed and discarding it silently, which is the failure the path
+        // rule above exists to stop.
         if !matches!(parsed.path(), "" | "/")
             || parsed.query().is_some()
             || parsed.fragment().is_some()
+            || !parsed.username().is_empty()
+            || parsed.password().is_some()
         {
             return Err(invalid());
         }

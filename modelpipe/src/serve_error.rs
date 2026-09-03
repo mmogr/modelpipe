@@ -22,8 +22,8 @@ use std::fmt;
 #[non_exhaustive]
 pub enum ServeError {
     /// The backend URL is not one this crate can use at all — it does not
-    /// parse, it names no host, its scheme is not `http`, or it carries a
-    /// path, query or fragment after the authority.
+    /// parse, it names no host, its scheme is not `http`, or it carries
+    /// userinfo, a path, a query or a fragment alongside the authority.
     ///
     /// Separate from [`BackendNotLocal`](Self::BackendNotLocal), which is a
     /// verdict about an *address*. Reporting these as "not a local address"
@@ -149,7 +149,7 @@ impl fmt::Display for ServeError {
         match self {
             Self::InvalidBackendUrl { url } => write!(
                 f,
-                "{url} is not a backend URL modelpipe can use — it must be http:// with a host and nothing after the port, e.g. http://127.0.0.1:11434 (the request path comes from the client)"
+                "{url} is not a backend URL modelpipe can use — it must be http:// with a host and a port and nothing else, e.g. http://127.0.0.1:11434 (the request path comes from the client, and the only credential is the bearer token)"
             ),
             Self::BackendUnresolvable { url } => {
                 write!(f, "the host in {url} did not resolve to any address")

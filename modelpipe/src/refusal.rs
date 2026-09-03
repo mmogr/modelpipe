@@ -15,9 +15,8 @@
 //! — which is precisely why it is not [`bad_request`], whose promise it
 //! would break. [`tunnel_unavailable`] is the odd one out in a different
 //! way: it is written by the *connect* side, which never had a backend to
-//! reach. All five are still synthesized here rather than relayed, which
-//! is what keeps them distinguishable from a status the backend itself
-//! sent.
+//! reach. All six are still synthesized here rather than relayed, which is
+//! what keeps them distinguishable from a status the backend itself sent.
 //!
 //! Every one closes the connection. A stream carries exactly one exchange
 //! and a refused exchange is over.
@@ -25,8 +24,8 @@
 //! # Why there are three 502s
 //!
 //! There used to be one, and its sentence — "the backend sent a response
-//! this tunnel could not read" — was written at five call sites of which it
-//! described exactly one. A backend that was never reached sent no
+//! this tunnel could not read" — was written at four call sites of which it
+//! described one and a half. A backend that was never reached sent no
 //! response; a tunnel with no peer has no backend at either end. Both said
 //! so anyway, which sends the reader to the wrong machine: to the model
 //! server, when the model server is fine and the far laptop is asleep.
@@ -91,12 +90,15 @@ pub(crate) fn bad_request() -> Vec<u8> {
     )
 }
 
-/// The 502 for a backend whose response this edge cannot read.
+/// The 502 for a backend that was reached and gave nothing usable back.
 ///
-/// The narrow case, and the only one the single old 502 described: a
-/// backend was reached, it answered, and the answer was something this edge
-/// will not resolve — ambiguous framing, an unreadable head, or nothing at
-/// all before the grace expired.
+/// Three sub-cases share it, and the wording has to cover all three because
+/// this edge cannot always tell them apart: an answer framed ambiguously, a
+/// head that would not parse, and a backend that said nothing at all before
+/// the grace expired. The old sentence — "the backend *sent* a response
+/// this tunnel could not read" — was true of the first two and a claim
+/// about an event that did not happen for the third, which is the same
+/// mistake `backend_unreachable` exists to stop making.
 ///
 /// Distinct from [`bad_request`] on purpose: the client did nothing wrong,
 /// and reporting a gateway failure as a client error would send whoever is
@@ -106,7 +108,7 @@ pub(crate) fn bad_gateway() -> Vec<u8> {
         "HTTP/1.1 502 Bad Gateway",
         &[],
         "bad_gateway",
-        "the backend sent a response this tunnel could not read",
+        "the backend did not return a response this tunnel could read",
     )
 }
 

@@ -7,6 +7,18 @@ use super::*;
 use crate::framing::{Framing, framing};
 use crate::http_head::parse_response;
 
+/// The human-readable half of a refusal body.
+///
+/// Extracted rather than compared whole, because the machine-readable
+/// `code` beside it is distinct by construction and would mask two
+/// refusals that read identically.
+fn message_of(body: &str) -> String {
+    let start = body.find(r#""message":""#).expect("a message field") + 11;
+    let rest = &body[start..];
+    let end = rest.find('"').expect("a closing quote");
+    rest[..end].to_owned()
+}
+
 /// Each refusal must be a well-formed response whose declared length
 /// matches the body actually written — a wrong length here would hang
 /// the client waiting for bytes that never come.
@@ -85,9 +97,14 @@ fn the_three_gateway_failures_say_three_different_things() {
             text.contains(&format!(r#""code":"{code}""#)),
             "{code} must name itself so a program can match on it: {text}"
         );
-        let (head, consumed) = parse_response(bytes).unwrap().unwrap();
+        let (head, _consumed) = parse_response(bytes).unwrap().unwrap();
         assert_eq!(head.status, 502, "{code}");
-        messages.push(String::from_utf8(bytes[consumed..].to_vec()).expect("ascii"));
+        // The *message* alone, not the whole body. Comparing bodies would
+        // make this test unfailable: the loop above has already asserted
+        // each carries a distinct `code`, and the code is inside the body,
+        // so three bodies are distinct however identical their prose. The
+        // prose is the part a person reads and the part that was wrong.
+        messages.push(message_of(&text));
     }
     messages.sort();
     let distinct = {
@@ -95,7 +112,10 @@ fn the_three_gateway_failures_say_three_different_things() {
         m.dedup();
         m.len()
     };
-    assert_eq!(distinct, 3, "two of the three still say the same thing");
+    assert_eq!(
+        distinct, 3,
+        "two of the three still say the same thing: {messages:?}"
+    );
 }
 
 /// The negative control for the test above, and the property that makes the
@@ -137,4 +157,17 @@ fn no_refusal_names_an_address() {
             assert!(!text.contains(leak), "{leak} appears in: {text}");
         }
     }
+}
+
+/// The negative control for the extractor above: it must return the prose
+/// and not the whole body, or the distinctness test goes back to being
+/// unfailable.
+#[test]
+fn the_message_extractor_returns_only_the_prose() {
+    let m = message_of(&String::from_utf8(bad_gateway()).unwrap());
+    assert_eq!(
+        m,
+        "the backend did not return a response this tunnel could read"
+    );
+    assert!(!m.contains("code"), "the code leaked into the message: {m}");
 }

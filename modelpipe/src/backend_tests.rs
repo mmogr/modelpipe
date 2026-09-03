@@ -313,3 +313,24 @@ async fn a_path_is_refused_before_the_host_is_resolved() {
         other => panic!("the path must be refused before resolving, got {other:?}"),
     }
 }
+
+/// Userinfo in a backend URL is a credential the operator typed that this
+/// crate has no route to send anywhere.
+///
+/// The same silent-discard failure the path rule prevents: it parses, it
+/// looks like it does something, and every byte of it is dropped. There is
+/// exactly one credential here — the bearer token — and a URL is not where
+/// it goes.
+#[tokio::test]
+async fn a_backend_url_carrying_userinfo_is_refused() {
+    for url in [
+        "http://user:pass@127.0.0.1:11434",
+        "http://user@127.0.0.1:11434",
+        "http://:pass@127.0.0.1:11434",
+    ] {
+        match TcpBackend::new(url, false).await {
+            Err(ServeError::InvalidBackendUrl { url: named }) => assert_eq!(named, url),
+            other => panic!("{url} should be InvalidBackendUrl, got {other:?}"),
+        }
+    }
+}

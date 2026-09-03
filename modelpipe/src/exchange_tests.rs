@@ -1724,3 +1724,88 @@ async fn a_backend_interim_response_is_not_relayed_on_top_of_the_edge_s() {
     );
     assert!(seen.contains("HTTP/1.1 200 OK"), "{seen:?}");
 }
+
+/// Which 502 the "would not take the connection" path writes.
+///
+/// `Outcome::BadGateway` is one variant across three causes on purpose, so
+/// the outcome alone cannot pin this: only the body distinguishes a backend
+/// that was never reached from one that answered unreadably, and getting it
+/// backwards sends the reader to the component that is working.
+#[tokio::test]
+async fn a_backend_that_was_never_reached_says_so_in_the_body() {
+    struct Refusing;
+    impl Backend for Refusing {
+        type Stream = DuplexStream;
+        fn authority(&self) -> &'static str {
+            "127.0.0.1:11434"
+        }
+        async fn connect(&self) -> std::io::Result<DuplexStream> {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::ConnectionRefused,
+                "nothing is listening",
+            ))
+        }
+    }
+
+    let (mut client, mut edge) = duplex(64 * 1024);
+    client.write_all(&authed("GET")).await.unwrap();
+    client.shutdown().await.unwrap();
+    let (credential, _) = Credential::new(&supplied()).expect("a usable token");
+    let outcome = serve_exchange(&mut edge, &credential, &Refusing)
+        .await
+        .unwrap();
+    drop(edge);
+    let mut seen = Vec::new();
+    client.read_to_end(&mut seen).await.unwrap();
+    let text = String::from_utf8(seen).expect("ascii");
+
+    assert_eq!(outcome, Outcome::BadGateway);
+    assert!(text.contains(r#""code":"backend_unreachable""#), "{text}");
+    assert!(!text.contains(r#""code":"bad_gateway""#), "{text}");
+}
+
+/// The negative control for the test above: a backend that *was* reached and
+/// answered unreadably keeps the other body.
+///
+/// Without this, always writing `backend_unreachable` would satisfy the test
+/// above while destroying the distinction it exists to make.
+#[tokio::test]
+async fn a_backend_that_answered_unreadably_keeps_the_other_body() {
+    let backend = CountingBackend::new(
+        b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nTransfer-Encoding: chunked\r\n\r\n{}",
+    );
+    let (outcome, seen) = exchange(
+        &get(Some(&format!("Bearer {TOKEN}"))),
+        &supplied(),
+        &backend,
+    )
+    .await;
+    let text = String::from_utf8(seen).expect("ascii");
+
+    assert_eq!(outcome, Outcome::BadGateway);
+    assert_eq!(backend.connects(), 1, "the backend was reached");
+    assert!(text.contains(r#""code":"bad_gateway""#), "{text}");
+    assert!(!text.contains(r#""code":"backend_unreachable""#), "{text}");
+}
+
+/// `Expect` is a comma-separated list (RFC 9110 §10.1.1), so the continue
+/// can arrive beside another expectation.
+#[tokio::test]
+async fn an_expectation_list_containing_continue_is_still_answered() {
+    for value in ["100-continue, foo", "foo, 100-continue", "foo,100-CONTINUE"] {
+        let backend = CountingBackend::new(OK_RESPONSE);
+        let (_, seen) = exchange(&expecting(value), &supplied(), &backend).await;
+        let text = String::from_utf8(seen).expect("ascii");
+        assert!(
+            text.starts_with("HTTP/1.1 100 Continue"),
+            "{value:?} asks for the continue: {text:?}"
+        );
+    }
+    // And the control: a list with no continue in it is still not answered.
+    for value in ["foo", "foo, bar", "100-continues"] {
+        let backend = CountingBackend::new(OK_RESPONSE);
+        let (_, seen) = exchange(&expecting(value), &supplied(), &backend).await;
+        let text = String::from_utf8(seen).expect("ascii");
+        assert!(!text.contains("100 Continue"), "{value:?}: {text:?}");
+    }
+}
