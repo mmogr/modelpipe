@@ -99,12 +99,6 @@ impl TcpBackend {
             // certificate for a loopback name or not verifying one at all.
             return Err(invalid());
         }
-        // `host_str` keeps an IPv6 literal's brackets, and nothing that
-        // resolves a host accepts them: neither `Ipv6Addr::from_str` nor
-        // `getaddrinfo` reads `[::1]`, so `http://[::1]:11434` — the
-        // canonical loopback, which `locality` classifies as `Loopback` and
-        // tests as such — was refused as "not a local address". The
-        // brackets belong to the URL syntax, not to the host.
         // A host and a port, and nothing after them. The request path comes
         // from the client and is forwarded verbatim, so anything written
         // here is silently discarded: `serve http://127.0.0.1:11434/v1`
@@ -119,6 +113,7 @@ impl TcpBackend {
         // read it, which is the class of disagreement `framing` exists to
         // refuse. A backend that needs a prefix is one the client should
         // ask for by path.
+        //
         // Userinfo goes with them, and for the same reason rather than a
         // different one: `http://user:pass@127.0.0.1:11434` parses, and this
         // crate has exactly one credential — the bearer token — with no
@@ -134,6 +129,13 @@ impl TcpBackend {
         {
             return Err(invalid());
         }
+
+        // `host_str` keeps an IPv6 literal's brackets, and nothing that
+        // resolves a host accepts them: neither `Ipv6Addr::from_str` nor
+        // `getaddrinfo` reads `[::1]`, so `http://[::1]:11434` — the
+        // canonical loopback, which `locality` classifies as `Loopback` and
+        // tests as such — was refused as "not a local address". The
+        // brackets belong to the URL syntax, not to the host.
         let host = parsed.host_str().ok_or_else(invalid)?;
         let host = host
             .strip_prefix('[')
