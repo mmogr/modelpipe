@@ -12,6 +12,7 @@
 //! connection. That counter is the point: a 401 proves the client was
 //! refused, and only the counter proves the backend never heard about it.
 
+use std::cell::RefCell;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
@@ -1201,4 +1202,394 @@ impl Backend for Deliberating {
     async fn connect(&self) -> std::io::Result<DuplexStream> {
         Ok(self.0.lock().await.take().expect("connected once"))
     }
+}
+
+// ── What the diagnostics say, and what they must never say ───────────────
+
+/// The credential, as a string no other part of this crate produces.
+///
+/// The fourth such sentinel here — `credential.rs`, `serve_tests.rs` and
+/// `api_surface.rs` each have their own — and distinct from all of them on
+/// purpose: a leak that turns up in a failure message should name the route
+/// it escaped through rather than leaving three candidates.
+const LOG_TOKEN: &str = "sk-zzq-tracing-sentinel";
+
+/// A second sentinel, in the query string.
+///
+/// Azure's OpenAI-compatible endpoints take `?api-key=`, so this is not a
+/// hypothetical shape: it is a real client putting a real credential in a
+/// real request target, and the edge forwards that target verbatim. What it
+/// must not do is repeat it in a log line.
+const LOG_QUERY: &str = "sk-zzq-query-sentinel";
+
+// Where a captured line goes, if anything on this thread is listening.
+//
+// `None` is the state every other test in this binary runs in: the
+// subscriber below is installed process-wide, and its writer throws the
+// bytes away unless a test has armed this buffer. That is deliberate on both
+// counts — it keeps the capture tests from reading each other's output, and
+// it means all two hundred-odd tests here exercise the instrumentation
+// rather than compiling past it.
+thread_local! {
+    static CAPTURED: RefCell<Option<Vec<u8>>> = const { RefCell::new(None) };
+}
+
+/// The writer behind the process-wide subscriber.
+#[derive(Clone, Copy)]
+struct Sink;
+
+impl std::io::Write for Sink {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        CAPTURED.with(|slot| {
+            if let Some(into) = slot.borrow_mut().as_mut() {
+                into.extend_from_slice(buf);
+            }
+        });
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+impl tracing_subscriber::fmt::MakeWriter<'_> for Sink {
+    type Writer = Self;
+
+    fn make_writer(&self) -> Self::Writer {
+        *self
+    }
+}
+
+/// Install the capturing subscriber once, for the whole test binary.
+///
+/// Global rather than attached per future, and that is a bug fix rather
+/// than a preference. `tracing` keeps a process-wide maximum level which a
+/// *scoped* subscriber raises on entry and drops again on exit; with these
+/// tests running concurrently, one test's teardown switched the span macro
+/// off in the middle of another's, and that one captured nothing at all.
+/// Deterministically, and only when run beside its neighbours — which is
+/// the shape of failure that reaches CI and not the developer.
+///
+/// The cost of a global is that "no subscriber at all" stops existing in
+/// this binary. That case is not untested, it is tested elsewhere:
+/// `tests/integration_pipe.rs` is a separate binary that installs nothing
+/// and drives this edge over a real pipe, end to end. (`tests/api_surface.rs`
+/// is a separate binary too, and also installs nothing, but it pins the
+/// exported surface at compile time and never runs an exchange — so it is
+/// not evidence for this and is not cited as such.)
+fn capturing() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(Sink)
+            .with_ansi(false)
+            // TRACE because these tests assert about `debug` lines as well
+            // as `info` ones, and the default maximum would silently drop
+            // half of what they check.
+            .with_max_level(tracing::Level::TRACE)
+            .finish();
+        tracing::subscriber::set_global_default(subscriber)
+            .expect("nothing else in this binary may install a subscriber");
+    });
+}
+
+/// Run one exchange with this thread's buffer armed, and hand back what was
+/// written to it.
+async fn logged(
+    request: &[u8],
+    policy: &TokenPolicy,
+    backend: &CountingBackend,
+) -> (Outcome, String) {
+    capturing();
+    CAPTURED.with(|slot| *slot.borrow_mut() = Some(Vec::new()));
+    // `#[tokio::test]` builds a current-thread runtime, so everything the
+    // exchange does — including the backend stub's spawned reader — runs on
+    // this thread and writes into this thread's buffer. A multi-threaded
+    // flavour here would capture whatever happened to stay put.
+    let (outcome, _) = exchange(request, policy, backend).await;
+    let written = CAPTURED
+        .with(|slot| slot.borrow_mut().take())
+        .expect("armed just above");
+    (outcome, String::from_utf8(written).expect("utf-8"))
+}
+
+/// A request carrying both sentinels: one in the credential, one in the
+/// query string.
+fn sensitive_get() -> Vec<u8> {
+    let mut req =
+        format!("GET /v1/models?api-key={LOG_QUERY} HTTP/1.1\r\nHost: 127.0.0.1:8080\r\n")
+            .into_bytes();
+    req.extend_from_slice(format!("Authorization: Bearer {LOG_TOKEN}\r\n").as_bytes());
+    req.extend_from_slice(b"\r\n");
+    req
+}
+
+/// The line an operator actually wants: what was asked for, what came back,
+/// and how long it took.
+#[tokio::test]
+async fn a_forwarded_exchange_reports_what_it_did() {
+    let backend = CountingBackend::new(OK_RESPONSE);
+    let (outcome, log) = logged(
+        &sensitive_get(),
+        &TokenPolicy::Supplied(LOG_TOKEN.to_owned()),
+        &backend,
+    )
+    .await;
+
+    assert_eq!(outcome, Outcome::Forwarded);
+    for field in [
+        "method=\"GET\"",
+        "path=\"/v1/models\"",
+        "status=200",
+        "outcome=\"forwarded\"",
+        "elapsed_ms=",
+    ] {
+        assert!(log.contains(field), "no {field} in:\n{log}");
+    }
+}
+
+/// The property the crate documentation states: no event carries a
+/// credential.
+///
+/// Both sentinels are in the request bytes — asserted below rather than
+/// assumed, because a test that looks for a secret the request never
+/// carried is a test that passes for the wrong reason and would go on
+/// passing after the redaction was removed.
+#[tokio::test]
+async fn no_line_repeats_the_credential_or_the_query_string() {
+    let request = sensitive_get();
+    let raw = String::from_utf8(request.clone()).unwrap();
+    assert!(raw.contains(LOG_TOKEN), "the request must carry the token");
+    assert!(raw.contains(LOG_QUERY), "the request must carry the query");
+
+    let backend = CountingBackend::new(OK_RESPONSE);
+    let (outcome, log) = logged(
+        &request,
+        &TokenPolicy::Supplied(LOG_TOKEN.to_owned()),
+        &backend,
+    )
+    .await;
+
+    assert_eq!(outcome, Outcome::Forwarded);
+    assert!(!log.contains(LOG_TOKEN), "the token is in the log:\n{log}");
+    assert!(!log.contains(LOG_QUERY), "the query is in the log:\n{log}");
+    // The positive half, so this cannot pass by the subscriber having
+    // captured nothing at all — which is the way a redaction test rots.
+    assert!(
+        log.contains("path=\"/v1/models\""),
+        "captured nothing:\n{log}"
+    );
+    assert!(
+        !log.contains("api-key"),
+        "even the parameter name is gone:\n{log}"
+    );
+}
+
+/// A refusal is reported as one, and is still attributable.
+///
+/// A 401 nobody can tie to a path tells an operator only that somebody,
+/// somewhere, was wrong — which is why the method and path are recorded
+/// before the credential is checked rather than after it.
+#[tokio::test]
+async fn a_refused_exchange_names_the_refusal_and_the_request() {
+    let backend = CountingBackend::new(OK_RESPONSE);
+    let (outcome, log) = logged(&sensitive_get(), &supplied(), &backend).await;
+
+    assert_eq!(outcome, Outcome::Unauthorized);
+    assert_eq!(backend.connects(), 0, "the backend must not be contacted");
+    for field in [
+        "outcome=\"unauthorized\"",
+        "method=\"GET\"",
+        "path=\"/v1/models\"",
+    ] {
+        assert!(log.contains(field), "no {field} in:\n{log}");
+    }
+    // A rejected credential is exactly as secret as an accepted one.
+    assert!(!log.contains(LOG_TOKEN), "the token is in the log:\n{log}");
+    assert!(!log.contains(LOG_QUERY), "the query is in the log:\n{log}");
+    // No status: nothing upstream ever answered, and an empty `status=`
+    // would be worse than its absence.
+    assert!(
+        !log.contains("status="),
+        "there was no upstream status:\n{log}"
+    );
+}
+
+/// Instrumentation changes what is *said* about an exchange and nothing
+/// about what it does.
+///
+/// What this proves is narrower than it looks, and the narrowness is the
+/// honest part: the subscriber is installed process-wide by `capturing`
+/// above, so both runs below have one — the difference is only whether this
+/// thread's buffer is armed. That still catches the mistake worth catching
+/// here, which is a recording or a field evaluation that changes the
+/// exchange under it.
+///
+/// The genuinely subscriber-free case is covered where it actually exists:
+/// `tests/integration_pipe.rs` is a separate binary that installs no
+/// subscriber and drives this edge over a live pipe, end to end.
+#[tokio::test]
+async fn an_exchange_is_unchanged_by_being_watched() {
+    let watched = CountingBackend::new(OK_RESPONSE);
+    let (with_capture, log) = logged(
+        &sensitive_get(),
+        &TokenPolicy::Supplied(LOG_TOKEN.to_owned()),
+        &watched,
+    )
+    .await;
+    assert!(
+        !log.is_empty(),
+        "the armed run must have captured something"
+    );
+
+    let unwatched = CountingBackend::new(OK_RESPONSE);
+    let (without, seen) = exchange(
+        &sensitive_get(),
+        &TokenPolicy::Supplied(LOG_TOKEN.to_owned()),
+        &unwatched,
+    )
+    .await;
+
+    assert_eq!(with_capture, without);
+    assert_eq!(watched.connects(), unwatched.connects());
+    assert!(String::from_utf8_lossy(&seen).starts_with("HTTP/1.1 200"));
+}
+
+/// A backend that answers with a head declaring more body than it sends.
+///
+/// The head is complete and correctly framed, so the edge forwards it to
+/// the client and starts on the body; the backend then closes with the body
+/// short. `body::forward_exact` turns that into `unexpected_eof`, which
+/// `run` propagates — and that is the one route to `serve_exchange`'s `Err`
+/// arm which is entirely the backend's doing, with the client still
+/// connected and owed nothing further.
+struct Truncating(Mutex<Option<DuplexStream>>);
+
+impl Truncating {
+    fn new() -> Self {
+        let (mine, mut theirs) = duplex(1024);
+        tokio::spawn(async move {
+            let mut buf = [0u8; 256];
+            let mut seen = Vec::new();
+            while !seen.windows(4).any(|w| w == b"\r\n\r\n") {
+                match theirs.read(&mut buf).await {
+                    Ok(0) | Err(_) => return,
+                    Ok(n) => seen.extend_from_slice(&buf[..n]),
+                }
+            }
+            let _ = theirs
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 10\r\n\r\nfive!")
+                .await;
+            let _ = theirs.flush().await;
+            drop(theirs);
+        });
+        Self(Mutex::new(Some(mine)))
+    }
+}
+
+impl Backend for Truncating {
+    type Stream = DuplexStream;
+
+    fn authority(&self) -> &'static str {
+        "127.0.0.1:11434"
+    }
+
+    async fn connect(&self) -> std::io::Result<DuplexStream> {
+        Ok(self.0.lock().await.take().expect("connected once"))
+    }
+}
+
+/// Drive one exchange to a transport failure, capturing what was logged.
+///
+/// Separate from [`logged`] because every other helper in this file
+/// `.expect()`s the `Result`: the `Err` arm is the one outcome none of them
+/// can reach, and it was the one arm nothing exercised.
+async fn logged_failure<B: Backend + Sync>(
+    request: &[u8],
+    backend: &B,
+) -> (std::io::Error, String) {
+    capturing();
+    CAPTURED.with(|slot| *slot.borrow_mut() = Some(Vec::new()));
+
+    let (mut client, mut edge) = duplex(64 * 1024);
+    client.write_all(request).await.unwrap();
+    let (credential, _) = Credential::new(&supplied()).expect("a usable token");
+    let error = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        serve_exchange(&mut edge, &credential, backend),
+    )
+    .await
+    .expect("the exchange must not hang")
+    .expect_err("this exchange must fail at the transport");
+
+    let written = CAPTURED
+        .with(|slot| slot.borrow_mut().take())
+        .expect("armed just above");
+    (error, String::from_utf8(written).expect("utf-8"))
+}
+
+/// The `Err` arm, and the counterexample to what it must not claim.
+///
+/// A comment here used to say an `Err` means "the local stream itself
+/// failing, the peer going away mid-exchange rather than anything the
+/// request did". This test is the case that is false for: the backend
+/// declared ten bytes, sent five and closed, and the client is still
+/// connected with a 200 head already in hand. Nothing about it is the
+/// peer's doing.
+#[tokio::test]
+async fn a_backend_that_under_delivers_its_body_is_reported_as_a_failure() {
+    let backend = Truncating::new();
+    let (error, log) = logged_failure(&get(Some(&format!("Bearer {TOKEN}"))), &backend).await;
+
+    assert_eq!(
+        error.kind(),
+        std::io::ErrorKind::UnexpectedEof,
+        "the body ended before its declared length: {error}"
+    );
+    assert!(
+        log.contains("exchange failed"),
+        "no failure line in:\n{log}"
+    );
+    // Still attributable, for the reason a refusal is: a failure nobody can
+    // tie to a request tells an operator only that something, somewhere,
+    // broke.
+    assert!(log.contains("method=\"GET\""), "unattributable:\n{log}");
+    assert!(
+        log.contains("status=200"),
+        "the backend's head did arrive, and the line should say so:\n{log}"
+    );
+}
+
+/// The recording order that `span.record("status", …)` sits above the
+/// response-framing check for.
+///
+/// A backend answering `200` and framing it ambiguously is refused. Without
+/// the status on the line, that refusal reads as a bare gateway failure and
+/// sends whoever is debugging it to the backend's logic; with it, the line
+/// says the backend replied fine and framed it in a way this edge will not
+/// resolve. The comment and the commit message both defended this ordering
+/// and nothing tested it.
+///
+/// Its negative control is `a_refused_exchange_names_the_refusal_and_the_request`,
+/// which asserts a 401 carries no `status=` at all — so this cannot pass by
+/// the field being present unconditionally.
+#[tokio::test]
+async fn a_refused_backend_response_still_reports_the_status_it_sent() {
+    let backend = CountingBackend::new(
+        b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nTransfer-Encoding: chunked\r\n\r\n{}",
+    );
+    let (outcome, log) = logged(
+        &get(Some(&format!("Bearer {TOKEN}"))),
+        &supplied(),
+        &backend,
+    )
+    .await;
+
+    assert_eq!(outcome, Outcome::BadGateway);
+    assert!(log.contains("outcome=\"bad_gateway\""), "{log}");
+    assert!(
+        log.contains("status=200"),
+        "the status it refused is missing:\n{log}"
+    );
 }

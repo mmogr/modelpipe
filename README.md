@@ -130,6 +130,41 @@ copyright holder, and this extraction is relicensed MIT by that copyright
 holder specifically so clients and other servers can embed it. gglib's
 licensing does not apply here.
 
+## Seeing what it is doing
+
+`-v` prints a line per request on the serve side: the method, the path, the
+status your backend gave, and how long it took. Once more (`-vv`) adds the
+transport, which is where the answer lives when two machines will not pair.
+
+```
+$ modelpipe serve http://127.0.0.1:11434 -v
+ticket: pipeaabjlod6a2h5g6lxw53tnnw7727qadq7iultzkz2xgd76bffp7r7uaibaadmaaacalemwagwxdija
+token:  L3TY477IP3LQNAJDNJDC2KHVQTWIE66ZNT3WJFL3ONUEBQUMIRFA
+status: direct
+2026-09-03T05:32:54.574788Z  INFO peer{peer=3ca82708b995 path="direct"}: peer connected
+2026-09-03T05:32:59.580759Z  INFO peer{peer=3ca82708b995 path="direct"}:exchange{method="GET" path="/v1/models" status=200}: exchange outcome="forwarded" elapsed_ms=1
+2026-09-03T05:32:59.588755Z  INFO peer{peer=3ca82708b995 path="direct"}:exchange{method="POST" path="/v1/chat/completions" status=200}: exchange outcome="forwarded" elapsed_ms=0
+```
+
+The first two lines are stdout; everything after them is stderr, which is
+what lets `modelpipe serve … | head -1` still give you just the ticket. Pass
+`-vv` and each line also names the crate it came from, because from there
+on iroh's lines are mixed in with modelpipe's.
+
+Without any `-v` you still hear about warnings, which is mostly an exchange
+that failed partway through — a backend that stopped mid-response, or a
+client that vanished.
+
+No line ever carries your token, your ticket, a header value, or a query
+string — the path is logged without its query precisely because a query
+string is somewhere clients put credentials. `RUST_LOG` replaces the flag
+entirely if you want to choose targets and levels yourself, and turns the
+crate-name column on while it is set.
+
+Embedding the library instead? It emits [`tracing`](https://docs.rs/tracing)
+events and installs no subscriber, so the events go wherever your binary
+already sends them, and nowhere if it sends them nowhere.
+
 ## What it contacts, and what it doesn't
 
 "No cloud in the path" is a claim about your **data**, and it is true: the

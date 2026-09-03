@@ -15,10 +15,12 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use iroh::Endpoint;
+use tracing::Instrument as _;
 
 use crate::backend::TcpBackend;
 use crate::credential::Credential;
 use crate::exchange;
+use crate::fingerprint;
 use crate::lifecycle::{Lifecycle, PeerPath, aggregate};
 use crate::peer;
 
@@ -120,8 +122,14 @@ pub(crate) async fn accept_loop(state: std::sync::Arc<ServeState>) {
             // A connection that fails to establish is not an event worth
             // reporting to the operator: the peer went away, or was never
             // speaking this protocol.
-            if let Ok(connection) = incoming.await {
-                serve_connection(state, connection).await;
+            match incoming.await {
+                Ok(connection) => serve_connection(state, connection).await,
+                // Below the default level deliberately. A UDP port that is
+                // reachable from the internet is a port that gets scanned,
+                // and every scan which speaks no QUIC lands exactly here —
+                // at `info` this would be the most frequent line in the
+                // log while saying nothing at all about this listener.
+                Err(error) => tracing::debug!(%error, "a connection never established"),
             }
         });
     }
@@ -138,8 +146,32 @@ async fn serve_connection(
     // starts relayed may hole-punch a moment later, and following that is
     // `paths_stream`'s job: a refinement rather than a correction, since
     // this snapshot is honest about the moment it was taken.
-    let peer = state.add_peer(peer::path_of(&connection));
+    let path = peer::path_of(&connection);
+    let peer = state.add_peer(path);
     let slots = std::sync::Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_STREAMS_PER_PEER));
+
+    // Named by the rule a ticket names itself by — see `crate::fingerprint`
+    // — so an operator reading this line can hold it against the ticket
+    // they handed out and see whether the device that turned up is the one
+    // they meant. The whole endpoint id would be ninety-six characters on
+    // every line; the public key it is a prefix of is not a secret either
+    // way.
+    //
+    // `info_span!` rather than `debug_span!`, and that is not a taste
+    // call: a span disabled by the filter contributes no fields, so at the
+    // default verbosity a `debug` span here would leave every exchange line
+    // unattributable — which is the one thing this span exists to prevent.
+    let span = tracing::info_span!(
+        "peer",
+        peer = %fingerprint::of(connection.remote_id().as_bytes()),
+        // A snapshot, honest about the moment it was taken, exactly as the
+        // status published above is. `PipeStatus::as_str` rather than a
+        // second spelling of the same two words, because the CLI already
+        // prints those and an operator should not have to learn two
+        // vocabularies for one fact.
+        path = aggregate(&[path]).as_str(),
+    );
+    span.in_scope(|| tracing::info!("peer connected"));
 
     loop {
         // Same rule one level down: teardown stops this peer being given
@@ -162,17 +194,27 @@ async fn serve_connection(
         // accept cannot observe zero in flight and return while this
         // exchange is starting.
         let guard = state.lifecycle.enter();
-        tokio::spawn(async move {
-            let _slot = slot;
-            let _guard = guard;
-            // `join` is what lets the edge stay generic: it never learns
-            // that these two halves came from QUIC.
-            let mut stream = tokio::io::join(recv, send);
-            let _ = exchange::serve_exchange(&mut stream, &state.credential, &state.backend).await;
-            deliver(stream).await;
-        });
+        // `.instrument`, not an `enter()`: the guard a synchronous enter
+        // returns is not `Send` across an await, and this task is spawned.
+        // Attaching the span to the future is also what makes the peer
+        // fields appear on the exchange's own line — a span entered here
+        // would not reach a task at all.
+        tokio::spawn(
+            async move {
+                let _slot = slot;
+                let _guard = guard;
+                // `join` is what lets the edge stay generic: it never learns
+                // that these two halves came from QUIC.
+                let mut stream = tokio::io::join(recv, send);
+                let _ =
+                    exchange::serve_exchange(&mut stream, &state.credential, &state.backend).await;
+                deliver(stream).await;
+            }
+            .instrument(span.clone()),
+        );
     }
 
+    span.in_scope(|| tracing::info!("peer disconnected"));
     state.remove_peer(peer);
 }
 
