@@ -1,7 +1,7 @@
-//! Tests for [`super`] — the connect side's URL rendering.
+//! Tests for [`super`] — the URL a client is handed.
 //!
-//! Split out via `#[path]` so `dialer.rs` stays inside the file-size
-//! budget, the same way every other module in the crate does it.
+//! Split out via `#[path]` so `connect_handle.rs` stays inside the
+//! file-size budget, the same way every other module in the crate does it.
 use super::*;
 
 /// A wildcard bind names no reachable host, so the URL must name one

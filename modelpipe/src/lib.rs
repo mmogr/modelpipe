@@ -37,6 +37,7 @@ mod http_head;
 mod lifecycle;
 mod listener;
 mod locality;
+mod peer;
 mod refusal;
 mod request_body;
 mod status;
