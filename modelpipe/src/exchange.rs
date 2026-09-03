@@ -16,9 +16,12 @@
 //! Every refusal *the client can cause* happens with the backend untouched.
 //! That is the difference between "returned 401" and "the backend never saw
 //! it", and only the second is what the README sells — so it is asserted
-//! with a connection counter rather than a status code. The one refusal
-//! written after contact is the 502, which by definition reports what
-//! happened at the backend and could not be produced before reaching it.
+//! with a connection counter rather than a status code. Two refusals are
+//! written after contact, and neither could have been produced before it:
+//! the 502, which by definition reports what happened at the backend, and
+//! the 400 for a request body that stopped short — a body can only fail
+//! once its head has already gone upstream, which is exactly why that
+//! refusal cannot be the `bad_request` the other client errors use.
 
 use std::future::Future;
 
@@ -26,10 +29,11 @@ use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 
 use crate::body::{self, Buffered};
 use crate::credential::Credential;
-use crate::framing::{self, Framing};
+use crate::framing;
 use crate::head_read;
 use crate::headers;
-use crate::http_head::{self, HeadError};
+use crate::http_head;
+use crate::request_body::{self, Carried};
 
 /// How long a peer may take to send a complete request head.
 ///
@@ -81,6 +85,17 @@ pub(crate) enum Outcome {
     /// cannot read. The client was told so; distinct from
     /// [`Forwarded`](Self::Forwarded) because nothing came back.
     BadGateway,
+    /// The request body stopped before its declared end — truncated, or
+    /// framed so this edge could not go on reading it — and the backend,
+    /// told by a half-close where it stopped, answered nothing this edge
+    /// could relay.
+    ///
+    /// Not [`BadRequest`](Self::BadRequest), which promises the backend was
+    /// never contacted: by the time a body can fail, its head is already
+    /// upstream. Not [`BadGateway`](Self::BadGateway) either — the backend
+    /// did nothing wrong, and reporting it there sends whoever is debugging
+    /// to the far side of a tunnel that was working.
+    Unfinished,
 }
 
 /// Serve one exchange on `stream`.
@@ -138,7 +153,7 @@ where
     };
 
     // Split so the request body and the response can be in flight at once.
-    // They have to be: see `pump_and_read`.
+    // They have to be: see [`crate::request_body`].
     let (mut up_read, mut up_write) = tokio::io::split(upstream);
     up_write
         .write_all(&http_head::serialize_request(&head, request_framing))
@@ -152,8 +167,11 @@ where
     //    finished.
     // A backend response this edge cannot read is a gateway failure, not a
     // client error, and is reported as one rather than passed through as
-    // though the client had erred.
-    let read = pump_and_read(
+    // though the client had erred. A body that stopped short is the mirror
+    // image — the client's failure, not the backend's — and the two are
+    // told apart in `request_body` rather than here, because only the code
+    // holding both streams can see which half gave out.
+    let carried = request_body::carry(
         stream,
         leftover,
         request_framing,
@@ -161,8 +179,14 @@ where
         &mut up_read,
     )
     .await;
-    let Ok((mut response, response_leftover)) = read? else {
-        return refuse(stream, refusal::bad_gateway(), Outcome::BadGateway).await;
+    let (mut response, response_leftover) = match carried {
+        Carried::Answered(response, rest) => (response, rest),
+        Carried::Unreadable => {
+            return refuse(stream, refusal::bad_gateway(), Outcome::BadGateway).await;
+        }
+        Carried::Unfinished => {
+            return refuse(stream, refusal::incomplete_request(), Outcome::Unfinished).await;
+        }
     };
     // The status and the method decide this before any header does, and an
     // ambiguously framed backend response is refused on the way out for the
@@ -198,60 +222,6 @@ where
     Ok(Outcome::Forwarded)
 }
 
-/// Forward the request body while watching for the response, and return the
-/// response head.
-///
-/// The two have to overlap, and the reason is not throughput. A backend may
-/// answer before it has finished reading — a `413` on an oversized payload,
-/// a `400` on bad JSON, a `429` — and then stop draining. Its close then
-/// arrives as an RST, because the receive queue is not empty, and an RST
-/// makes the kernel discard what it had already delivered. Written
-/// sequentially, this edge was still inside `write_all` at that moment: the
-/// write died with `ECONNRESET`, the error propagated, and the answer the
-/// backend had already sent was gone. The client got a cleanly closed
-/// stream with zero bytes in it — no status, no 502, nothing — for every
-/// request whose body outran the backend's socket buffer. Under it, the
-/// same request worked, so it presented as a size-dependent phantom.
-///
-/// The pump is polled first, so a backend that answers only after reading —
-/// every well-behaved one — behaves exactly as before and the response is
-/// read afterwards. When the head arrives first the pump is abandoned,
-/// which is correct: the backend has committed to an answer and the rest of
-/// the body cannot change it.
-///
-/// A pump failure is deliberately not propagated. It is the symptom this
-/// function exists for, and the response is the thing worth having.
-async fn pump_and_read<S, R, W>(
-    stream: &mut S,
-    leftover: Vec<u8>,
-    framing: Framing,
-    to_backend: &mut W,
-    from_backend: &mut R,
-) -> std::io::Result<Result<(http_head::ResponseHead, Vec<u8>), HeadError>>
-where
-    S: AsyncRead + Unpin,
-    R: AsyncRead + Unpin,
-    W: AsyncWrite + Unpin,
-{
-    let mut from_client = Buffered::new(stream, leftover);
-    let mut pump = std::pin::pin!(body::forward(&mut from_client, to_backend, framing));
-    let mut reading = std::pin::pin!(final_response(from_backend));
-    let mut pumping = true;
-    loop {
-        tokio::select! {
-            // Biased, and the pump first: a backend that reads before it
-            // answers must see the whole body, and on a buffered stream the
-            // pump completes before the response is ever polled.
-            biased;
-            outcome = &mut pump, if pumping => {
-                pumping = false;
-                let _ = outcome;
-            }
-            head = &mut reading => return head,
-        }
-    }
-}
-
 /// Write a locally synthesized response and return without touching the
 /// backend.
 async fn refuse<S: AsyncWrite + Unpin>(
@@ -262,34 +232,6 @@ async fn refuse<S: AsyncWrite + Unpin>(
     stream.write_all(&response).await?;
     stream.flush().await?;
     Ok(outcome)
-}
-
-/// The backend's *final* response head, with any interim ones skipped.
-///
-/// A `1xx` is a complete head that is not a response: the client asked for
-/// it (`Expect: 100-continue`) or the backend volunteered it, and the real
-/// answer is the next head on the stream. Returning the first head made the
-/// interim one the final one — and since a `1xx` carries neither
-/// `Content-Length` nor `Transfer-Encoding`, the framing that followed was
-/// `UntilClose`, so the client waited on a close a keep-alive backend never
-/// sends. An interim head arrived as a hang, not as a wrong status.
-///
-/// The bytes that came in with the interim head are the start of the head
-/// after it, which is why the reader takes a prefix.
-async fn final_response<S: AsyncRead + Unpin>(
-    stream: &mut S,
-) -> head_read::Read<http_head::ResponseHead> {
-    let mut prefix = Vec::new();
-    loop {
-        let head = head_read::response(stream, prefix).await?;
-        let Ok((response, rest)) = head else {
-            return Ok(head);
-        };
-        if !framing::is_interim(response.status) {
-            return Ok(Ok((response, rest)));
-        }
-        prefix = rest;
-    }
 }
 
 #[cfg(test)]

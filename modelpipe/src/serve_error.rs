@@ -58,15 +58,23 @@ pub enum ServeError {
         /// The offending URL, for the error message.
         url: String,
     },
-    /// [`TokenPolicy::Supplied`](crate::TokenPolicy::Supplied) carried a token that cannot be presented.
+    /// A token that cannot be presented — from
+    /// [`TokenPolicy::Supplied`](crate::TokenPolicy::Supplied) here, or from
+    /// [`ServeHandle::set_token`](crate::ServeHandle::set_token) on a
+    /// listener already running.
     ///
     /// Empty, or nothing but whitespace. Such a value fails *closed* — the
     /// enforced header becomes `"Bearer "` with a trailing space, and HTTP
     /// header parsers trim trailing whitespace, so no conforming client can
     /// ever match it. The listener would start, report the token it was
     /// given, and then refuse every request for the life of the process
-    /// with nothing in its output to say why. Refusing at `serve` time is
-    /// the difference between a misconfiguration and a mystery.
+    /// with nothing in its output to say why. Refusing is the difference
+    /// between a misconfiguration and a mystery.
+    ///
+    /// The two paths refuse the same value and differ in what survives it.
+    /// Here there is no listener yet, so there is nothing to keep;
+    /// at rotation there is, and it stays in force rather than being
+    /// replaced by a credential no client could send.
     ///
     /// Carries no payload on purpose: the offending value is a credential,
     /// and an error is a thing that gets logged.

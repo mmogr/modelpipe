@@ -161,8 +161,13 @@ impl Ticket {
         &self.addrs
     }
 
-    /// Short fingerprint of the serve side's identity, for `status`
-    /// output and eyeball comparison. Never the full key.
+    /// Short fingerprint of the serve side's identity: enough to compare
+    /// two tickets by eye, or to name one in a log line, without putting
+    /// ninety-six characters there. Never the full key.
+    ///
+    /// This is what [`Debug`](fmt::Debug) renders instead of the ticket
+    /// string, which is the reason it is not merely a convenience — see
+    /// that impl for why a ticket must not land in a panic message whole.
     pub fn fingerprint(&self) -> String {
         let mut out = String::with_capacity(FINGERPRINT_BYTES * 2);
         for byte in &self.endpoint_id[..FINGERPRINT_BYTES] {
