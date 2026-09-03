@@ -789,6 +789,21 @@ async fn a_connect_side_whose_peer_goes_away_reports_idle_rather_than_pretending
     .await
     .expect("request");
     assert!(refused.starts_with("HTTP/1.1 502"), "got: {refused}");
+    // *Which* 502, which the status line cannot say. The three share a
+    // status on purpose — a client's recovery is the same in each case —
+    // so the body is the only thing that tells a person whether to look at
+    // their model server or at the machine it runs on. This one is written
+    // on the client's own machine about a peer that is not there, and
+    // borrowing either sentence about a backend would name a component
+    // that is not in the picture.
+    assert!(
+        refused.contains(r#""code":"tunnel_unavailable""#),
+        "the connect side must say the tunnel is down, not blame a backend: {refused}"
+    );
+    assert!(
+        !refused.contains("backend"),
+        "there is no backend in this failure: {refused}"
+    );
     connected.shutdown().await;
 }
 
