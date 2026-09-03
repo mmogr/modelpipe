@@ -29,7 +29,21 @@ if ! command -v ruby >/dev/null 2>&1; then
   exit 0
 fi
 
-ruby -ryaml -e '
+ruby -ryaml -e '# encoding: utf-8
+#
+# Load-bearing, and the first line for a reason: ruby takes the encoding of
+# a -e script from the locale, so under LC_ALL=C or a bare POSIX default it
+# is US-ASCII and the two glyphs below are a SyntaxError before a single
+# workflow file is read. Setting -E utf-8 or RUBYOPT does not fix it: those
+# set the external and internal encodings, not the encoding of the script
+# itself. Measured — without this line,
+# `LC_ALL=C ./scripts/check_workflow_yaml.sh` dies with
+# "invalid multibyte char (US-ASCII)" and exits 1, so `make pre-commit`
+# fails on any machine whose locale is not already UTF-8. GitHub runners
+# set LANG=C.UTF-8, which is why this hid from CI.
+#
+# Note this whole script is a single-quoted shell string, so it must contain
+# no apostrophe anywhere.
 bad = 0
 Dir.glob(".github/workflows/*.yml").sort.each do |file|
   begin

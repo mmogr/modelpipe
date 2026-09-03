@@ -97,6 +97,33 @@ impl fmt::Debug for ServeOptions {
 /// [`Relayed`](crate::PipeStatus::Relayed). Only the death of the pipe is a
 /// status: [`PipeStatus::Closed`](crate::PipeStatus::Closed). Finer-grained states can be added
 /// compatibly later (`PipeStatus` is `#[non_exhaustive]`).
+///
+/// # Examples
+///
+/// [`ServeOptions`] is `#[non_exhaustive]`, so a struct literal will not
+/// compile outside this crate: start from `default()` and assign. That is
+/// the whole reason the type is shaped this way — a new option must not
+/// break you — and it is what every embedder ends up writing.
+///
+/// ```no_run
+/// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+/// let mut opts = modelpipe::ServeOptions::default();
+/// opts.auth = modelpipe::TokenPolicy::Supplied("sk-your-existing-key".to_owned());
+///
+/// let serving = modelpipe::serve("http://127.0.0.1:11434", opts).await?;
+///
+/// // Two credentials, printed separately because they travel separately.
+/// println!("ticket: {}", serving.ticket());
+/// println!("token:  {}", serving.token().expect("a token is enforced"));
+///
+/// serving.shutdown().await;
+/// # Ok(())
+/// # }
+/// ```
+///
+/// `no_run` throughout this crate: these compile, which is what proves the
+/// paths and the signatures, but running one would bind a real endpoint and
+/// contact a discovery service.
 pub async fn serve(backend_url: &str, opts: ServeOptions) -> Result<ServeHandle, ServeError> {
     // Order matters, and it is the order of what the operator can fix. The
     // relay value and the backend URL are theirs; binding an endpoint is the
