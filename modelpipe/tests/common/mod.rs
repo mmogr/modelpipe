@@ -222,6 +222,31 @@ pub(crate) async fn request(
     Ok(String::from_utf8_lossy(&seen).into_owned())
 }
 
+/// A path in a fresh temporary directory, removed when the guard drops.
+///
+/// Hand-rolled for the reason this whole file is: a fixture whose behaviour
+/// is written down is easier to reason about than one whose behaviour is
+/// configured, and this is a dozen lines over `std`.
+pub(crate) struct Scratch(std::path::PathBuf);
+
+impl Scratch {
+    pub(crate) fn new(name: &str) -> Self {
+        let dir = std::env::temp_dir().join(format!("modelpipe-it-{}-{name}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("a scratch directory");
+        Self(dir)
+    }
+
+    pub(crate) fn join(&self, file: &str) -> std::path::PathBuf {
+        self.0.join(file)
+    }
+}
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
 /// Wrap an await so a hung pipe fails the test rather than the suite.
 pub(crate) async fn within<F: Future>(why: &str, future: F) -> F::Output {
     tokio::time::timeout(std::time::Duration::from_secs(20), future)

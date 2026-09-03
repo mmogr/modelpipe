@@ -33,6 +33,7 @@ mod framing;
 mod head_read;
 mod headers;
 mod http_head;
+mod identity;
 mod lifecycle;
 mod listener;
 mod locality;
@@ -47,6 +48,7 @@ mod transport;
 mod connect;
 mod connect_handle;
 mod serve;
+mod serve_error;
 mod serve_handle;
 
 // This block is the public API. Everything above is a private module,
@@ -55,7 +57,8 @@ mod serve_handle;
 pub use connect::{ConnectError, ConnectOptions, connect};
 pub use connect_handle::ConnectHandle;
 pub use credential::TokenPolicy;
-pub use serve::{ServeError, ServeOptions, serve};
+pub use serve::{ServeOptions, serve};
+pub use serve_error::ServeError;
 pub use serve_handle::ServeHandle;
 pub use status::PipeStatus;
 pub use ticket::{Ticket, TicketParseError};

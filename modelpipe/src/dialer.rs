@@ -57,7 +57,9 @@ pub(crate) async fn dial(
     let local_addr = listener.local_addr().map_err(ConnectError::Bind)?;
 
     let addr = transport::addr_from(ticket)?;
-    let endpoint = transport::bind(None).await?;
+    // No stored key on this side: nothing dials *us*, so this endpoint's
+    // identity is never in anybody's ticket and has nothing to outlive.
+    let endpoint = transport::bind(None, None).await?;
 
     let connection = endpoint
         .connect(addr, transport::ALPN)

@@ -14,7 +14,7 @@ mod common;
 
 use std::time::Duration;
 
-use common::{MockBackend, request, within};
+use common::{MockBackend, Scratch, request, within};
 use modelpipe::{ConnectOptions, PipeStatus, ServeOptions, Ticket, TokenPolicy};
 
 const OK_BODY: &str = r#"{"object":"list","data":[]}"#;
@@ -605,4 +605,118 @@ async fn a_response_tells_the_client_not_to_reuse_the_connection() {
 
     connected.shutdown().await;
     serving.shutdown().await;
+}
+
+/// A listener restarted with a stored identity keeps the ticket it had.
+///
+/// The other half of the asymmetry, and the one that was not previously
+/// available at any price. `restarting_the_listener_mints_a_ticket_the_old
+/// _one_cannot_impersonate` above pins the default — a fresh key per
+/// process, so a restart re-pairs every device — and this pins the opt-out.
+///
+/// What is compared is the fingerprint, which is the identity and nothing
+/// else — the addresses beside it in a ticket are hints for avoiding the
+/// relay, and a restarted process holds a different UDP port regardless.
+/// It is a prefix rather than the whole key because that is what the public
+/// surface offers, and it is the value a person compares by eye for exactly
+/// this question; the full-key form of the claim is
+/// `the_same_key_binds_to_the_same_endpoint_and_a_different_one_does_not`
+/// in `transport_tests.rs`, where the bytes are reachable.
+///
+/// Reaching the restarted listener's *new port* with the old ticket is then
+/// iroh's discovery doing its job, over a network this suite deliberately
+/// does not require. The claim owned here is the one this crate can be
+/// wrong about: that the key comes back, and the ticket still names this
+/// listener.
+#[tokio::test]
+async fn a_listener_restarted_with_a_stored_identity_keeps_its_ticket() {
+    let backend = MockBackend::json(200, OK_BODY).await;
+    let scratch = Scratch::new("identity");
+    let key = scratch.join("key");
+
+    let mut first = ServeOptions::default();
+    first.identity = Some(key.clone());
+    let before = within(
+        "serve must bind",
+        Box::pin(modelpipe::serve(&backend.url, first)),
+    )
+    .await
+    .expect("serve");
+    let ticket_before = before.ticket();
+    before.shutdown().await;
+
+    let mut second = ServeOptions::default();
+    second.identity = Some(key.clone());
+    let after = within(
+        "the restarted listener must bind",
+        Box::pin(modelpipe::serve(&backend.url, second)),
+    )
+    .await
+    .expect("serve");
+    let ticket_after = after.ticket();
+
+    assert_eq!(
+        ticket_before.fingerprint(),
+        ticket_after.fingerprint(),
+        "a stored identity is what makes a ticket outlive the process"
+    );
+
+    after.shutdown().await;
+}
+
+/// The control, and the promise that the default has not quietly changed:
+/// without a stored identity the restarted listener is a different peer, as
+/// it has always been.
+#[tokio::test]
+async fn a_listener_restarted_without_one_is_a_different_peer_as_before() {
+    let backend = MockBackend::json(200, OK_BODY).await;
+
+    let before = within(
+        "serve must bind",
+        Box::pin(modelpipe::serve(&backend.url, ServeOptions::default())),
+    )
+    .await
+    .expect("serve");
+    let ticket_before = before.ticket();
+    before.shutdown().await;
+
+    let after = within(
+        "serve must bind again",
+        Box::pin(modelpipe::serve(&backend.url, ServeOptions::default())),
+    )
+    .await
+    .expect("serve");
+
+    assert_ne!(
+        ticket_before.fingerprint(),
+        after.ticket().fingerprint(),
+        "the default stays ephemeral, which is the revocation the README sells"
+    );
+
+    after.shutdown().await;
+}
+
+/// An identity file the operator cannot use stops the listener before it
+/// starts, rather than after — which would mean finding out as a ticket
+/// that is not the one they expected, on a listener already accepting.
+#[tokio::test]
+async fn an_unusable_identity_refuses_to_serve_at_all() {
+    let backend = MockBackend::json(200, OK_BODY).await;
+    let scratch = Scratch::new("bad-identity");
+    let key = scratch.join("key");
+    std::fs::write(&key, "not a key\n").expect("write");
+
+    let mut opts = ServeOptions::default();
+    opts.identity = Some(key);
+    let refused = within(
+        "serve must refuse rather than hang",
+        Box::pin(modelpipe::serve(&backend.url, opts)),
+    )
+    .await;
+
+    let Err(refused) = refused else {
+        panic!("an unusable identity must not start a listener");
+    };
+    assert!(!refused.is_retryable(), "the operator named this path");
+    assert_eq!(backend.accepts(), 0, "and nothing was served");
 }

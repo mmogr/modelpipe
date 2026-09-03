@@ -62,6 +62,14 @@ enum Command {
         /// Self-hosted relay URL (default: iroh public relays)
         #[arg(long)]
         relay: Option<String>,
+        /// Keep the endpoint key here so the ticket survives a restart
+        ///
+        /// Created on first use, readable only by you. Without it a fresh
+        /// key is generated per run, so every restart mints a new ticket
+        /// and every paired device has to be paired again. To revoke a
+        /// leaked ticket, delete this file and restart.
+        #[arg(long, value_name = "FILE")]
+        identity: Option<PathBuf>,
         /// Do not print a QR code for the ticket
         #[arg(long)]
         no_qr: bool,
@@ -203,6 +211,7 @@ async fn main() -> anyhow::Result<()> {
             token_file,
             allow_private_backend,
             relay,
+            identity,
             no_qr,
         } => {
             // Mutation rather than a struct literal: the options structs
@@ -213,6 +222,8 @@ async fn main() -> anyhow::Result<()> {
             opts.auth = token_policy(token, token_file, insecure_no_auth)?;
             opts.allow_private_backend = allow_private_backend;
             opts.relay = relay;
+            let ephemeral = identity.is_none();
+            opts.identity = identity;
 
             let mut handle = modelpipe::serve(&backend_url, opts).await?;
             let ticket = handle.ticket();
@@ -224,6 +235,17 @@ async fn main() -> anyhow::Result<()> {
                 None => eprintln!(
                     "WARNING: serving open — anyone holding the ticket can use your backend"
                 ),
+            }
+            if ephemeral {
+                // Printed every time rather than once, and to stderr so it
+                // never lands in whatever the ticket was piped into. The
+                // flag is the only thing standing between a paired laptop
+                // and being re-paired after every reboot, and a flag nobody
+                // hears about is a flag nobody uses.
+                eprintln!(
+                    "note: this ticket dies when serve restarts — \
+                     pass --identity <file> to keep it across restarts"
+                );
             }
             if !no_qr && let Some(code) = qr(&ticket) {
                 println!("\n{code}");
