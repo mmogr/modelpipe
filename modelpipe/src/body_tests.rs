@@ -115,6 +115,8 @@ async fn a_trailer_cannot_restate_a_header_the_head_strip_removes() {
                   X-Forwarded-For: 203.0.113.9\r\n\
                   Connection: keep-alive\r\n\
                   Transfer-Encoding: chunked\r\n\
+                  Content-Length: 99\r\n\
+                  Host: elsewhere.example\r\n\
                   X-Checksum: 1\r\n\r\n";
     let (_, out) = run(b"", input, Framing::Chunked).await.unwrap();
     let text = String::from_utf8(out).expect("ascii");
@@ -122,7 +124,19 @@ async fn a_trailer_cannot_restate_a_header_the_head_strip_removes() {
         !text.contains("203.0.113.9"),
         "a forwarding chain reached the far side through the trailers: {text}"
     );
-    for stripped in ["Connection:", "Transfer-Encoding:"] {
+    // `Content-Length` and `Host` are the two this test did not cover and
+    // the filter did not catch: neither is hop-by-hop and neither is a
+    // forwarding header, so `is_stripped` passed them straight through
+    // while the comment above the filter named `Content-Length` as an
+    // example of what it stopped. A second length arriving after the body,
+    // on a message already framed as chunked, is the framing confusion the
+    // whole strip exists to avoid creating.
+    for stripped in [
+        "Connection:",
+        "Transfer-Encoding:",
+        "Content-Length:",
+        "Host:",
+    ] {
         assert!(!text.contains(stripped), "{stripped} survived: {text}");
     }
     // The point is a filter, not a deletion: an ordinary trailer is still

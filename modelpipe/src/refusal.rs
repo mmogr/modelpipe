@@ -7,63 +7,142 @@
 //!
 //! For [`unauthorized`] and [`bad_request`] the stronger statement holds:
 //! at the point they are written the backend has not been contacted at all.
-//! [`bad_gateway`] and [`incomplete_request`] are the two deliberate
-//! exceptions, and both have to be. The first reports what happened *at*
-//! the backend, so it cannot be produced before reaching one. The second
-//! reports a request body that stopped short, and a body can only stop
-//! short after its head has already gone upstream — which is precisely why
-//! it is not [`bad_request`], whose promise it would break. Both are still
-//! synthesized here rather than relayed, which is what keeps them
-//! distinguishable from a status the backend itself sent.
+//! The three written *after* contact are the deliberate exceptions, and
+//! each has to be. [`bad_gateway`] and [`backend_unreachable`] report what
+//! happened at the backend, so neither can be produced before reaching for
+//! one. [`incomplete_request`] reports a request body that stopped short,
+//! and a body can only stop short after its head has already gone upstream
+//! — which is precisely why it is not [`bad_request`], whose promise it
+//! would break. [`tunnel_unavailable`] is the odd one out in a different
+//! way: it is written by the *connect* side, which never had a backend to
+//! reach. All five are still synthesized here rather than relayed, which
+//! is what keeps them distinguishable from a status the backend itself
+//! sent.
 //!
 //! Every one closes the connection. A stream carries exactly one exchange
 //! and a refused exchange is over.
+//!
+//! # Why there are three 502s
+//!
+//! There used to be one, and its sentence — "the backend sent a response
+//! this tunnel could not read" — was written at five call sites of which it
+//! described exactly one. A backend that was never reached sent no
+//! response; a tunnel with no peer has no backend at either end. Both said
+//! so anyway, which sends the reader to the wrong machine: to the model
+//! server, when the model server is fine and the far laptop is asleep.
+//!
+//! The status stays 502 for all three and [`Outcome`](crate::outcome::Outcome) stays
+//! one variant, because the client's *recovery* is the same in each case
+//! and that is what a status code is for. What differs is the sentence a
+//! person reads, and the `code` a program matches on.
+
+/// One refusal, in the shape they all share.
+///
+/// A status line, a JSON object naming a code a program can match and a
+/// message a person can read, a `Content-Length` that matches what was
+/// actually written, and `Connection: close`. Built in one place because
+/// six copies of that shape is six chances for a declared length to
+/// disagree with its body — which is the one mistake in this module that
+/// hangs a client rather than merely annoying it.
+///
+/// `message` and `code` are literals at every call site, so nothing here
+/// escapes them: there is no caller-supplied text in this module and the
+/// tests below assert every refusal is still parseable. Interpolating the
+/// backend's authority was considered and dropped — the client is on the
+/// other machine and cannot act on an address it does not own, while the
+/// serve side already logs it.
+fn refusal(status_line: &str, extra: &[&str], code: &str, message: &str) -> Vec<u8> {
+    let body = format!(r#"{{"error":{{"message":"{message}","code":"{code}"}}}}"#);
+    let mut out = Vec::new();
+    out.extend_from_slice(status_line.as_bytes());
+    out.extend_from_slice(b"\r\n");
+    for header in extra {
+        out.extend_from_slice(header.as_bytes());
+        out.extend_from_slice(b"\r\n");
+    }
+    out.extend_from_slice(b"Content-Type: application/json\r\n");
+    out.extend_from_slice(format!("Content-Length: {}\r\n", body.len()).as_bytes());
+    out.extend_from_slice(b"Connection: close\r\n\r\n");
+    out.extend_from_slice(body.as_bytes());
+    out
+}
 
 /// The 401 the edge writes itself.
 ///
 /// Synthesized locally and never forwarded: the backend has not been
 /// contacted at the point this is produced, so there is no upstream
-/// response for it to be confused with. `Connection: close` because this
-/// stream carries one exchange and it is over.
+/// response for it to be confused with.
 pub(crate) fn unauthorized() -> Vec<u8> {
-    let body =
-        br#"{"error":{"message":"invalid or missing bearer token","code":"invalid_api_key"}}"#;
-    let mut out = Vec::new();
-    out.extend_from_slice(b"HTTP/1.1 401 Unauthorized\r\n");
-    out.extend_from_slice(b"WWW-Authenticate: Bearer\r\n");
-    out.extend_from_slice(b"Content-Type: application/json\r\n");
-    out.extend_from_slice(format!("Content-Length: {}\r\n", body.len()).as_bytes());
-    out.extend_from_slice(b"Connection: close\r\n\r\n");
-    out.extend_from_slice(body);
-    out
+    refusal(
+        "HTTP/1.1 401 Unauthorized",
+        &["WWW-Authenticate: Bearer"],
+        "invalid_api_key",
+        "invalid or missing bearer token",
+    )
 }
 
 /// The 400 for a head this edge refuses to interpret.
 pub(crate) fn bad_request() -> Vec<u8> {
-    let body = br#"{"error":{"message":"malformed or ambiguous request","code":"bad_request"}}"#;
-    let mut out = Vec::new();
-    out.extend_from_slice(b"HTTP/1.1 400 Bad Request\r\n");
-    out.extend_from_slice(b"Content-Type: application/json\r\n");
-    out.extend_from_slice(format!("Content-Length: {}\r\n", body.len()).as_bytes());
-    out.extend_from_slice(b"Connection: close\r\n\r\n");
-    out.extend_from_slice(body);
-    out
+    refusal(
+        "HTTP/1.1 400 Bad Request",
+        &[],
+        "bad_request",
+        "malformed or ambiguous request",
+    )
 }
 
 /// The 502 for a backend whose response this edge cannot read.
+///
+/// The narrow case, and the only one the single old 502 described: a
+/// backend was reached, it answered, and the answer was something this edge
+/// will not resolve — ambiguous framing, an unreadable head, or nothing at
+/// all before the grace expired.
 ///
 /// Distinct from [`bad_request`] on purpose: the client did nothing wrong,
 /// and reporting a gateway failure as a client error would send whoever is
 /// debugging it to the wrong side of the tunnel.
 pub(crate) fn bad_gateway() -> Vec<u8> {
-    let body = br#"{"error":{"message":"the backend sent a response this tunnel could not read","code":"bad_gateway"}}"#;
-    let mut out = Vec::new();
-    out.extend_from_slice(b"HTTP/1.1 502 Bad Gateway\r\n");
-    out.extend_from_slice(b"Content-Type: application/json\r\n");
-    out.extend_from_slice(format!("Content-Length: {}\r\n", body.len()).as_bytes());
-    out.extend_from_slice(b"Connection: close\r\n\r\n");
-    out.extend_from_slice(body);
-    out
+    refusal(
+        "HTTP/1.1 502 Bad Gateway",
+        &[],
+        "bad_gateway",
+        "the backend sent a response this tunnel could not read",
+    )
+}
+
+/// The 502 for a backend that was never reached at all.
+///
+/// The most likely failure on a first run, and the one the old wording was
+/// worst for: the tunnel is up, the serving side is running, and the model
+/// server behind it is not — stopped, on a different port, or bound
+/// somewhere this listener may not dial. Saying "the backend sent a
+/// response" there is not merely imprecise, it is a claim about an event
+/// that did not happen, and it points at the one component that is working.
+pub(crate) fn backend_unreachable() -> Vec<u8> {
+    refusal(
+        "HTTP/1.1 502 Bad Gateway",
+        &[],
+        "backend_unreachable",
+        "the serving side could not reach its backend",
+    )
+}
+
+/// The 502 the *connect* side writes when it has no tunnel to use.
+///
+/// Nothing about this one involves a backend: the peer is away, or the
+/// connection to it has died and `keep_connected` is looking for a
+/// replacement. It is the only refusal in this module produced on the
+/// machine that does not have the models, which is exactly why it must not
+/// borrow either of the sentences above — the reader is sitting at the
+/// client, and what they need to know is that the *other* machine is not
+/// there.
+pub(crate) fn tunnel_unavailable() -> Vec<u8> {
+    refusal(
+        "HTTP/1.1 502 Bad Gateway",
+        &[],
+        "tunnel_unavailable",
+        "no tunnel to the serving side is connected right now",
+    )
 }
 
 /// The 400 for a request body that never arrived whole.
@@ -80,74 +159,14 @@ pub(crate) fn bad_gateway() -> Vec<u8> {
 /// means it hung up — but a body this edge could not go on *reading*, an
 /// unreadable chunk-size line, leaves it there and owed an answer.
 pub(crate) fn incomplete_request() -> Vec<u8> {
-    let body =
-        br#"{"error":{"message":"the request body did not arrive complete","code":"incomplete_request"}}"#;
-    let mut out = Vec::new();
-    out.extend_from_slice(b"HTTP/1.1 400 Bad Request\r\n");
-    out.extend_from_slice(b"Content-Type: application/json\r\n");
-    out.extend_from_slice(format!("Content-Length: {}\r\n", body.len()).as_bytes());
-    out.extend_from_slice(b"Connection: close\r\n\r\n");
-    out.extend_from_slice(body);
-    out
+    refusal(
+        "HTTP/1.1 400 Bad Request",
+        &[],
+        "incomplete_request",
+        "the request body did not arrive complete",
+    )
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::framing::{Framing, framing};
-    use crate::http_head::parse_response;
-
-    /// Each refusal must be a well-formed response whose declared length
-    /// matches the body actually written — a wrong length here would hang
-    /// the client waiting for bytes that never come.
-    #[test]
-    fn every_refusal_is_well_formed_and_declares_its_own_length() {
-        for (name, bytes, status) in [
-            ("unauthorized", unauthorized(), 401),
-            ("bad request", bad_request(), 400),
-            ("bad gateway", bad_gateway(), 502),
-            ("incomplete request", incomplete_request(), 400),
-        ] {
-            let (head, consumed) = parse_response(&bytes)
-                .unwrap_or_else(|e| panic!("{name} must parse: {e:?}"))
-                .unwrap_or_else(|| panic!("{name} must be complete"));
-            assert_eq!(head.status, status, "{name}");
-            assert_eq!(
-                framing(&head.headers, true),
-                Ok(Framing::Length((bytes.len() - consumed) as u64)),
-                "{name} declares the body it wrote"
-            );
-        }
-    }
-
-    /// A 401 that does not say how to authenticate is a 401 a client cannot
-    /// act on.
-    #[test]
-    fn the_unauthorized_response_advertises_the_scheme() {
-        let bytes = unauthorized();
-        let (head, _) = parse_response(&bytes).unwrap().unwrap();
-        assert!(
-            head.headers
-                .iter()
-                .any(|(n, v)| n.eq_ignore_ascii_case("www-authenticate") && v.contains("Bearer"))
-        );
-    }
-
-    /// A backend failure reported as a client error sends whoever is
-    /// debugging it to the wrong side of the tunnel.
-    #[test]
-    fn a_backend_failure_is_not_reported_as_a_client_error() {
-        let (head, _) = parse_response(&bad_gateway()).unwrap().unwrap();
-        assert!((500..600).contains(&head.status), "5xx, not 4xx");
-    }
-
-    /// The mirror of the test above, and the reason both exist: an upload
-    /// that stopped is the client's, so reporting it as a gateway failure
-    /// would send the same person to the same wrong side of the tunnel —
-    /// hunting a backend that was working the whole time.
-    #[test]
-    fn a_client_failure_is_not_reported_as_a_backend_error() {
-        let (head, _) = parse_response(&incomplete_request()).unwrap().unwrap();
-        assert!((400..500).contains(&head.status), "4xx, not 5xx");
-    }
-}
+#[path = "refusal_tests.rs"]
+mod refusal_tests;

@@ -238,6 +238,14 @@ async fn a_url_this_crate_cannot_use_is_not_reported_as_a_locality_verdict() {
         "https://127.0.0.1:11434",
         "http://",
         "ftp://127.0.0.1:11434",
+        // A path after the authority is silently discarded if it is
+        // accepted, so it is refused instead. Measured before this:
+        // `serve http://127.0.0.1:11434/v1/` started, printed a ticket, and
+        // dropped the `/v1/`.
+        "http://127.0.0.1:11434/v1",
+        "http://127.0.0.1:11434/v1/",
+        "http://127.0.0.1:11434?x=1",
+        "http://127.0.0.1:11434#frag",
     ] {
         match TcpBackend::new(url, false).await {
             Err(ServeError::InvalidBackendUrl { url: named }) => {
@@ -271,5 +279,37 @@ async fn a_host_that_resolves_to_nothing_is_retryable() {
             assert!(e.is_retryable(), "a resolver outage clears: {e}");
         }
         other => panic!("expected BackendUnresolvable, got {other:?}"),
+    }
+}
+
+/// The negative control for the path refusal: the two spellings that mean
+/// "no path" are still accepted.
+///
+/// `url` normalises an absent path to `/`, so a rule written as "the path
+/// must be empty" would refuse the ordinary `http://127.0.0.1:11434` and
+/// every URL a browser would produce from it.
+#[tokio::test]
+async fn a_backend_url_with_no_path_is_accepted_either_way_it_is_written() {
+    for url in ["http://127.0.0.1:11434", "http://127.0.0.1:11434/"] {
+        let backend = TcpBackend::new(url, false)
+            .await
+            .unwrap_or_else(|e| panic!("{url} must be usable: {e}"));
+        assert_eq!(backend.authority(), "127.0.0.1:11434");
+    }
+}
+
+/// The refusal must happen before the host is resolved.
+///
+/// `serve` states the ordering as a rule — everything the operator typed is
+/// checked before anything is opened — so a URL that is wrong in a way this
+/// crate can see must be reported as that, not after a DNS timeout naming
+/// something else. The host below has a reserved TLD and cannot resolve, so
+/// only a check that runs first can produce `InvalidBackendUrl`.
+#[tokio::test]
+async fn a_path_is_refused_before_the_host_is_resolved() {
+    let url = "http://nothing.invalid:11434/v1";
+    match TcpBackend::new(url, false).await {
+        Err(ServeError::InvalidBackendUrl { url: named }) => assert_eq!(named, url),
+        other => panic!("the path must be refused before resolving, got {other:?}"),
     }
 }

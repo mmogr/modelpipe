@@ -163,13 +163,19 @@ where
         if size == 0 {
             // Trailers, then the blank line that ends the body.
             //
-            // Filtered by the same rule the head is, because a trailer is a
-            // header field that arrives late and nothing else. Forwarding
-            // them verbatim let a peer restate anything the head strip had
-            // just removed — a client putting back its own
+            // Filtered by `headers::is_forbidden_in_trailer`, because a
+            // trailer is a header field that arrives late and nothing else.
+            // Forwarding them verbatim let a peer restate anything the head
+            // strip had just removed — a client putting back its own
             // `X-Forwarded-For`, a backend putting back `Connection` or a
             // second `Content-Length` — with the edge's own header rules
             // applied and then undone a few hundred bytes later.
+            //
+            // That list is wider than the head strip's on purpose, and the
+            // reason is the sentence above: this filter used to run on
+            // `is_stripped`, under which `Content-Length` is neither
+            // hop-by-hop nor a forwarding header, so the example this
+            // comment gives was one the code did not actually prevent.
             loop {
                 let trailer = src.read_line().await?;
                 if trailer.is_empty() {
@@ -228,9 +234,9 @@ fn find_crlf(buf: &[u8]) -> Option<usize> {
 /// one thing here and another downstream — the rule `http_head::collect`
 /// already applies to header values.
 fn dropped(line: &[u8]) -> bool {
-    line.iter()
-        .position(|&b| b == b':')
-        .is_none_or(|colon| std::str::from_utf8(&line[..colon]).is_ok_and(headers::is_stripped))
+    line.iter().position(|&b| b == b':').is_none_or(|colon| {
+        std::str::from_utf8(&line[..colon]).is_ok_and(headers::is_forbidden_in_trailer)
+    })
 }
 
 fn unexpected_eof() -> std::io::Error {

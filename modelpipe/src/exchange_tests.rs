@@ -1593,3 +1593,134 @@ async fn a_refused_backend_response_still_reports_the_status_it_sent() {
         "the status it refused is missing:\n{log}"
     );
 }
+
+// ── The expectation a client wants answered before it uploads ────────────
+
+/// A GET carrying an arbitrary `Expect` value, so the header is exercised
+/// without a body needing to exist.
+fn expecting(value: &str) -> Vec<u8> {
+    format!(
+        "GET /v1/models HTTP/1.1\r\nHost: 127.0.0.1:8080\r\n\
+         Authorization: Bearer {TOKEN}\r\nExpect: {value}\r\n\r\n"
+    )
+    .into_bytes()
+}
+
+/// The client asked to be told before sending its body, and is told.
+///
+/// Measured before this, with the real binary and a 2 MB POST that curl
+/// sends with `Expect` of its own accord: 1.015s through the pipe against
+/// 0.048s straight at the same backend. The whole second was curl waiting
+/// out its own timeout for an interim response that never came.
+#[tokio::test]
+async fn an_expectation_of_continue_is_answered_before_the_response() {
+    let backend = CountingBackend::new(OK_RESPONSE);
+    let (outcome, seen) = exchange(&expecting("100-continue"), &supplied(), &backend).await;
+
+    assert_eq!(outcome, Outcome::Forwarded);
+    let text = String::from_utf8(seen).expect("ascii");
+    assert!(
+        text.starts_with("HTTP/1.1 100 Continue\r\n\r\n"),
+        "the interim answer must come first: {text:?}"
+    );
+    // And it is interim, not final: the real response still follows it.
+    assert!(
+        text.contains("HTTP/1.1 200 OK"),
+        "the final response is still sent: {text:?}"
+    );
+}
+
+/// The negative control: a request that did not ask gets no interim answer.
+///
+/// Without this, always writing `100 Continue` would satisfy the test above
+/// while putting an unasked-for interim response in front of every single
+/// exchange — which a strict client is entitled to treat as a protocol
+/// error.
+#[tokio::test]
+async fn a_request_that_expects_nothing_gets_no_interim_response() {
+    let backend = CountingBackend::new(OK_RESPONSE);
+    let (outcome, seen) = exchange(
+        &get(Some(&format!("Bearer {TOKEN}"))),
+        &supplied(),
+        &backend,
+    )
+    .await;
+
+    assert_eq!(outcome, Outcome::Forwarded);
+    let text = String::from_utf8(seen).expect("ascii");
+    assert!(text.starts_with("HTTP/1.1 200"), "{text:?}");
+    assert!(!text.contains("100 Continue"), "{text:?}");
+}
+
+/// A refused request is refused, and the refusal is the first thing it sees.
+///
+/// The interim answer is written on the admitted path only. Getting this
+/// wrong would tell a client with a bad key to go ahead and upload, and
+/// then refuse it — which is the exact waste `Expect` exists to prevent,
+/// arranged by the party that was supposed to prevent it.
+#[tokio::test]
+async fn an_expectation_is_not_answered_for_a_request_that_is_refused() {
+    let backend = CountingBackend::new(OK_RESPONSE);
+    let (outcome, seen) = exchange(&expecting("100-continue"), &supplied(), &backend).await;
+    assert_eq!(outcome, Outcome::Forwarded, "the sanity case");
+
+    // Now the same request with no credential at all.
+    let refused = CountingBackend::new(OK_RESPONSE);
+    let mut req = expecting("100-continue");
+    req = String::from_utf8(req)
+        .unwrap()
+        .replace(&format!("Authorization: Bearer {TOKEN}\r\n"), "")
+        .into_bytes();
+    let (outcome, denied) = exchange(&req, &supplied(), &refused).await;
+
+    assert_eq!(outcome, Outcome::Unauthorized);
+    assert_eq!(refused.connects(), 0, "the backend was not contacted");
+    let text = String::from_utf8(denied).expect("ascii");
+    assert!(text.starts_with("HTTP/1.1 401"), "{text:?}");
+    assert!(!text.contains("100 Continue"), "{text:?}");
+    drop(seen);
+}
+
+/// Only the expectation this edge can meet is answered.
+///
+/// RFC 9110 §10.1.1 defines exactly one expectation and makes it a token,
+/// so the match is case-insensitive and nothing else matches. An
+/// expectation this edge does not know is left to the backend, which is the
+/// party that might be able to meet it.
+#[tokio::test]
+async fn the_expectation_is_matched_by_name_and_not_by_presence() {
+    for value in ["100-continue", "100-CONTINUE", "100-Continue"] {
+        let backend = CountingBackend::new(OK_RESPONSE);
+        let (_, seen) = exchange(&expecting(value), &supplied(), &backend).await;
+        let text = String::from_utf8(seen).expect("ascii");
+        assert!(text.starts_with("HTTP/1.1 100"), "{value}: {text:?}");
+    }
+    for value in ["200-ok", "something-else", ""] {
+        let backend = CountingBackend::new(OK_RESPONSE);
+        let (_, seen) = exchange(&expecting(value), &supplied(), &backend).await;
+        let text = String::from_utf8(seen).expect("ascii");
+        assert!(
+            !text.contains("100 Continue"),
+            "{value:?} is not an expectation this edge answers: {text:?}"
+        );
+    }
+}
+
+/// The backend's own interim response is still skipped, and now for a
+/// better reason than before: the client has already had one.
+#[tokio::test]
+async fn a_backend_interim_response_is_not_relayed_on_top_of_the_edge_s() {
+    let (outcome, seen) = against_keepalive(
+        &expecting("100-continue"),
+        "HTTP/1.1 100 Continue\r\n\r\nHTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}",
+    )
+    .await;
+
+    assert_eq!(outcome, Outcome::Forwarded);
+    assert_eq!(
+        seen.matches("100 Continue").count(),
+        1,
+        "exactly one interim response reaches the client: {seen:?}"
+    );
+    assert!(seen.contains("HTTP/1.1 200 OK"), "{seen:?}");
+}

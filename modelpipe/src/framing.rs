@@ -87,6 +87,16 @@ pub(crate) fn framing(
             return Err(HeadError::ConflictingFraming);
         }
     }
+    // Digits and nothing else, checked before parsing. RFC 9112 §6.2 makes
+    // a `Content-Length` `1*DIGIT`, and `u64::from_str` is more generous
+    // than that: it accepts a leading `+`, so `Content-Length: +5` framed a
+    // five-byte body here and was forwarded verbatim to a backend whose
+    // parser may well read it as no length at all. That is exactly the
+    // "two implementations could read this differently" shape this function
+    // exists to refuse, and refusing it costs one line.
+    if first.is_empty() || !first.bytes().all(|b| b.is_ascii_digit()) {
+        return Err(HeadError::ConflictingFraming);
+    }
     let length = first
         .parse::<u64>()
         .map_err(|_| HeadError::ConflictingFraming)?;

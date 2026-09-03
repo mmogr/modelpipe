@@ -176,6 +176,18 @@ pub(crate) fn path_only(target: &str) -> &str {
         .map_or(target, |(path, _)| path)
 }
 
+/// Whether a request asks to be told before it sends its body.
+///
+/// RFC 9110 §10.1.1: the expectation is a token, so it is matched without
+/// regard to case, and `100-continue` is the only one defined. Any other
+/// expectation is left alone here and travels to the backend, which is the
+/// party that can decide whether it can meet it.
+pub(crate) fn expects_continue(fields: &[(String, String)]) -> bool {
+    fields.iter().any(|(name, value)| {
+        name.eq_ignore_ascii_case("expect") && value.trim().eq_ignore_ascii_case("100-continue")
+    })
+}
+
 /// Apply the edge's header rules in the order they must happen.
 pub(crate) fn rewrite_for_backend(head: &mut RequestHead, authority: &str) {
     headers::strip_hop_by_hop(&mut head.headers);

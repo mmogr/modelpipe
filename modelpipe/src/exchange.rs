@@ -23,12 +23,11 @@
 //! once its head has already gone upstream, which is exactly why that
 //! refusal cannot be the `bad_request` the other client errors use.
 
-use std::future::Future;
-
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use tracing::Instrument as _;
 use tracing::field::Empty;
 
+use crate::backend::Backend;
 use crate::body::{self, Buffered};
 use crate::credential::Credential;
 use crate::framing;
@@ -52,23 +51,6 @@ use crate::request_body::{self, Carried};
 /// for many minutes, which is the whole product.
 const HEAD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 use crate::refusal;
-
-/// Where the serve side gets a connection to the backend.
-///
-/// A trait rather than a concrete socket so the tests can supply one that
-/// counts how often it is asked — and can therefore prove that a rejected
-/// request never asks at all.
-pub(crate) trait Backend {
-    /// The connection type. Not an iroh type and not necessarily a socket.
-    type Stream: AsyncRead + AsyncWrite + Unpin + Send;
-
-    /// What to put in the outbound `Host` header.
-    fn authority(&self) -> &str;
-
-    /// Open a connection. Called at most once per exchange, and never
-    /// before the credential has been checked.
-    fn connect(&self) -> impl Future<Output = std::io::Result<Self::Stream>> + Send;
-}
 
 /// Serve one exchange on `stream`, and say afterwards what it did.
 ///
@@ -180,13 +162,19 @@ where
 
     // 4. Admitted. Only now does a backend connection exist.
     let method = head.method.clone();
+    // Read before the rewrite, which is where the head stops being the
+    // client's.
+    let expects_continue = http_head::expects_continue(&head.headers);
     http_head::rewrite_for_backend(&mut head, backend.authority());
     // A backend that will not take the connection is a gateway failure with
     // an answer, not a stream that dies silently. Without this the client
     // received nothing at all — not a status, not a malformed response, no
     // bytes — for a backend that was simply down.
     let Ok(upstream) = backend.connect().await else {
-        return refuse(stream, refusal::bad_gateway(), Outcome::BadGateway).await;
+        // Never reached, so nothing was sent and nothing came back. The
+        // other two 502s in `refusal` describe events that did happen; this
+        // one is the absence of any.
+        return refuse(stream, refusal::backend_unreachable(), Outcome::BadGateway).await;
     };
 
     // Split so the request body and the response can be in flight at once.
@@ -196,6 +184,29 @@ where
         .write_all(&http_head::serialize_request(&head, request_framing))
         .await?;
     up_write.flush().await?;
+
+    // The client asked to be told before sending its body, and by here this
+    // edge has decided: the credential passed, the backend took the
+    // connection, and the head is upstream. Nothing left about the request
+    // can change that, so the interim answer is this edge's to give.
+    //
+    // Relaying the backend's own `100` instead would be the strict reading
+    // and the wrong one, because the edge already pushes the body without
+    // waiting for it — so the relay would arrive after the thing it was
+    // meant to unblock. Measured, the same 2 MB POST that curl sends with
+    // `Expect` (it adds the header itself over 1 MB): 1.015s through the
+    // pipe against 0.048s straight at the same backend. The whole second is
+    // curl waiting out its own timeout for a `100` that never came and then
+    // sending anyway.
+    //
+    // Written only on the admitted path, so a 401, a 400 or a 502 is still
+    // the *first* status the client sees. The backend's own interim head is
+    // still skipped by `request_body::final_response`, which is now correct
+    // rather than lossy: the client has already had its answer.
+    if expects_continue {
+        stream.write_all(b"HTTP/1.1 100 Continue\r\n\r\n").await?;
+        stream.flush().await?;
+    }
 
     // 5. The request body out and the response head back, together. The
     //    response is then forwarded frame by frame: `UntilClose` is the

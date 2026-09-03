@@ -106,6 +106,31 @@ pub(crate) fn is_stripped(name: &str) -> bool {
     HOP_BY_HOP.contains(&lower.as_str()) || FORWARDING.contains(&lower.as_str())
 }
 
+/// Whether a field name is one a *trailer* may not carry.
+///
+/// Everything [`is_stripped`] covers, plus [`NEVER_NOMINABLE`] — which is
+/// where `content-length` and `host` live, and which `is_stripped` does not
+/// consult. `body.rs` filtered trailers through `is_stripped` alone while
+/// the comment above that filter said a backend could not use one to put
+/// back "`Connection` or a second `Content-Length`". Half of that was true:
+/// `Connection` is hop-by-hop and was caught, `Content-Length` is neither
+/// hop-by-hop nor a forwarding header and sailed through.
+///
+/// The rule is RFC 9110 §6.5.1: a trailer may not carry a field that
+/// affects message framing, routing, authentication, or processing. These
+/// two lists are this crate's spelling of the first two, and a trailer
+/// restating either is the head strip undone a few hundred bytes later —
+/// on the one part of the message nothing else filters.
+///
+/// Still deliberately ignores `Connection` nominations, for the reason
+/// [`is_stripped`] gives: those describe the head they arrived with, and
+/// re-reading one here would hand a peer the message-rewriting lever
+/// [`NEVER_NOMINABLE`] exists to take away.
+pub(crate) fn is_forbidden_in_trailer(name: &str) -> bool {
+    let lower = name.trim().to_ascii_lowercase();
+    is_stripped(name) || NEVER_NOMINABLE.contains(&lower.as_str())
+}
+
 /// Remove any inbound description of a proxy chain, and add none.
 pub(crate) fn strip_inbound_forwarded(headers: &mut Vec<(String, String)>) {
     headers.retain(|(name, _)| {
