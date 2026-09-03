@@ -86,6 +86,13 @@ jobs:
       # runs none of it. Every gate ci.yml runs is repeated here, so a tag on
       # a commit CI never saw is still checked; the only piece not repeated
       # is the cross-OS matrix, which needs runners this job does not have.
+      #
+      # That sentence was false for a while, which is worth recording where
+      # somebody might otherwise trim the list back: `cargo check -p
+      # modelpipe --locked` and the package check were both missing, and the
+      # first has no substitute anywhere else in this file — every other
+      # build here unifies features across the workspace and therefore
+      # cannot see a feature the library uses without declaring.
       # (What binds the tag to a commit that actually PASSED ci.yml is the
       # ancestry check above plus branch protection on main, not this job —
       # and `--is-ancestor` accepts intermediate commits of a merged branch,
@@ -116,8 +123,36 @@ jobs:
       - name: Run the architecture gates
         run: make enforce
 
+      # Fails if Cargo.lock is stale or absent. Every cargo command below
+      # already passes `--locked`, so this catches nothing they would miss —
+      # it is here so the claim above is literally true rather than true in
+      # effect, and so the failure names the lockfile instead of arriving as
+      # a confusing clippy error.
+      - name: Lockfile guard
+        run: cargo metadata --locked --format-version 1 > /dev/null
+
       - name: Run clippy
         run: cargo clippy --all-targets --all-features --locked -- -D warnings
+
+      # The library on its OWN feature set. Every command either side of
+      # this one is `--workspace` or `--all-features`, and those unify
+      # features across members — so a feature the library uses but does not
+      # declare is supplied by modelpipe-cli and the gap stays invisible
+      # right up until somebody depends on `modelpipe` alone. ci.yml has run
+      # this since the day tokio's `rt` turned out to be arriving free from
+      # iroh; it was the one gate the header below claimed to repeat and did
+      # not, on the release that first publishes the library to strangers
+      # and where a wrong manifest cannot be fixed without a new version.
+      - name: Check the library builds on its own features
+        run: cargo check -p modelpipe --locked
+
+      # The publishable-metadata guard, also from ci.yml. `cargo publish
+      # --dry-run` below is a superset in practice, but it runs eleven steps
+      # later and this one costs seconds: a missing `version` on the path
+      # dependency should fail here, with a message about manifests, rather
+      # than inside a publish rehearsal.
+      - name: Check the crates still package
+        run: cargo package --workspace --no-verify --locked
 
       - name: Run tests
         run: cargo test --workspace --locked --no-fail-fast
@@ -143,6 +178,13 @@ jobs:
       # mode, which also fails if the two version sites in Cargo.toml have
       # drifted apart — the one incoherence caret semantics stop catching
       # after 0.1.0.
+      # Unconditional, unlike the tag comparison it feeds: the two version
+      # sites in Cargo.toml agreeing is a property of the tree, not of how
+      # this workflow was started, and a `workflow_dispatch` rehearsal that
+      # skipped it was not rehearsing the thing it exists to rehearse.
+      - name: Check the version sites agree
+        run: ./scripts/bump_version.py --check > /dev/null
+
       - name: Check tag matches the manifest version
         if: github.event_name == 'push'
         run: |
@@ -210,16 +252,42 @@ jobs:
       # is published last, so its presence means the whole publish landed.
       # (The narrower partial — library up, CLI not — needs a manual
       # `cargo publish -p modelpipe-cli --locked` from the tagged commit.)
+      #
+      # The User-Agent is not optional and this step did not send one.
+      # crates.io has required it since 2017 and answers a request without
+      # one with 403, which `curl -f` reports as failure — so this guard
+      # took the "not published" branch every single time, including the
+      # one run it exists for. Measured from a machine with no
+      # authentication: /api/v1/crates/serde/1.0.0 answers 403 bare and 200
+      # with any UA at all; a version that genuinely does not exist answers
+      # 404. A guard that cannot distinguish those is not a guard.
+      #
+      # Anything other than 200 or 404 is now a failure rather than a
+      # "no", because the whole point is to be certain before an upload
+      # that cannot be taken back: a rate-limit or an outage must stop the
+      # job, not read as permission to publish again.
       - name: Check whether this version is already published
         id: published
+        env:
+          UA: "modelpipe-release (+https://github.com/mmogr/modelpipe)"
         run: |
           version="${GITHUB_REF_NAME#v}"
-          if curl -fsSL "https://crates.io/api/v1/crates/modelpipe-cli/${version}" > /dev/null 2>&1; then
-            echo "already=true" >> "$GITHUB_OUTPUT"
-            echo "modelpipe-cli ${version} is already on crates.io — skipping publish"
-          else
-            echo "already=false" >> "$GITHUB_OUTPUT"
-          fi
+          url="https://crates.io/api/v1/crates/modelpipe-cli/${version}"
+          code="$(curl -sS -o /dev/null -w '%{http_code}' -A "$UA" "$url")"
+          case "$code" in
+            200)
+              echo "already=true" >> "$GITHUB_OUTPUT"
+              echo "modelpipe-cli ${version} is already on crates.io — skipping publish"
+              ;;
+            404)
+              echo "already=false" >> "$GITHUB_OUTPUT"
+              echo "modelpipe-cli ${version} is not on crates.io yet"
+              ;;
+            *)
+              echo "::error::crates.io answered ${code} for ${url}; refusing to guess whether ${version} is published"
+              exit 1
+              ;;
+          esac
 
       # One command for both crates. cargo publishes them in dependency order
       # (library first) and waits for each to appear in the index before the
