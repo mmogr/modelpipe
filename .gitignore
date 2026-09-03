@@ -45,3 +45,6 @@ AGENTS.md
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# Python bytecode from running scripts/ticket_vectors.py by hand.
+__pycache__/
