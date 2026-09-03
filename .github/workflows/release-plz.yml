@@ -26,8 +26,24 @@ jobs:
   release-plz-release:
     name: Release-plz release
     runs-on: ubuntu-latest
-    # Forks have no business releasing (and no RELEASE_PAT to do it with).
-    if: github.repository_owner == 'mmogr'
+    # PAUSED until 0.1.0 is ready to cut. Delete this `false &&` to re-arm.
+    #
+    # This is the job that pushes the tag, and the tag is what starts
+    # release.yml and, past one environment approval, publishes to crates.io
+    # for ever. Nothing is on crates.io yet, so release-plz has no published
+    # version to compare against and proposes releasing the manifest as it
+    # stands — which is `v0.0.1`, a number nobody wants, in a tree that is
+    # not finished. Its release PR is regenerated on every push to main, so
+    # closing it does not help; it is the tag that has to be unavailable.
+    #
+    # `release-plz-pr` below stays on deliberately. A release PR that cannot
+    # tag is harmless, and it goes on accruing the changelog that the real
+    # release will want.
+    #
+    # Re-arming is step one of cutting 0.1.0, after the version bump lands:
+    # remove `false &&`, confirm the release PR now says `v0.1.0`, and merge
+    # that.
+    if: false && github.repository_owner == 'mmogr'
     permissions:
       # Push the tag.
       contents: write
