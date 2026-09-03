@@ -46,7 +46,13 @@ pub(crate) fn framing(
     let mut lengths = fields
         .iter()
         .filter(|(name, _)| name.eq_ignore_ascii_case("content-length"))
-        .map(|(_, value)| value.trim());
+        // OWS is SP and HTAB, per RFC 9110 §5.6.3 — not `str::trim`, which
+        // also removes Unicode whitespace. A value of NBSP followed by `5`
+        // trimmed to `5` here and was forwarded with the NBSP intact, so
+        // this edge framed a five-byte body from a value the next hop reads
+        // differently or refuses outright. The digits check below is only
+        // worth having if it sees what actually goes on the wire.
+        .map(|(_, value)| value.trim_matches([' ', '\t']));
     let mut codings = fields
         .iter()
         .filter(|(name, _)| name.eq_ignore_ascii_case("transfer-encoding"))

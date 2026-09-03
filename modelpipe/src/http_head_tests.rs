@@ -399,3 +399,30 @@ fn an_ordinary_content_length_is_still_a_length() {
         );
     }
 }
+
+/// Field values are trimmed of OWS, which RFC 9110 §5.6.3 defines as SP and
+/// HTAB — not of Unicode whitespace, which `str::trim` also removes.
+///
+/// The header goes to the backend verbatim, so a value this edge trims more
+/// aggressively than the next hop is a value the two read differently: a
+/// no-break space before the digits was trimmed away here, framed a body,
+/// and travelled on with the space still in it.
+#[test]
+fn a_content_length_is_trimmed_of_http_whitespace_and_no_more() {
+    // SP and HTAB are OWS and are trimmed.
+    for value in [" 42", "42 ", "\t42\t", "  42  "] {
+        assert_eq!(
+            framing(&fields(&[("Content-Length", value)]), false),
+            Ok(Framing::Length(42)),
+            "{value:?} is 42 surrounded by OWS"
+        );
+    }
+    // Everything else is part of the value, and the value must be digits.
+    for value in ["\u{a0}42", "42\u{a0}", "\u{2007}42", "\n42", "\r42"] {
+        assert_eq!(
+            framing(&fields(&[("Content-Length", value)]), false),
+            Err(HeadError::ConflictingFraming),
+            "{value:?} is not a length this edge and the next hop agree on"
+        );
+    }
+}

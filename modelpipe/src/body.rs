@@ -154,6 +154,15 @@ where
         let size_text = std::str::from_utf8(size_text)
             .map_err(|_| std::io::Error::other("chunk size is not ASCII"))?
             .trim();
+        // Hex digits and nothing else. `from_str_radix` accepts a leading
+        // `+` and RFC 9112 §7.1 makes a chunk-size `1*HEXDIG`, so `+a`
+        // framed a ten-byte chunk here while the line was forwarded
+        // verbatim for the next hop to read its own way — the same
+        // disagreement `framing` refuses in a `Content-Length`, on the
+        // other half of the same job.
+        if size_text.is_empty() || !size_text.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return Err(std::io::Error::other("chunk size is not hexadecimal"));
+        }
         let size = u64::from_str_radix(size_text, 16)
             .map_err(|_| std::io::Error::other("chunk size is not hexadecimal"))?;
 
@@ -233,7 +242,21 @@ fn find_crlf(buf: &[u8]) -> Option<usize> {
 /// passing bytes onward that this edge could not read is how a value means
 /// one thing here and another downstream — the rule `http_head::collect`
 /// already applies to header values.
+///
+/// A line carrying a bare CR or LF is dropped for that same reason, and it
+/// is the one that matters. [`Buffered::read_line`] ends a line at CRLF, so
+/// a lone LF is not a line ending *here* — but it is to plenty of
+/// recipients, and the name check below reads only as far as the first
+/// colon. `X-Ok: 1\nContent-Length: 99` is therefore one line to this edge,
+/// filtered on `X-Ok`, and two fields to whoever reads it next, the second
+/// of which nothing filtered. That is the whole shape of request smuggling,
+/// arriving through the one part of the message the head strip does not
+/// see, so it is refused rather than resolved — the same call
+/// [`crate::framing`] makes about a message framed two ways at once.
 fn dropped(line: &[u8]) -> bool {
+    if line.contains(&b'\n') || line.contains(&b'\r') {
+        return true;
+    }
     line.iter().position(|&b| b == b':').is_none_or(|colon| {
         std::str::from_utf8(&line[..colon]).is_ok_and(headers::is_forbidden_in_trailer)
     })

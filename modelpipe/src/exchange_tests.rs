@@ -21,7 +21,7 @@ use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 
 use super::*;
-use crate::credential::TokenPolicy;
+use crate::token_policy::TokenPolicy;
 
 const TOKEN: &str = "sk-zzq-the-credential";
 const OK_RESPONSE: &[u8] =
