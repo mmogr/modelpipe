@@ -58,7 +58,7 @@ impl ConnectHandle {
         base_url(self.state.local_addr)
     }
 
-    /// Current transport status, for `status` output.
+    /// How this side is currently reaching the peer.
     pub fn status(&self) -> PipeStatus {
         self.state.lifecycle.status()
     }
