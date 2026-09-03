@@ -12,7 +12,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::listener::{self, ServeState};
-use crate::serve::ServeError;
+use crate::serve_error::ServeError;
 use crate::status::PipeStatus;
 use crate::ticket::Ticket;
 use crate::transport;

@@ -45,10 +45,27 @@ tunnel, not a policy layer: it forwards every path. On Ollama that includes
 backend allows, not merely run inference. This inverts the usual framing of
 "put a key in front of it" — the key is total.
 
-**A leaked ticket has no expiry and no revocation list.** It works until the
-serve process restarts, and restarting is the only revocation. Treat tickets
-like keys, not like invitations. (The token, separately, rotates in place
-without re-pairing.)
+**A leaked ticket has no expiry and no revocation list.** By default it
+works until the serve process restarts, and restarting is the only
+revocation. Treat tickets like keys, not like invitations. (The token,
+separately, rotates in place without re-pairing.)
+
+**`--identity` trades that away deliberately, and you should know which
+half.** With a stored endpoint key the ticket survives a restart — which is
+the point, and is also true of a *leaked* ticket. Revocation becomes
+deleting the identity file and restarting, which costs exactly what
+restarting cost before: a re-pairing of every device. What it removes is
+revocation happening by *accident*, which is what a reboot used to be.
+
+What it adds is a secret on disk, where there was none. modelpipe creates
+the file readable only by its owner and refuses to start on one others can
+read — the check `ssh` makes on a private key — but that is a floor, not a
+guarantee: backups, sync clients, shared home directories and container
+images all copy files that mode bits do not stop. **On Windows there is no
+mode to set or inspect**, so the file lands with whatever the directory
+grants and this crate cannot narrow it; put it somewhere only you can read.
+Why the flag exists and why it is off by default is
+[ADR 0002](docs/adr/0002-a-stored-endpoint-key-opt-in.md).
 
 **A malicious connect side.** Anyone you give a ticket and token to has the
 access above. There is no per-client scoping, quota or audit.

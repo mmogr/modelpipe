@@ -73,7 +73,10 @@ impl Peer {
     /// is the reconnect loop's, and those are retried rather than reported.
     pub(crate) async fn dial(ticket: &Ticket) -> Result<Self, ConnectError> {
         let addr = transport::addr_from(ticket)?;
-        let endpoint = transport::bind(None).await?;
+        // No stored key on this side: nothing dials *us*, so this
+        // endpoint's identity is never in anybody's ticket and has nothing
+        // to outlive. The serve side's `--identity` is the mirror of this.
+        let endpoint = transport::bind(None, None).await?;
         let connection = endpoint
             .connect(addr.clone(), transport::ALPN)
             .await

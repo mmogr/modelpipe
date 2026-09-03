@@ -34,37 +34,3 @@ fn debug_for_serve_options_never_renders_the_supplied_token() {
         "the non-secret fields should still be visible: {rendered}"
     );
 }
-
-/// Both are the operator's to fix, and no amount of waiting changes
-/// either one.
-#[test]
-fn a_user_fixable_serve_error_is_not_retryable() {
-    for e in [
-        ServeError::InvalidBackendUrl {
-            url: "https://127.0.0.1:11434".to_owned(),
-        },
-        ServeError::InvalidToken,
-        ServeError::BackendNotLocal {
-            url: "http://example.com".to_owned(),
-        },
-        ServeError::InvalidRelay {
-            url: "not a url".to_owned(),
-        },
-    ] {
-        assert!(!e.is_retryable(), "{e} should not be retryable");
-    }
-}
-
-/// `serve` takes no bind option, so nothing here names an address the
-/// caller chose — a failure describes the machine underneath.
-#[test]
-fn a_machine_serve_error_is_retryable() {
-    for e in [
-        ServeError::Bind(std::io::Error::other("no sockets left")),
-        ServeError::BackendUnresolvable {
-            url: "http://ollama.local:11434".to_owned(),
-        },
-    ] {
-        assert!(e.is_retryable(), "{e} should be retryable");
-    }
-}

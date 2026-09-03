@@ -59,7 +59,11 @@ token is deliberately *not* inside the ticket — a leaked ticket alone
 cannot make a request, and a leaked token alone cannot reach the listener.
 Rotation is asymmetric on purpose: restarting the listener rotates the
 ticket (and re-pairs everyone), while the token rotates in place with no
-re-pairing (`ServeHandle::rotate_token`). Embedding modelpipe behind an
+re-pairing (`ServeHandle::rotate_token`). If re-pairing every device on
+every reboot is the wrong trade for you, `--identity <file>` stores the
+endpoint key so the ticket survives a restart — and revocation becomes
+deleting that file. The trade is real in both directions and is spelled out
+in [ADR 0002](docs/adr/0002-a-stored-endpoint-key-opt-in.md). Embedding modelpipe behind an
 auth layer you already have? `serve` accepts a supplied token
 (`TokenPolicy::Supplied`) so your existing API key is enforced at the
 tunnel edge too — one credential, checked before a byte reaches the
