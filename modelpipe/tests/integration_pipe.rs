@@ -16,6 +16,7 @@ use std::time::Duration;
 
 use common::{MockBackend, request, within};
 use modelpipe::{ConnectOptions, PipeStatus, ServeOptions, Ticket, TokenPolicy};
+use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 
 const OK_BODY: &str = r#"{"object":"list","data":[]}"#;
 
@@ -605,4 +606,73 @@ async fn a_response_tells_the_client_not_to_reuse_the_connection() {
 
     connected.shutdown().await;
     serving.shutdown().await;
+}
+
+/// An upload that stops mid-body must not hold the drain open.
+///
+/// The unit tests pin the answer the edge gives; this pins the consequence
+/// that made it a release blocker. A wedged exchange never releases its
+/// in-flight guard, and `shutdown` waits on precisely that — so one aborted
+/// upload made the first Ctrl-C on `modelpipe serve` hang while the second
+/// cut the pipe, taking every other request with it.
+///
+/// Measured, before the two halves were told apart: still running at twenty
+/// seconds, against one second for the same shutdown with only ordinary
+/// traffic in flight. Its negative control is
+/// `a_serve_shutdown_lets_an_admitted_request_finish` above — that one
+/// proves the drain still waits for work genuinely in progress, so this one
+/// cannot pass by `shutdown` having been reduced to a cut.
+#[tokio::test]
+async fn an_aborted_upload_does_not_wedge_the_serve_side_drain() {
+    let backend = MockBackend::reads_whole_body(
+        "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}",
+    )
+    .await;
+    let (serving, connected, url) = paired(&backend, TokenPolicy::Generate).await;
+    let authority = url
+        .trim_start_matches("http://")
+        .trim_end_matches("/v1")
+        .to_owned();
+
+    let mut socket = tokio::net::TcpStream::connect(&authority)
+        .await
+        .expect("a client");
+    let request = format!(
+        "POST /v1/chat/completions HTTP/1.1\r\nHost: {authority}\r\n\
+         Authorization: {}\r\nContent-Length: 1000\r\n\r\n{{\"model\":\"",
+        bearer(&serving)
+    );
+    socket
+        .write_all(request.as_bytes())
+        .await
+        .expect("the head and a tenth of the body");
+    socket.flush().await.expect("flush");
+    // Half-close, not a full one: the upload is over and the client is
+    // still listening, which is what an interrupted `curl -d @file` leaves
+    // behind.
+    socket.shutdown().await.expect("half-close");
+
+    let reader = tokio::spawn(async move {
+        let mut seen = Vec::new();
+        let _ = socket.read_to_end(&mut seen).await;
+        String::from_utf8_lossy(&seen).into_owned()
+    });
+    // Long enough for the exchange to be admitted and registered in flight,
+    // which is what makes this a test of the drain rather than of an empty
+    // one.
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    within(
+        "an aborted upload must not hold the serve-side drain open",
+        serving.shutdown(),
+    )
+    .await;
+
+    let seen = reader.await.expect("the reader task");
+    assert!(
+        seen.starts_with("HTTP/1.1 400"),
+        "and the client is told, rather than left with an empty stream: {seen}"
+    );
+
+    connected.shutdown().await;
 }
