@@ -16,6 +16,22 @@
 //! is a secret on disk, and that is the real cost: there was nothing to
 //! steal before and now there is.
 //!
+//! **A durable ticket is not the same as a reachable one**, and the gap is
+//! worth naming here because this module is where people will look. The key
+//! fixes the *name* in a ticket; the addresses beside it are a snapshot,
+//! and a restarted process holds a different UDP port. Closing that gap is
+//! discovery's job — by default n0's, which the README's disclosure section
+//! covers — so a peer whose address has changed is found by resolving the
+//! endpoint id, not by the ticket alone.
+//!
+//! Measured, on a host with n0's DNS blocked: a listener restarted with the
+//! same identity minted the same ticket, a *fresh* ticket from it paired
+//! and served, and the *old* ticket could not reach it at all. Nothing was
+//! wrong with the key. Somewhere with discovery reachable the old ticket
+//! resolves the same id to the new address, which is the whole design; this
+//! is only a note that the two halves are separate, and that switching off
+//! the one this crate does not control takes the other with it.
+//!
 //! Pure of iroh, deliberately. This hands back thirty-two bytes and
 //! [`crate::transport`] is where they become a key, so the whole of the
 //! file handling — the format, the permissions, the refusals — is

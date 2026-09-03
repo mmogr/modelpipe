@@ -111,6 +111,16 @@ restart is exactly the same thing as a *leaked* ticket surviving a restart.
 The convenience and the exposure are one property, not two, and the flag
 buys both.
 
+**And a durable ticket is not automatically a reachable one.** The key fixes
+the name in the ticket; the addresses beside it are a snapshot, and a
+restarted process holds a different UDP port. Resolving the name to the new
+address is discovery's job — n0's by default, as `README.md` discloses — so
+this flag and that disclosure are the same subject seen twice. Measured on a
+host with n0's DNS blocked: the restarted listener minted the identical
+ticket, a fresh ticket from it served fine, and the old one could not reach
+it. Nothing was wrong with the key, and nothing here can substitute for
+discovery.
+
 ## Change criteria
 
 - **The default is wrong.** If the ephemeral default turns out to be
