@@ -63,11 +63,27 @@ re-pairing (`ServeHandle::rotate_token`). If re-pairing every device on
 every reboot is the wrong trade for you, `--identity <file>` stores the
 endpoint key so the ticket survives a restart — and revocation becomes
 deleting that file. The trade is real in both directions and is spelled out
-in [ADR 0002](docs/adr/0002-a-stored-endpoint-key-opt-in.md). Embedding modelpipe behind an
-auth layer you already have? `serve` accepts a supplied token
-(`TokenPolicy::Supplied`) so your existing API key is enforced at the
-tunnel edge too — one credential, checked before a byte reaches the
-backend, rotated on your schedule (`ServeHandle::set_token`). One honest caveat for v0: a
+in [ADR 0002](docs/adr/0002-a-stored-endpoint-key-opt-in.md).
+
+**A durable ticket is not automatically a reachable one**, and it is worth
+knowing before you rely on "pair once". The stored key fixes the *name* in
+the ticket; the addresses beside it are a snapshot, and a restarted process
+holds a different UDP port. Resolving that name to the new address is
+discovery's job — n0's by default, which is the same service the disclosure
+below is about — so `--identity` and that disclosure are one subject seen
+from two directions, and switching off the part modelpipe does not control
+takes the part it does with it. Measured on a host with n0's DNS blocked: a
+listener restarted with the same identity minted the identical ticket, a
+*fresh* ticket from it paired and served, and the old one could not reach
+it at all. Already have an API key you want
+enforced instead of a generated one? Give `serve` yours — `--token-file
+<path>`, or the `MODELPIPE_TOKEN` environment variable, or `--token` if you
+do not mind it in your shell history and in `ps`. An exported-but-empty
+`MODELPIPE_TOKEN` is refused rather than enforced, because a listener
+quietly demanding `Bearer ` and 401ing everything is worse than one that
+will not start. Embedders reach the same thing as
+`TokenPolicy::Supplied`, rotated on your schedule with
+`ServeHandle::set_token`. One honest caveat for v0: a
 ticket has no expiry and no revocation list, so a leaked ticket can reach
 the listener until the serve process restarts. Treat tickets like keys,
 not like invitations.
@@ -78,6 +94,35 @@ ranges — where cloud instance metadata lives — never, whatever that flag
 says. The check runs against resolved addresses, not URL text, so a DNS
 name can't smuggle an address past it. modelpipe extends trust outward
 from your machine; it does not re-export someone else's server.
+
+## Every flag
+
+`modelpipe serve <BACKEND_URL>` — host and port only; the request path comes
+from the client.
+
+| Flag | What it does |
+|---|---|
+| `--token <T>` | Enforce this token instead of generating one. Also read from `MODELPIPE_TOKEN`; `--help` never prints the value. Visible in `ps` and shell history, so prefer the other two. |
+| `--token-file <PATH>` | Read the token from a file, trimming the trailing newline every editor adds. |
+| `--insecure-no-auth` | Serve with no token at all. The name is the warning. |
+| `--identity <FILE>` | Keep the endpoint key here so the ticket survives a restart. Created `0600`; refuses to start if others can read it. |
+| `--allow-private-backend` | Accept a backend on a private (RFC 1918 / ULA) address, not only loopback. Link-local is never accepted. |
+| `--relay <URL>` | Use your own relay instead of the public ones. Does **not** disable discovery — see below. |
+| `--no-qr` | Do not print the QR code beside the ticket. |
+
+`modelpipe connect <TICKET>`
+
+| Flag | What it does |
+|---|---|
+| `--bind <ADDR>` | Local address to listen on. Defaults to a free loopback port. Binding off loopback exposes the one hop with no encryption in front of it, and warns you. |
+
+Both commands
+
+| Flag | What it does |
+|---|---|
+| `-v`, `-vv`, `-vvv` | Print more about what the pipe is doing. See below. Accepted before or after the subcommand. |
+| `--version` | Print the version. |
+| `--help` | Print help. |
 
 ## Ticket format (v0)
 

@@ -173,8 +173,15 @@ stays pairable from an older client.
 the transport's business at connect time, not the parser's.
 
 **What is deliberately absent.** The bearer token (it travels separately
-— that is the two-locks design), expiry (v0 tickets live until the serve
-process restarts), and any signature (see *Checksum* above).
+— that is the two-locks design), expiry, and any signature (see *Checksum*
+above).
+
+A v0 ticket carries no lifetime of its own: it is valid for exactly as long
+as the endpoint it names is reachable. By default a serving process mints a
+fresh endpoint key on every run, so restarting invalidates every ticket it
+ever printed; a process that stores its key keeps them working. Both are
+properties of the *serving side*, not of the ticket, and a parser cannot
+tell the two apart — which is why there is nothing here to encode.
 
 ## Test vectors (normative)
 

@@ -1,22 +1,35 @@
 //! The iroh endpoint, and the one place a ticket meets an iroh address.
 //!
-//! This is the only module in the crate that names an iroh type, and that
-//! is deliberate rather than incidental. Everything above it — the codec,
-//! the locality rule, the header edge, the request exchange — is generic or
-//! pure, so an iroh major upgrade lands here and nowhere else, which is the
-//! promise the crate docs make and this file is where it is kept.
+//! Three modules in this crate name an iroh type — this one, which binds
+//! the endpoint, [`crate::listener`], which accepts on it, and
+//! [`crate::peer`], which holds one connection and re-dials it. That is
+//! deliberate rather than incidental, and the line is drawn at *lifetime*:
+//! anything that owns an iroh value for longer than a call is here or in
+//! those two. Everything above them — the codec, the locality rule, the
+//! header edge, the request exchange — is generic or pure, which is why the
+//! whole authentication edge is exercised over `tokio::io::duplex()` with
+//! no socket anywhere.
 //!
-//! Nothing iroh owns reaches the public surface. Failures leave as
+//! (This file said "the only module" until the listener and the peer
+//! watcher arrived. They did, and it stayed. The invariant those two do not
+//! break is the one below.)
+//!
+//! **Nothing iroh owns reaches the public surface.** That is the promise
+//! the crate docs make, it is what an iroh major upgrade is measured
+//! against, and unlike the sentence above it is checked rather than
+//! asserted: `tests/api_surface.rs` links this crate as an external
+//! dependent and names every exported item. Failures leave as
 //! [`ServeError`] / [`ConnectError`] variants with the transport's own
 //! error reachable only as an opaque `source`.
 //!
-//! There is deliberately no general iroh-error-to-public-error converter
-//! here yet. Two one-line boxing helpers were written and removed: with no
-//! caller they discriminated nothing, and a conversion site that does not
-//! yet know which failures it has to tell apart is a boundary invented
-//! ahead of the code that would justify it. It arrives with the listener,
-//! which is the thing that will actually have dial and accept failures to
-//! classify.
+//! There is deliberately no general iroh-error-to-public-error converter.
+//! Two one-line boxing helpers were written and removed: with no caller
+//! they discriminated nothing, and a conversion site that does not yet know
+//! which failures it has to tell apart is a boundary invented ahead of the
+//! code that would justify it. The listener has since arrived and still
+//! does not want one — its dial and accept failures are classified where
+//! they happen, in `serve_error.rs` and `connect.rs`, against the variants
+//! a caller can actually match a retry policy on.
 
 use std::net::SocketAddr;
 use std::str::FromStr;

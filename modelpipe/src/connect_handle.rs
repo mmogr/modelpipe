@@ -21,10 +21,14 @@ use crate::status::PipeStatus;
 /// policy belongs to the embedder.
 ///
 /// A listener that has restarted since the ticket was issued is *also*
-/// this case, and deliberately not a distinct one. The endpoint key is
-/// ephemeral, so the restarted process is a different endpoint entirely:
-/// dialing the ticket reaches nobody, exactly as an offline peer does.
-/// There is no rejection to observe, because there is nobody left to
+/// this case, and deliberately not a distinct one. Without an identity
+/// file the endpoint key is minted per process, so the restarted listener
+/// is a different endpoint entirely and dialing the ticket reaches nobody,
+/// exactly as an offline peer does. With one it is the same endpoint and
+/// this side reconnects to it — which is what
+/// [`ServeOptions::identity`](crate::ServeOptions#structfield.identity)
+/// buys, over a network where discovery is reachable. There is no
+/// rejection to observe in either case, because there is nobody to
 /// reject. [`PipeStatus::Closed`] therefore means this side is gone —
 /// shut down, dropped, or dead after an unrecoverable transport failure
 /// — never that the far side declined the pairing.
@@ -69,6 +73,26 @@ impl ConnectHandle {
     /// semantics, concurrent callers each against their own snapshot,
     /// and once the pipe is closed every call resolves immediately with
     /// [`PipeStatus::Closed`].
+    ///
+    /// # Examples
+    ///
+    /// Read the current value *before* waiting. The snapshot is taken when
+    /// this is polled, so a pipe that reached [`PipeStatus::Direct`] a
+    /// moment earlier has nothing left to report and a loop that only
+    /// waits never prints its first line:
+    ///
+    /// ```no_run
+    /// # async fn example(connected: &modelpipe::ConnectHandle) {
+    /// println!("status: {}", connected.status().as_str());
+    /// loop {
+    ///     let next = connected.status_changed().await;
+    ///     println!("status: {}", next.as_str());
+    ///     if next == modelpipe::PipeStatus::Closed {
+    ///         break;
+    ///     }
+    /// }
+    /// # }
+    /// ```
     pub async fn status_changed(&self) -> PipeStatus {
         // The snapshot is taken here, at the moment of the call, which is
         // what makes states that came and went while nobody was waiting
