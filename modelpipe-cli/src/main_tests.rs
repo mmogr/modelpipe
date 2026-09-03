@@ -5,6 +5,8 @@
 //! it — driving the binary itself is a job for the end-to-end suite in the
 //! library crate, which already pairs two live sides.
 
+use clap::Parser as _;
+
 use super::{Cli, Ticket, TokenPolicy, qr, token_policy};
 
 /// clap's own consistency checks are debug-only, so they are compiled
@@ -132,4 +134,40 @@ fn the_help_text_never_renders_the_environment_token() {
         token.is_hide_env_values_set(),
         "`--help` would print the value of MODELPIPE_TOKEN"
     );
+}
+
+/// `-v` has to work where an operator actually types it.
+///
+/// The realistic sequence is that the whole `serve` line already exists and
+/// more detail is wanted, so `-v` is appended to the end of it. A flag that
+/// is only accepted in front of the subcommand fails exactly that person,
+/// with a usage error that does not explain itself. `global = true` is what
+/// makes both work, and it is one attribute away from not being there.
+#[test]
+fn verbosity_is_accepted_on_either_side_of_the_subcommand() {
+    let leading = Cli::try_parse_from(["modelpipe", "-vv", "serve", "http://127.0.0.1:11434"])
+        .expect("-vv before the subcommand");
+    let trailing = Cli::try_parse_from(["modelpipe", "serve", "http://127.0.0.1:11434", "-vv"])
+        .expect("-vv after the subcommand");
+    assert_eq!(leading.verbose, 2);
+    assert_eq!(trailing.verbose, 2);
+}
+
+/// The negative control for the test above: a count that ignored its input
+/// and returned 2 would pass it.
+#[test]
+fn verbosity_counts_what_was_typed() {
+    let none = Cli::try_parse_from(["modelpipe", "serve", "http://127.0.0.1:11434"]).expect("none");
+    let one =
+        Cli::try_parse_from(["modelpipe", "serve", "http://127.0.0.1:11434", "-v"]).expect("one");
+    let spelled = Cli::try_parse_from([
+        "modelpipe",
+        "serve",
+        "http://127.0.0.1:11434",
+        "--verbose",
+        "--verbose",
+        "--verbose",
+    ])
+    .expect("the long form, thrice");
+    assert_eq!((none.verbose, one.verbose, spelled.verbose), (0, 1, 3));
 }

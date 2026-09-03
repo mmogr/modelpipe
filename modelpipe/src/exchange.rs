@@ -26,6 +26,8 @@
 use std::future::Future;
 
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
+use tracing::Instrument as _;
+use tracing::field::Empty;
 
 use crate::body::{self, Buffered};
 use crate::credential::Credential;
@@ -33,6 +35,7 @@ use crate::framing;
 use crate::head_read;
 use crate::headers;
 use crate::http_head;
+use crate::outcome::Outcome;
 use crate::request_body::{self, Carried};
 
 /// How long a peer may take to send a complete request head.
@@ -67,38 +70,26 @@ pub(crate) trait Backend {
     fn connect(&self) -> impl Future<Output = std::io::Result<Self::Stream>> + Send;
 }
 
-/// What happened to one exchange.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Outcome {
-    /// Admitted, and carried to the backend and back.
-    Forwarded,
-    /// Refused on the credential. The backend was not contacted.
-    Unauthorized,
-    /// Refused on the head — unparseable, oversized, or framed
-    /// ambiguously. The backend was not contacted.
-    BadRequest,
-    /// The peer opened a stream and never finished asking. Nothing was
-    /// written back, and the backend was not contacted.
-    TimedOut,
-    /// The backend was contacted and the exchange failed there — it would
-    /// not take the connection, or answered with something this edge
-    /// cannot read. The client was told so; distinct from
-    /// [`Forwarded`](Self::Forwarded) because nothing came back.
-    BadGateway,
-    /// The request body stopped before its declared end — truncated, or
-    /// framed so this edge could not go on reading it — and the backend,
-    /// told by a half-close where it stopped, answered nothing this edge
-    /// could relay.
-    ///
-    /// Not [`BadRequest`](Self::BadRequest), which promises the backend was
-    /// never contacted: by the time a body can fail, its head is already
-    /// upstream. Not [`BadGateway`](Self::BadGateway) either — the backend
-    /// did nothing wrong, and reporting it there sends whoever is debugging
-    /// to the far side of a tunnel that was working.
-    Unfinished,
-}
-
-/// Serve one exchange on `stream`.
+/// Serve one exchange on `stream`, and say afterwards what it did.
+///
+/// The reporting is here rather than at the nine places the state machine
+/// below can return, and that is the point of the split. Every one of those
+/// returns is a different sentence about the same request; writing the line
+/// at each of them would be nine chances to word it differently, to forget
+/// one, or to reach for a field that happens to hold the credential. There
+/// is one line per exchange and one place that writes it.
+///
+/// A span rather than a flat event, because the interesting fields are not
+/// known at the same time: the method and path arrive when the head parses,
+/// the status only if a backend answers, and a request refused on its
+/// credential never has one. `Empty` is what lets each be recorded when it
+/// arrives and still appear on the single line emitted at the end.
+///
+/// Nothing here can carry a secret. The fields are the method, the path
+/// with its query string already removed by [`http_head::path_only`], the
+/// backend's status, and how long it took — never a header, never the whole
+/// target, never the body. That is a property of what is listed below, so
+/// `exchange_tests` asserts it against a request built to break it.
 pub(crate) async fn serve_exchange<S, B>(
     stream: &mut S,
     credential: &Credential,
@@ -110,6 +101,35 @@ where
     // so without it this future is not `Send` — and the listener spawns one
     // task per stream. The bound is the difference between compiling and
     // discovering at the call site that the whole edge cannot be spawned.
+    B: Backend + Sync,
+{
+    let span = tracing::info_span!("exchange", method = Empty, path = Empty, status = Empty);
+    async {
+        let started = std::time::Instant::now();
+        let result = run(stream, credential, backend).await;
+        // Saturating rather than `as`: a truncating cast is a lint here and
+        // a wrong number anywhere, and an exchange that ran for half a
+        // billion years is better reported as a large one than a small one.
+        let elapsed_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+        match &result {
+            Ok(outcome) => tracing::info!(outcome = outcome.as_str(), elapsed_ms, "exchange"),
+            // A refusal is an `Ok` with an outcome; an `Err` is the local
+            // stream itself failing, which is the peer going away
+            // mid-exchange rather than anything the request did. The
+            // listener discards it — there is nobody left to tell — so
+            // this is the only place it is ever visible.
+            Err(error) => tracing::warn!(%error, elapsed_ms, "exchange failed"),
+        }
+        result
+    }
+    .instrument(span)
+    .await
+}
+
+/// The state machine itself, from the first byte to the last.
+async fn run<S, B>(stream: &mut S, credential: &Credential, backend: &B) -> std::io::Result<Outcome>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send,
     B: Backend + Sync,
 {
     // 1. The head, bounded. A ticket-holder can open a stream and type
@@ -125,6 +145,13 @@ where
     let Ok((mut head, leftover)) = asked? else {
         return refuse(stream, refusal::bad_request(), Outcome::BadRequest).await;
     };
+    // Recorded here rather than after the checks below, so a request
+    // refused on its framing or its credential is still named on the line
+    // that reports the refusal. A 401 nobody can attribute to a path is a
+    // 401 that tells the operator only that someone, somewhere, was wrong.
+    let span = tracing::Span::current();
+    span.record("method", head.method.as_str());
+    span.record("path", http_head::path_only(&head.target));
 
     // 2. Framing, before anything else looks at the body. An ambiguously
     //    framed request is refused rather than resolved: resolving it is
@@ -188,6 +215,11 @@ where
             return refuse(stream, refusal::incomplete_request(), Outcome::Unfinished).await;
         }
     };
+    // Recorded before the framing check below, deliberately: a backend that
+    // answers `200` and frames it ambiguously is refused, and the line that
+    // says `outcome=bad_gateway status=200` is the one that sends whoever
+    // is reading it to the backend's framing rather than to its logic.
+    span.record("status", response.status);
     // The status and the method decide this before any header does, and an
     // ambiguously framed backend response is refused on the way out for the
     // same reason an ambiguously framed request is refused on the way in.

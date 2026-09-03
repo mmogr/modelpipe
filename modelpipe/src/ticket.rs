@@ -13,7 +13,6 @@
 //! `ticket_tests.rs` are what keep them from drifting.
 
 use std::fmt;
-use std::fmt::Write as _;
 
 use crate::crc32c::crc32c;
 use crate::ticket_addr::TicketAddr;
@@ -39,9 +38,6 @@ pub(crate) const MIN_V0: usize =
 
 /// The decoded-size cap, a denial-of-service guard independent of version.
 pub(crate) const MAX_TICKET_BYTES: usize = 1024;
-
-/// How many bytes of the endpoint id a fingerprint shows.
-const FINGERPRINT_BYTES: usize = 6;
 
 /// What kind of server sits behind a ticket's endpoint.
 ///
@@ -169,12 +165,7 @@ impl Ticket {
     /// string, which is the reason it is not merely a convenience — see
     /// that impl for why a ticket must not land in a panic message whole.
     pub fn fingerprint(&self) -> String {
-        let mut out = String::with_capacity(FINGERPRINT_BYTES * 2);
-        for byte in &self.endpoint_id[..FINGERPRINT_BYTES] {
-            // Infallible: writing to a String cannot fail.
-            let _ = write!(out, "{byte:02x}");
-        }
-        out
+        crate::fingerprint::of(&self.endpoint_id)
     }
 
     /// The ticket's bytes, per the format spec.

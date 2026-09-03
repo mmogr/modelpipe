@@ -130,6 +130,31 @@ copyright holder, and this extraction is relicensed MIT by that copyright
 holder specifically so clients and other servers can embed it. gglib's
 licensing does not apply here.
 
+## Seeing what it is doing
+
+`-v` prints a line per request on the serve side: the method, the path, the
+status your backend gave, and how long it took. Once more (`-vv`) adds the
+transport, which is where the answer lives when two machines will not pair.
+
+```
+$ modelpipe serve http://127.0.0.1:11434 -v
+INFO peer{peer=3f2a91c4b7e0 path=direct}: modelpipe::listener: peer connected
+INFO peer{...}:exchange{method="POST" path="/v1/chat/completions" status=200}: exchange outcome="forwarded" elapsed_ms=1840
+```
+
+These go to **stderr**, so the ticket and token on stdout can still be piped
+somewhere. Without any `-v` you still hear about warnings, which is mostly
+a stream that failed partway through an exchange.
+
+No line ever carries your token, your ticket, a header value, or a query
+string — the path is logged without its query precisely because a query
+string is somewhere clients put credentials. `RUST_LOG` overrides the flag
+if you want to choose targets and levels yourself.
+
+Embedding the library instead? It emits [`tracing`](https://docs.rs/tracing)
+events and installs no subscriber, so the events go wherever your binary
+already sends them, and nowhere if it sends them nowhere.
+
 ## What it contacts, and what it doesn't
 
 "No cloud in the path" is a claim about your **data**, and it is true: the
