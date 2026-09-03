@@ -118,6 +118,41 @@ impl MockBackend {
         (backend, written)
     }
 
+    /// Read the whole declared body before answering, as a real inference
+    /// server does.
+    ///
+    /// The only backend here that a client stopping mid-body can leave
+    /// waiting, and that is exactly why it exists: `read_head` returns at
+    /// `\r\n\r\n`, so every other stub above has already written its answer
+    /// by the time the body matters and cannot see the difference between a
+    /// complete upload and an abandoned one.
+    ///
+    /// A body that stops short gets no answer at all — the connection just
+    /// closes. That is the honest shape: a server blocked on a read it will
+    /// never satisfy has nothing to say.
+    pub(crate) async fn reads_whole_body(response: &'static str) -> Self {
+        Self::spawn_with(move |mut socket| async move {
+            let mut seen = Vec::new();
+            let _ = read_head(&mut socket, &mut seen).await;
+            let head_end = seen
+                .windows(4)
+                .position(|w| w == b"\r\n\r\n")
+                .map_or(seen.len(), |at| at + 4);
+            let declared = declared_length(&seen[..head_end]);
+            let mut buf = [0u8; 4096];
+            while seen.len() - head_end < declared {
+                match socket.read(&mut buf).await {
+                    Ok(0) | Err(_) => return seen,
+                    Ok(n) => seen.extend_from_slice(&buf[..n]),
+                }
+            }
+            let _ = socket.write_all(response.as_bytes()).await;
+            let _ = socket.flush().await;
+            seen
+        })
+        .await
+    }
+
     async fn spawn(respond: impl Fn(&[u8]) -> Vec<u8> + Send + Sync + 'static) -> Self {
         let respond = Arc::new(respond);
         Self::spawn_with(move |mut socket| {
@@ -175,6 +210,21 @@ impl MockBackend {
         let seen = self.received.lock().await;
         String::from_utf8_lossy(&seen.concat()).into_owned()
     }
+}
+
+/// The `Content-Length` a head declares, or zero when it declares none.
+///
+/// Read by hand rather than through the crate's own parser: a fixture that
+/// shared the code under test could agree with it about a body neither had
+/// read correctly.
+fn declared_length(head: &[u8]) -> usize {
+    String::from_utf8_lossy(head)
+        .to_ascii_lowercase()
+        .split("content-length:")
+        .nth(1)
+        .and_then(|rest| rest.split("\r\n").next())
+        .and_then(|value| value.trim().parse().ok())
+        .unwrap_or(0)
 }
 
 /// Read until the end of an HTTP head, plus whatever body arrived with it.
