@@ -31,10 +31,10 @@ use std::time::Duration;
 
 // Modules are declared in dependency order, which for this crate is also
 // order of testability: a module names only ones above it, and everything
-// above the orchestration line can be exercised without a socket. The
-// modules that will carry the implementation — the request edge, the
-// address checks, the iroh transport — slot into the same order as they
-// arrive.
+// above the orchestration line can be exercised without a socket. That is
+// what lets the whole authentication edge run over `tokio::io::duplex()`,
+// and it is a property to preserve rather than a description of how things
+// happened to land.
 //
 // Every one of them is `mod`, never `pub mod`. The re-export block below
 // is the entire public surface, so a module can be renamed, split or

@@ -8,9 +8,15 @@
 //! crate's internal module layout changed completely — and would stop
 //! compiling the moment the re-export block in `lib.rs` did.
 //!
-//! Most of the library is still `todo!()`, so the runtime assertions cover
-//! the parts that exist. The rest of the file earns its place at compile
-//! time, which is where a facade is proved.
+//! Most of this file earns its place at compile time, which is where a
+//! facade is proved: the runtime assertions below are the few claims about
+//! the surface that a signature cannot make on its own.
+//!
+//! Nothing here runs an exchange, binds a socket or starts a runtime, and
+//! that is the division of labour rather than a gap —
+//! `tests/integration_pipe.rs` is the binary that pairs two live sides.
+//! What this one answers is the question a dependent asks: does the crate
+//! export what it says it exports, in the shapes it says?
 
 use std::error::Error;
 

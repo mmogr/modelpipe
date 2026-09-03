@@ -19,13 +19,19 @@
 //! every address in the ticket now wrong, is still findable under the same
 //! name.
 //!
-//! What no amount of re-dialling survives is the serve side **restarting**.
-//! The endpoint key is minted per process, so a restarted listener is a
-//! different peer that the old ticket has no relation to, and dialling on
-//! reaches nobody rather than reaching someone who refuses. That is ticket
-//! rotation working exactly as designed, and it is a re-pairing rather than
-//! a reconnection — which is why this module gives up on nothing and still
-//! cannot help you there.
+//! What no amount of re-dialling survives is the serve side restarting
+//! **without an identity file**. The endpoint key is minted per process by
+//! default, so such a listener is a different peer the old ticket has no
+//! relation to, and dialling on reaches nobody rather than reaching someone
+//! who refuses. That is ticket rotation working exactly as designed, and it
+//! is a re-pairing rather than a reconnection — which is why this module
+//! gives up on nothing and still cannot help you there.
+//!
+//! A listener started with `--identity` keeps its id across the restart, so
+//! the loop below *is* what reconnects to it. The addresses in the ticket
+//! are still a snapshot of the old process's ports, so finding the new ones
+//! is discovery's job rather than this module's — see `identity.rs` for
+//! why a durable ticket is not automatically a reachable one.
 
 use iroh::endpoint::{Connection, Path};
 use iroh::{Endpoint, EndpointAddr};
@@ -80,10 +86,10 @@ impl Peer {
         let connection = endpoint
             .connect(addr.clone(), transport::ALPN)
             .await
-            // Everything a dial can fail with is retryable, and there is no
-            // "rejected" case to tell apart: the endpoint key is ephemeral,
-            // so a serve side that restarted is a different endpoint and
-            // this reaches nobody rather than reaching someone who refuses.
+            // Everything a dial can fail with is retryable, and there is
+            // no "rejected" case to tell apart: a serve side that restarted
+            // without an identity file is a different endpoint, so this
+            // reaches nobody rather than reaching someone who refuses.
             .map_err(|_| ConnectError::PeerUnreachable)?;
         Ok(Self {
             endpoint,

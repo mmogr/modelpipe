@@ -22,12 +22,13 @@ pub enum ConnectError {
     /// between temporarily unwilling.
     ///
     /// This is also what a ticket outlived by its listener looks like.
-    /// There is no "ticket rejected" case to distinguish it from: the
-    /// endpoint key is ephemeral, so a restarted serve side is a
-    /// *different* endpoint, and dialing the old one reaches nobody
-    /// rather than reaching someone who refuses. A caller that wants to
-    /// tell "offline" from "re-paired" has to ask a human, not this
-    /// enum.
+    /// There is no "ticket rejected" case to distinguish it from: a serve
+    /// side that restarted **without** an identity file is a *different*
+    /// endpoint, so dialing the old ticket reaches nobody rather than
+    /// reaching someone who refuses. With one, the id survives the restart
+    /// and this variant means only what it says. Either way a caller that
+    /// wants to tell "offline" from "re-paired" has to ask a human, not
+    /// this enum.
     PeerUnreachable,
     /// The local address the caller asked for could not be bound.
     ///
@@ -105,6 +106,40 @@ pub struct ConnectOptions {
 /// Bind a local port that transparently is the remote backend. Point any
 /// OpenAI-compatible client at [`ConnectHandle::base_url`], with the
 /// serve side's bearer token as the API key.
+///
+/// # Examples
+///
+/// ```no_run
+/// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+/// // Tickets are text: they arrive over whatever channel you already
+/// // trust, and parse before anything is dialled.
+/// let ticket: modelpipe::Ticket = "pipeabc…".parse()?;
+///
+/// let connected = modelpipe::connect(&ticket, modelpipe::ConnectOptions::default()).await?;
+///
+/// // Point an OpenAI-compatible client here, with the serve side's token
+/// // as the API key.
+/// println!("{}", connected.base_url());
+/// println!("reaching the peer: {}", connected.status().as_str());
+///
+/// connected.shutdown().await;
+/// # Ok(())
+/// # }
+/// ```
+///
+/// To bind somewhere specific, assign to [`ConnectOptions::bind`] — the
+/// same `default()`-then-assign shape [`serve`](fn@crate::serve) uses, and
+/// for the same reason:
+///
+/// ```no_run
+/// # async fn example(ticket: &modelpipe::Ticket) -> Result<(), Box<dyn std::error::Error>> {
+/// let mut opts = modelpipe::ConnectOptions::default();
+/// opts.bind = Some("127.0.0.1:8080".parse()?);
+/// let connected = modelpipe::connect(ticket, opts).await?;
+/// # let _ = connected;
+/// # Ok(())
+/// # }
+/// ```
 pub async fn connect(ticket: &Ticket, opts: ConnectOptions) -> Result<ConnectHandle, ConnectError> {
     let (state, listener) = dialer::dial(ticket, opts.bind).await?;
     tokio::spawn(dialer::local_loop(state.clone(), listener));

@@ -21,9 +21,13 @@ use crate::transport;
 ///
 /// Dropping it tears the listener down best-effort, without waiting;
 /// [`shutdown`](Self::shutdown) is the graceful version that completes
-/// once the listener is gone. Either way the ticket is dead from that
-/// moment and a new [`serve`](fn@crate::serve) mints a fresh one — there is no way to keep
-/// a ticket valid across restarts, so ticket rotation *is* the restart.
+/// once the listener is gone. Either way this listener stops answering, and
+/// by default the ticket dies with it: the endpoint key is minted per
+/// process unless [`ServeOptions::identity`](crate::ServeOptions#structfield.identity)
+/// names a file to keep it in, so a restart mints a fresh ticket and ticket
+/// rotation *is* the restart. With an identity file the ticket outlives the
+/// process and revocation becomes deleting that file and restarting —
+/// the same act, one extra step.
 /// (Token rotation is cheaper: [`rotate_token`](Self::rotate_token).)
 pub struct ServeHandle {
     state: Arc<ServeState>,
@@ -111,6 +115,26 @@ impl ServeHandle {
     /// has always refused the same value loudly; there is no reason for
     /// the runtime path to be the forgiving one, on this of all
     /// decisions.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn example(serving: &modelpipe::ServeHandle) -> Result<(), Box<dyn std::error::Error>> {
+    /// // Rotating in place: no re-pairing, because the ticket is a
+    /// // separate credential and is untouched by this.
+    /// serving.set_token(std::env::var("MODELPIPE_TOKEN")?)?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// A blank replacement is refused rather than enforced, which is the
+    /// reason this returns a `Result` at all:
+    ///
+    /// ```no_run
+    /// # fn example(serving: &modelpipe::ServeHandle) {
+    /// assert!(serving.set_token(String::new()).is_err());
+    /// # }
+    /// ```
     pub fn set_token(&self, token: String) -> Result<(), ServeError> {
         if self.state.credential.set(token) {
             Ok(())

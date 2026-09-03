@@ -67,6 +67,14 @@ grants and this crate cannot narrow it; put it somewhere only you can read.
 Why the flag exists and why it is off by default is
 [ADR 0002](docs/adr/0002-a-stored-endpoint-key-opt-in.md).
 
+One thing `--identity` does *not* buy on its own: reachability. The stored
+key fixes the name in the ticket, while the addresses beside it are a
+snapshot of the ports the old process held, so finding the restarted
+listener is discovery's job. Where discovery is unreachable, an old ticket
+resolves to nobody even though the key is intact — so this flag and the
+disclosure about what iroh contacts are the same subject, and turning the
+second off takes the first with it. `README.md` records the measurement.
+
 **A malicious connect side.** Anyone you give a ticket and token to has the
 access above. There is no per-client scoping, quota or audit.
 
