@@ -8,11 +8,12 @@ use std::fmt;
 use std::sync::Arc;
 
 use crate::backend::TcpBackend;
-use crate::credential::{Credential, TokenPolicy};
+use crate::credential::Credential;
 use crate::identity;
 use crate::listener::{ServeState, accept_loop};
 use crate::serve_error::ServeError;
 use crate::serve_handle::ServeHandle;
+use crate::token_policy::TokenPolicy;
 use crate::transport;
 
 /// Options for [`serve`].

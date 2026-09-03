@@ -13,8 +13,10 @@
 //! screens what it got, and connects to that `SocketAddr`. The name is
 //! never handed onward.
 
+use std::future::Future;
 use std::net::SocketAddr;
 
+use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpStream;
 
 use crate::ServeError;
@@ -58,7 +60,6 @@ impl From<Unreachable> for std::io::Error {
         }
     }
 }
-use crate::exchange::Backend;
 use crate::locality::{admits, classify};
 
 /// A backend reached over TCP on this machine.
@@ -104,6 +105,35 @@ impl TcpBackend {
         // canonical loopback, which `locality` classifies as `Loopback` and
         // tests as such — was refused as "not a local address". The
         // brackets belong to the URL syntax, not to the host.
+        // A host and a port, and nothing after them. The request path comes
+        // from the client and is forwarded verbatim, so anything written
+        // here is silently discarded: `serve http://127.0.0.1:11434/v1`
+        // started cleanly, printed a ticket, and dropped the `/v1` — after
+        // which every request went to the wrong place for a reason the
+        // operator had already tried to prevent. `url` normalises an absent
+        // path to `/`, so both of those spellings mean "no path".
+        //
+        // Refused rather than honoured, because honouring it is a bigger
+        // promise than it looks: a prefix would have to be joined to every
+        // target, and joined the same way this edge and the backend both
+        // read it, which is the class of disagreement `framing` exists to
+        // refuse. A backend that needs a prefix is one the client should
+        // ask for by path.
+        // Userinfo goes with them, and for the same reason rather than a
+        // different one: `http://user:pass@127.0.0.1:11434` parses, and this
+        // crate has exactly one credential — the bearer token — with no
+        // route by which a username and password in a URL could ever be
+        // sent anywhere. Accepting it means accepting a secret the operator
+        // typed and discarding it silently, which is the failure the path
+        // rule above exists to stop.
+        if !matches!(parsed.path(), "" | "/")
+            || parsed.query().is_some()
+            || parsed.fragment().is_some()
+            || !parsed.username().is_empty()
+            || parsed.password().is_some()
+        {
+            return Err(invalid());
+        }
         let host = parsed.host_str().ok_or_else(invalid)?;
         let host = host
             .strip_prefix('[')
@@ -160,6 +190,23 @@ impl TcpBackend {
         }
         Ok(admissible)
     }
+}
+
+/// Where the serve side gets a connection to the backend.
+///
+/// A trait rather than a concrete socket so the tests can supply one that
+/// counts how often it is asked — and can therefore prove that a rejected
+/// request never asks at all.
+pub(crate) trait Backend {
+    /// The connection type. Not an iroh type and not necessarily a socket.
+    type Stream: AsyncRead + AsyncWrite + Unpin + Send;
+
+    /// What to put in the outbound `Host` header.
+    fn authority(&self) -> &str;
+
+    /// Open a connection. Called at most once per exchange, and never
+    /// before the credential has been checked.
+    fn connect(&self) -> impl Future<Output = std::io::Result<Self::Stream>> + Send;
 }
 
 impl Backend for TcpBackend {

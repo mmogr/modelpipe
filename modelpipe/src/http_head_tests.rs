@@ -188,7 +188,15 @@ fn two_content_lengths_that_disagree_are_refused() {
 
 #[test]
 fn a_content_length_that_is_not_a_number_is_refused() {
-    for value in ["", "abc", "-1", "6, 7", "0x10", "6 7", "１２"] {
+    for value in [
+        "", "abc", "-1", "6, 7", "0x10", "6 7", "１２",
+        // `u64::from_str` accepts a leading `+`, and RFC 9112 §6.2 does
+        // not: a length is `1*DIGIT`. `+5` framed a five-byte body here
+        // and went to the backend verbatim, for its parser to disagree
+        // about — the exact ambiguity this module refuses rather than
+        // resolves.
+        "+5", "+0", "5_0", " +5",
+    ] {
         assert_eq!(
             framing(&fields(&[("Content-Length", value)]), false),
             Err(HeadError::ConflictingFraming),
@@ -374,4 +382,47 @@ fn an_absolute_form_target_loses_its_query_and_keeps_its_authority() {
         path_only("http://who:what@example.test/v1"),
         "http://who:what@example.test/v1"
     );
+}
+
+/// The negative control for the refusals above: an ordinary length, and a
+/// length with the surrounding whitespace HTTP allows, are still accepted.
+///
+/// Without this the digits-only check could be satisfied by refusing every
+/// `Content-Length` there is, which would frame every request as empty.
+#[test]
+fn an_ordinary_content_length_is_still_a_length() {
+    for (value, expected) in [("0", 0u64), ("5", 5), (" 42 ", 42), ("00042", 42)] {
+        assert_eq!(
+            framing(&fields(&[("Content-Length", value)]), false),
+            Ok(Framing::Length(expected)),
+            "{value:?} is a length"
+        );
+    }
+}
+
+/// Field values are trimmed of OWS, which RFC 9110 §5.6.3 defines as SP and
+/// HTAB — not of Unicode whitespace, which `str::trim` also removes.
+///
+/// The header goes to the backend verbatim, so a value this edge trims more
+/// aggressively than the next hop is a value the two read differently: a
+/// no-break space before the digits was trimmed away here, framed a body,
+/// and travelled on with the space still in it.
+#[test]
+fn a_content_length_is_trimmed_of_http_whitespace_and_no_more() {
+    // SP and HTAB are OWS and are trimmed.
+    for value in [" 42", "42 ", "\t42\t", "  42  "] {
+        assert_eq!(
+            framing(&fields(&[("Content-Length", value)]), false),
+            Ok(Framing::Length(42)),
+            "{value:?} is 42 surrounded by OWS"
+        );
+    }
+    // Everything else is part of the value, and the value must be digits.
+    for value in ["\u{a0}42", "42\u{a0}", "\u{2007}42", "\n42", "\r42"] {
+        assert_eq!(
+            framing(&fields(&[("Content-Length", value)]), false),
+            Err(HeadError::ConflictingFraming),
+            "{value:?} is not a length this edge and the next hop agree on"
+        );
+    }
 }

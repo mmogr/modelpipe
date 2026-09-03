@@ -230,7 +230,11 @@ async fn carry(
 /// gives the client its EOF, so it stops reading, closes, and this side's
 /// read returns zero. The deadline is for the client that does neither.
 async fn refuse_locally(local: &mut tokio::net::TcpStream) -> std::io::Result<()> {
-    local.write_all(&refusal::bad_gateway()).await?;
+    // This side has no backend and never did — whichever way it got here,
+    // the fact worth reporting is that the serving machine is not reachable
+    // from this one. Borrowing the serve edge's sentence about a backend
+    // response would name a component that is not in this picture.
+    local.write_all(&refusal::tunnel_unavailable()).await?;
     local.flush().await?;
     let _ = local.shutdown().await;
 

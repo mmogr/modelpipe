@@ -76,8 +76,16 @@ fn every_flavour_of_missing_or_wrong_credential_is_refused() {
         ),
         ("the scheme alone", Some("Bearer ".to_owned())),
         (
-            "the scheme in the wrong case",
-            Some(format!("bearer {TOKEN}")),
+            "a scheme that only looks like the right one",
+            Some(format!("Bearerx {TOKEN}")),
+        ),
+        (
+            "the right case, the wrong token",
+            Some("bearer sk-zzq-not-it".to_owned()),
+        ),
+        (
+            "two spaces after the scheme",
+            Some(format!("Bearer  {TOKEN}")),
         ),
         ("leading whitespace", Some(format!(" {expected}"))),
         ("trailing whitespace", Some(format!("{expected} "))),
@@ -249,4 +257,51 @@ fn setting_an_unpresentable_token_changes_nothing() {
         offers(&cell, Some(&format!("Bearer {TOKEN}"))),
         "the credential in force must survive a refused rotation"
     );
+}
+
+/// RFC 9110 §11.1 makes the authentication scheme a token, and token
+/// comparison is case-insensitive. This edge required `Bearer` exactly.
+///
+/// Measured before the fix, against the real binary over a live pipe:
+/// `Bearer` returned 200 and `bearer`, `BEARER` and `BeArEr` all returned
+/// 401 — with the correct key, and with nothing in the response pointing at
+/// the capitalisation. That is the least actionable 401 available.
+#[test]
+fn the_scheme_is_matched_without_regard_to_case() {
+    let cell = enforcing(TOKEN);
+    for scheme in ["Bearer", "bearer", "BEARER", "BeArEr", "bEARER"] {
+        assert!(
+            offers(&cell, Some(&format!("{scheme} {TOKEN}"))),
+            "{scheme} is the same scheme"
+        );
+    }
+}
+
+/// The negative control for the test above, and the property that makes it
+/// safe: the *token* is still compared exactly, and still in constant time.
+///
+/// Without this, "case-insensitive" could have been applied to the whole
+/// header — which would accept a token in any casing and turn a 256-bit
+/// credential into a much smaller one.
+#[test]
+fn the_token_is_still_matched_exactly() {
+    let cell = enforcing(TOKEN);
+    let flipped: String = TOKEN
+        .chars()
+        .map(|c| {
+            if c.is_ascii_lowercase() {
+                c.to_ascii_uppercase()
+            } else {
+                c.to_ascii_lowercase()
+            }
+        })
+        .collect();
+    assert_ne!(flipped, TOKEN, "the sentinel must have letters to flip");
+    assert!(
+        !offers(&cell, Some(&format!("Bearer {flipped}"))),
+        "the token is not a token comparison — case matters in the credential"
+    );
+    // And the scheme leniency does not extend past the single space.
+    assert!(!offers(&cell, Some(&format!("bearer{TOKEN}"))));
+    assert!(!offers(&cell, Some(&format!("bearer\t{TOKEN}"))));
 }
