@@ -12,6 +12,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::listener::{self, ServeState};
+use crate::serve::ServeError;
 use crate::status::PipeStatus;
 use crate::ticket::Ticket;
 use crate::transport;
@@ -93,8 +94,29 @@ impl ServeHandle {
     /// accordingly. The credential gates request *admission*, not
     /// delivery: a request that passed auth before the call runs to
     /// completion (a streaming response is not cut mid-body).
-    pub fn set_token(&self, token: String) {
-        self.state.credential.set(token);
+    ///
+    /// # Errors
+    ///
+    /// [`ServeError::InvalidToken`] if `token` is empty or nothing but
+    /// whitespace, in which case **nothing changes** — whatever was in
+    /// force stays in force.
+    ///
+    /// Returning that rather than swallowing it is the whole point of the
+    /// signature. A rotation reads its replacement from somewhere: a
+    /// config file, a secrets fetch, an environment variable. When that
+    /// somewhere comes back blank, an embedder who is told nothing
+    /// believes the old key is dead and retires it everywhere else, while
+    /// this listener is still quietly enforcing it — a credential the
+    /// operator thinks is revoked and is not. [`serve`](fn@crate::serve)
+    /// has always refused the same value loudly; there is no reason for
+    /// the runtime path to be the forgiving one, on this of all
+    /// decisions.
+    pub fn set_token(&self, token: String) -> Result<(), ServeError> {
+        if self.state.credential.set(token) {
+            Ok(())
+        } else {
+            Err(ServeError::InvalidToken)
+        }
     }
 
     /// [`set_token`](Self::set_token) with a freshly minted random
@@ -110,7 +132,7 @@ impl ServeHandle {
         self.state.credential.rotate()
     }
 
-    /// Current transport status, for `status` output.
+    /// How this side is currently reaching its peers.
     pub fn status(&self) -> PipeStatus {
         self.state.lifecycle.status()
     }

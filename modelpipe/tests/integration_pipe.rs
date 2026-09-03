@@ -219,7 +219,9 @@ async fn a_supplied_credential_can_be_replaced_in_place() {
         paired(&backend, TokenPolicy::Supplied("first-key".to_owned())).await;
 
     assert_eq!(serving.token().as_deref(), Some("first-key"));
-    serving.set_token("second-key".to_owned());
+    serving
+        .set_token("second-key".to_owned())
+        .expect("a usable token is installed");
 
     assert!(
         within("old", request(&url, "/v1/models", Some("Bearer first-key")))
@@ -602,6 +604,53 @@ async fn a_response_tells_the_client_not_to_reuse_the_connection() {
         response.to_ascii_lowercase().contains("connection: close"),
         "a pooling client will otherwise send its next request down a \
          stream nobody is reading: {response}"
+    );
+
+    connected.shutdown().await;
+    serving.shutdown().await;
+}
+
+/// A rotation that cannot be presented is refused *and reported*, with the
+/// credential already in force left exactly where it was.
+///
+/// The silent version of this is the dangerous one, and it is the one that
+/// shipped: a rotation reads its replacement from somewhere — a config
+/// file, a secrets fetch, an environment variable — and when that somewhere
+/// comes back blank an embedder who is told nothing believes the old key is
+/// dead and retires it everywhere else, while this listener goes on
+/// accepting it. A credential the operator thinks is revoked and is not.
+/// `serve` has always refused the same value loudly.
+///
+/// Its negative control is `a_supplied_credential_can_be_replaced_in_place`
+/// above: that one proves a usable token really does displace the old one,
+/// so this cannot pass by `set_token` having stopped working at all.
+#[tokio::test]
+async fn a_refused_rotation_reports_it_and_leaves_the_previous_credential_in_force() {
+    let backend = MockBackend::json(200, OK_BODY).await;
+    let (serving, connected, url) =
+        paired(&backend, TokenPolicy::Supplied("the-only-key".to_owned())).await;
+
+    for blank in ["", "   ", "\t\n"] {
+        assert!(
+            serving.set_token(blank.to_owned()).is_err(),
+            "{blank:?} is a credential no conforming client could ever send"
+        );
+    }
+
+    assert_eq!(
+        serving.token().as_deref(),
+        Some("the-only-key"),
+        "the handle still reports what it is actually enforcing"
+    );
+    assert!(
+        within(
+            "the key the operator may now believe is dead",
+            request(&url, "/v1/models", Some("Bearer the-only-key")),
+        )
+        .await
+        .expect("request")
+        .starts_with("HTTP/1.1 200"),
+        "and it is still the key that works"
     );
 
     connected.shutdown().await;

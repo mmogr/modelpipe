@@ -154,3 +154,36 @@ fn both_error_types_are_std_errors_and_send_sync() {
     let boxed: Box<dyn Error + Send + Sync> = Box::new(ConnectError::PeerUnreachable);
     assert!(boxed.to_string().contains("could not reach"));
 }
+
+/// Rotation reports refusal, and the type says so from outside the crate.
+///
+/// This is a signature test as much as a behaviour one: `set_token` is
+/// frozen at 0.1.0, and turning a `()` into a `Result` afterwards is a
+/// breaking change. Written here rather than only inside the crate because
+/// what matters is that a *dependent* is forced to look — an embedder
+/// rotating a key it read from a config file has to handle the case where
+/// that file came back blank.
+#[test]
+fn a_dependent_cannot_ignore_a_rotation_that_was_refused() {
+    fn rotate(handle: &ServeHandle, from_config: String) -> Result<(), ServeError> {
+        // The `?` is the point: this does not compile against a `()`.
+        handle.set_token(from_config)?;
+        Ok(())
+    }
+
+    // Named so it cannot be dropped as dead code, and never called: there
+    // is no live listener here, and the promise being checked is the type.
+    let _ = rotate;
+
+    // The variant a blank replacement produces is the same one `serve`
+    // refuses at startup, so a dependent needs one arm rather than two.
+    let refused = ServeError::InvalidToken;
+    assert!(
+        !refused.is_retryable(),
+        "a blank credential does not become usable by waiting"
+    );
+    assert!(
+        refused.to_string().contains("empty"),
+        "and it says which value it means: {refused}"
+    );
+}
