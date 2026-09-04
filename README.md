@@ -1,5 +1,10 @@
 # modelpipe
 
+[![modelpipe-cli on crates.io](https://img.shields.io/crates/v/modelpipe-cli?style=flat-square&label=modelpipe-cli)](https://crates.io/crates/modelpipe-cli)
+[![modelpipe on crates.io](https://img.shields.io/crates/v/modelpipe?style=flat-square&label=modelpipe)](https://crates.io/crates/modelpipe)
+[![docs.rs](https://img.shields.io/docsrs/modelpipe?style=flat-square&label=docs.rs)](https://docs.rs/modelpipe)
+[![CI](https://img.shields.io/github/actions/workflow/status/mmogr/modelpipe/ci.yml?branch=main&style=flat-square&label=CI)](https://github.com/mmogr/modelpipe/actions/workflows/ci.yml)
+
 **Your model server, from anywhere. No VPN, no account, no cloud in the path.**
 
 modelpipe puts your local model server on your other devices. Ollama,
