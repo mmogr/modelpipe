@@ -64,11 +64,30 @@ fn the_options_structs_are_constructible_from_outside() {
     serve_opts.relay = Some("https://relay.example.com/".to_owned());
     serve_opts.allow_private_backend = true;
 
+    serve_opts.port_mapping = false;
+    serve_opts.discovery = false;
+
     let mut connect_opts = ConnectOptions::default();
     connect_opts.bind = Some("127.0.0.1:8080".parse().unwrap());
+    connect_opts.relay = Some("https://relay.example.com/".to_owned());
+    connect_opts.port_mapping = false;
+    connect_opts.discovery = false;
 
     assert!(connect_opts.bind.is_some());
     assert!(serve_opts.allow_private_backend);
+    assert!(!connect_opts.discovery && !serve_opts.discovery);
+}
+
+/// The defaults are what every version before this one did: every network
+/// contact on. A dependent that upgrades and changes nothing contacts
+/// exactly what it contacted before.
+#[test]
+fn the_default_options_keep_every_network_contact_on() {
+    let serve_opts = ServeOptions::default();
+    let connect_opts = ConnectOptions::default();
+    assert!(serve_opts.port_mapping && serve_opts.discovery);
+    assert!(connect_opts.port_mapping && connect_opts.discovery);
+    assert!(connect_opts.relay.is_none());
 }
 
 /// The opacity promise from the crate docs: a caller can walk to the

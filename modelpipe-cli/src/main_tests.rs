@@ -71,6 +71,48 @@ fn a_token_file_is_read_and_its_trailing_newline_trimmed() {
     std::fs::remove_dir_all(&dir).ok();
 }
 
+/// The network flags exist on both subcommands and parse as plain switches;
+/// what they do is the library's business and is tested there.
+#[test]
+fn the_network_flags_parse_on_both_subcommands() {
+    let serve = Cli::try_parse_from([
+        "modelpipe",
+        "serve",
+        "http://127.0.0.1:11434",
+        "--no-portmap",
+        "--no-discovery",
+    ])
+    .expect("serve accepts both");
+    assert!(matches!(
+        serve.command,
+        super::Command::Serve {
+            no_portmap: true,
+            no_discovery: true,
+            ..
+        }
+    ));
+
+    let connect = Cli::try_parse_from([
+        "modelpipe",
+        "connect",
+        "pipeticket",
+        "--relay",
+        "https://relay.example.com/",
+        "--no-portmap",
+        "--no-discovery",
+    ])
+    .expect("connect accepts all three");
+    assert!(matches!(
+        connect.command,
+        super::Command::Connect {
+            no_portmap: true,
+            no_discovery: true,
+            relay: Some(ref r),
+            ..
+        } if r == "https://relay.example.com/"
+    ));
+}
+
 /// The QR carries the uppercased ticket so it can use alphanumeric
 /// mode, and the format's case-insensitivity is what makes the scan
 /// parse back to the same ticket.

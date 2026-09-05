@@ -18,6 +18,7 @@ use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use tokio::net::TcpListener;
 
 use crate::ConnectError;
+use crate::connect::ConnectOptions;
 use crate::lifecycle::Lifecycle;
 use crate::peer::Peer;
 use crate::refusal;
@@ -33,7 +34,7 @@ pub(crate) struct ConnectState {
 /// Dial the ticket's endpoint and bind the local listener.
 pub(crate) async fn dial(
     ticket: &Ticket,
-    bind: Option<SocketAddr>,
+    opts: &ConnectOptions,
 ) -> Result<(Arc<ConnectState>, TcpListener), ConnectError> {
     // The caller's own values first, which is the order `serve` states as a
     // rule: "checking the cheap, user-fixable things first means a typo is
@@ -47,13 +48,15 @@ pub(crate) async fn dial(
     // Loopback by default. The local port is the one hop with no encryption
     // in front of it, so leaving this machine is a choice the caller makes
     // explicitly rather than one the default makes for them.
-    let requested = bind.unwrap_or_else(|| SocketAddr::from(([127, 0, 0, 1], 0)));
+    let requested = opts
+        .bind
+        .unwrap_or_else(|| SocketAddr::from(([127, 0, 0, 1], 0)));
     let listener = TcpListener::bind(requested)
         .await
         .map_err(ConnectError::Bind)?;
     let local_addr = listener.local_addr().map_err(ConnectError::Bind)?;
 
-    let peer = Peer::dial(ticket).await?;
+    let peer = Peer::dial(ticket, opts).await?;
 
     // Published here, before the handle exists, rather than from the accept
     // loop that used to own it. A spawned task has not necessarily run by

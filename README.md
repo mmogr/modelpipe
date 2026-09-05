@@ -135,12 +135,17 @@ the client.
 | `--allow-private-backend` | Accept a backend on a private (RFC 1918 / ULA) address, not only loopback. Link-local is never accepted. |
 | `--relay <URL>` | Use your own relay instead of the public ones. Does **not** disable discovery — see below. |
 | `--no-qr` | Don't print the QR code beside the ticket. |
+| `--no-portmap` | Don't ask the router for a UPnP/NAT-PMP mapping. Free: pairing is unaffected, a few NATs fall back to the relay more often. |
+| `--no-discovery` | Don't publish to, or resolve through, n0's discovery service. The ticket then carries every path it will ever have — see below before using it. |
 
 `modelpipe connect <TICKET>`
 
 | Flag | What it does |
 |---|---|
 | `--bind <ADDR>` | Local address to listen on. Defaults to a free loopback port. Binding off loopback exposes the one hop with no encryption in front of it, and warns you. |
+| `--relay <URL>` | The relay *this* side registers with and falls back to. The serve side's relay is in the ticket and is dialled regardless. |
+| `--no-portmap` | As for `serve`. |
+| `--no-discovery` | Don't resolve the peer through n0; dial only the paths the ticket carries. |
 
 Both commands
 
@@ -179,15 +184,31 @@ them, and nowhere if it sends them nowhere.
 
 "No cloud in the path" is a claim about your **data**, and it holds: the
 relay carries ciphertext it can't read, and most connections don't touch a
-relay at all. It is not a claim that nothing is contacted. By default iroh
-publishes address records to n0's discovery service and may ask your router
-for a UPnP/NAT-PMP mapping, both before any client connects.
+relay at all. It is not a claim that nothing is contacted. Three things
+are, by default, on both sides, and each has its own switch:
 
-`--relay` turns off neither. It swaps the relay and nothing else: discovery
-still goes through n0's DNS, the port-mapping attempt still happens, and
-the connect side always uses the public relays and discovery regardless. If
-contacting n0 at all is what you need to avoid, v0 isn't the tool yet.
-That's a gap, not a setting you missed.
+| Contact | What it is for | Who sees what | Switch |
+|---|---|---|---|
+| **n0's relays** (`*.relay.n0.iroh.link`) | The introduction, and the fallback path when hole-punching fails. | Both endpoint ids, both IPs, timing and volume. Never content. | `--relay <URL>` on either side, to run your own. There is no "no relay" — without one, two machines behind NATs cannot find each other. |
+| **n0's discovery service** (`dns.iroh.link`) | A signed record saying which relay this endpoint is at, republished every few minutes while it runs; the connect side resolves the peer's id through it. | Your endpoint id and the IP the record was published from, refreshed while the process lives. | `--no-discovery`, on either side. |
+| **Your router** | One UPnP/NAT-PMP/PCP mapping request, to be reachable directly more often. | Your own LAN. | `--no-portmap`. Free. |
+
+`--relay` swaps the relay and **nothing else**: it does not turn discovery
+off, and it does not turn the port-mapping probe off. Those are the other
+two flags, and they are separate because they cost different things.
+
+`--no-portmap` costs nothing that matters. Pairing works the same; behind a
+few NATs a connection falls back to the relay a little more often.
+
+`--no-discovery` costs a real property. With discovery on, a ticket names
+the endpoint and n0 says where it is now, so the same ticket keeps working
+after the serve side changes network — which is the whole of what
+`--identity` buys. With it off, the ticket carries every path its holder
+will ever have: the LAN addresses it was minted with and the relay it
+names. That is enough on one network and through the relay, and it stops
+working the moment the serve side's addresses change. If you mint a fresh
+ticket per session anyway, you lose little. If you rely on `--identity`,
+you lose the thing it was for.
 
 A relay, when one is used, sees endpoint identities, both IP addresses,
 timing and volume. Observability isn't readability, and it isn't nothing.

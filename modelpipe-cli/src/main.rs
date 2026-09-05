@@ -4,104 +4,17 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use clap::{Parser, Subcommand};
+use clap::Parser as _;
 use modelpipe::{ConnectOptions, ServeOptions, Ticket, TokenPolicy};
 
+mod cli;
 mod diagnostics;
 mod interrupt;
 mod park;
 
+use cli::{Cli, Command};
 use interrupt::Interrupt;
 use park::{park, shut_down};
-
-#[derive(Parser)]
-#[command(
-    name = "modelpipe",
-    version,
-    about = "Your model server, from anywhere"
-)]
-struct Cli {
-    /// Print more about what the pipe is doing; repeat for more still
-    ///
-    /// Once is a line per request. Twice adds the transport, which is where
-    /// the answer lives when two machines will not pair. Set RUST_LOG to
-    /// choose targets and levels yourself instead.
-    // Backtick-free like the flags below: clap prints this verbatim.
-    #[expect(clippy::doc_markdown, reason = "clap help text, not rustdoc")]
-    // `global`, so it is accepted before or after the subcommand. An
-    // operator who has already typed the whole `serve` line and wants more
-    // detail appends `-v` to it, and a flag that only works in front of the
-    // subcommand fails them for a reason they cannot see.
-    #[arg(short, long, global = true, action = clap::ArgAction::Count)]
-    verbose: u8,
-
-    #[command(subcommand)]
-    command: Command,
-}
-
-#[derive(Subcommand)]
-enum Command {
-    /// Expose a local OpenAI-compatible server; prints a pairing ticket + token
-    Serve {
-        /// Backend base URL, e.g. http://127.0.0.1:11434. Host and port
-        /// only — the request path comes from the client. Must resolve to
-        /// loopback (or a private address, with --allow-private-backend)
-        // Bare URL on purpose: clap prints this doc comment verbatim as
-        // `--help` text, where rustdoc's `<…>` link syntax would show up as
-        // literal angle brackets in `modelpipe serve --help`.
-        #[expect(clippy::doc_markdown, reason = "clap help text, not rustdoc")]
-        backend_url: String,
-        /// Serve without a bearer token. The name is the warning.
-        #[arg(long)]
-        insecure_no_auth: bool,
-        /// Require this existing bearer token instead of generating one
-        ///
-        /// Also read from MODELPIPE_TOKEN. Prefer that or --token-file: a
-        /// value passed here is visible in ps and lands in shell history.
-        // Backtick-free for the same reason as backend_url above: clap
-        // prints this verbatim, and backticks would appear as backticks.
-        #[expect(clippy::doc_markdown, reason = "clap help text, not rustdoc")]
-        // `hide_env_values` because clap otherwise renders the variable's
-        // *value* into `--help`: an operator running `modelpipe serve
-        // --help` with MODELPIPE_TOKEN set printed the credential to their
-        // terminal, and into whatever they pasted the help text into.
-        #[arg(
-            long,
-            env = "MODELPIPE_TOKEN",
-            hide_env_values = true,
-            conflicts_with = "insecure_no_auth"
-        )]
-        token: Option<String>,
-        /// Read the bearer token from this file, trimming trailing newline
-        #[arg(long, conflicts_with_all = ["insecure_no_auth", "token"])]
-        token_file: Option<PathBuf>,
-        /// Accept a backend on a private (RFC 1918) address, not just loopback
-        #[arg(long)]
-        allow_private_backend: bool,
-        /// Self-hosted relay URL (default: iroh public relays)
-        #[arg(long)]
-        relay: Option<String>,
-        /// Keep the endpoint key here so the ticket survives a restart
-        ///
-        /// Created on first use, readable only by you. Without it a fresh
-        /// key is generated per run, so every restart mints a new ticket
-        /// and every paired device has to be paired again. To revoke a
-        /// leaked ticket, delete this file and restart.
-        #[arg(long, value_name = "FILE")]
-        identity: Option<PathBuf>,
-        /// Do not print a QR code for the ticket
-        #[arg(long)]
-        no_qr: bool,
-    },
-    /// Bind a local port that is the remote server
-    Connect {
-        /// Pairing ticket printed by `serve`
-        ticket: String,
-        /// Local bind address (default: a free loopback port)
-        #[arg(long)]
-        bind: Option<std::net::SocketAddr>,
-    },
-}
 
 /// Which credential policy a set of flags asks for.
 ///
@@ -205,6 +118,8 @@ async fn main() -> anyhow::Result<()> {
             relay,
             identity,
             no_qr,
+            no_portmap,
+            no_discovery,
         } => {
             // Mutation rather than a struct literal: the options structs
             // are #[non_exhaustive], so a literal cannot cross the crate
@@ -221,6 +136,8 @@ async fn main() -> anyhow::Result<()> {
             opts.relay = relay;
             let ephemeral = identity.is_none();
             opts.identity = identity;
+            opts.port_mapping = !no_portmap;
+            opts.discovery = !no_discovery;
             // The ticket below is printed once and carried to another
             // machine by hand, so it is worth a few seconds to let the
             // endpoint find its relay first. Ten of them is what iroh
@@ -259,7 +176,13 @@ async fn main() -> anyhow::Result<()> {
             park(&mut handle, &mut interrupt).await?;
             shut_down(handle.shutdown(), &mut interrupt).await;
         }
-        Command::Connect { ticket, bind } => {
+        Command::Connect {
+            ticket,
+            bind,
+            relay,
+            no_portmap,
+            no_discovery,
+        } => {
             let ticket: Ticket = ticket.parse()?;
             if let Some(addr) = bind
                 && !addr.ip().is_loopback()
@@ -273,6 +196,9 @@ async fn main() -> anyhow::Result<()> {
             }
             let mut opts = ConnectOptions::default();
             opts.bind = bind;
+            opts.relay = relay;
+            opts.port_mapping = !no_portmap;
+            opts.discovery = !no_discovery;
             let mut handle = modelpipe::connect(&ticket, opts).await?;
             println!("{}", handle.base_url());
             park(&mut handle, &mut interrupt).await?;
