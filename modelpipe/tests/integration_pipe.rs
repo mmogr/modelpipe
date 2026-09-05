@@ -104,6 +104,16 @@ async fn a_request_crosses_the_pipe_and_the_response_comes_back() {
         )),
         "the Host names the backend: {sent}"
     );
+    assert!(
+        sent.contains("Via: 1.1 modelpipe"),
+        "the backend is told the request came through the tunnel: {sent}"
+    );
+    let peer = sent
+        .lines()
+        .find_map(|line| line.strip_prefix("X-Modelpipe-Peer: "))
+        .expect("the backend is told which peer");
+    assert_eq!(peer.len(), 12, "a twelve-hex-character fingerprint: {peer}");
+    assert!(peer.chars().all(|c| c.is_ascii_hexdigit()), "{peer}");
 
     connected.shutdown().await;
     serving.shutdown().await;
