@@ -10,10 +10,6 @@
 //! client must not try to reuse its local connection, which is why the
 //! response it gets carries `Connection: close`.
 
-use std::collections::BTreeMap;
-use std::sync::Mutex;
-use std::sync::atomic::{AtomicU64, Ordering};
-
 use iroh::Endpoint;
 use tracing::Instrument as _;
 
@@ -21,8 +17,9 @@ use crate::backend::TcpBackend;
 use crate::credential::Credential;
 use crate::exchange;
 use crate::fingerprint;
-use crate::lifecycle::{Lifecycle, PeerPath, aggregate};
+use crate::lifecycle::{Lifecycle, aggregate};
 use crate::peer;
+use crate::peers::PeerRegistry;
 
 /// How many exchanges one peer may have in flight at once.
 ///
@@ -45,10 +42,8 @@ pub(crate) struct ServeState {
     pub(crate) credential: Credential,
     pub(crate) backend: TcpBackend,
     pub(crate) lifecycle: Lifecycle,
-    /// Connected peers and how each is reaching us, keyed by an id that
-    /// exists only to remove the right entry when a peer goes.
-    peers: Mutex<BTreeMap<u64, PeerPath>>,
-    next_peer: AtomicU64,
+    /// Connected peers and how each is reaching us.
+    pub(crate) peers: PeerRegistry,
 }
 
 impl ServeState {
@@ -58,42 +53,8 @@ impl ServeState {
             credential,
             backend,
             lifecycle: Lifecycle::new(),
-            peers: Mutex::new(BTreeMap::new()),
-            next_peer: AtomicU64::new(0),
+            peers: PeerRegistry::new(),
         }
-    }
-
-    /// Record a peer and republish the aggregate status.
-    fn add_peer(&self, path: PeerPath) -> u64 {
-        let id = self.next_peer.fetch_add(1, Ordering::Relaxed);
-        self.with_peers(|peers| {
-            peers.insert(id, path);
-        });
-        id
-    }
-
-    fn remove_peer(&self, id: u64) {
-        self.with_peers(|peers| {
-            peers.remove(&id);
-        });
-    }
-
-    /// Mutate the peer set and publish what it now means.
-    ///
-    /// The lock is never held across an await — the closure is synchronous
-    /// and the status is computed inside it — so a slow peer cannot stall
-    /// another's accept.
-    fn with_peers(&self, f: impl FnOnce(&mut BTreeMap<u64, PeerPath>)) {
-        let mut guard = self
-            .peers
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        f(&mut guard);
-        let paths: Vec<PeerPath> = guard.values().copied().collect();
-        // Released before publishing, so nothing observes the status while
-        // the set it describes is still locked.
-        drop(guard);
-        self.lifecycle.set_status(aggregate(&paths));
     }
 }
 
@@ -147,18 +108,17 @@ async fn serve_connection(
     // `paths_stream`'s job: a refinement rather than a correction, since
     // this snapshot is honest about the moment it was taken.
     let path = peer::path_of(&connection);
-    let peer = state.add_peer(path);
-    let slots = std::sync::Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_STREAMS_PER_PEER));
-
     // Named by the rule a ticket names itself by — see `crate::fingerprint`
     // — so an operator reading this line can hold it against the ticket
     // they handed out and see whether the device that turned up is the one
     // they meant. The whole endpoint id would be ninety-six characters on
     // every line; the public key it is a prefix of is not a secret either
     // way. The same twelve characters reach the backend on every request
-    // from this peer, as `X-Modelpipe-Peer`, so a backend's log and this
-    // one name a device identically.
+    // from this peer, as `X-Modelpipe-Peer`, and are what `peers()` reports
+    // to an embedder — so every surface names a device identically.
     let peer_name: std::sync::Arc<str> = fingerprint::of(connection.remote_id().as_bytes()).into();
+    let peer = state.peers.add(peer_name.clone(), path, &state.lifecycle);
+    let slots = std::sync::Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_STREAMS_PER_PEER));
 
     // `info_span!` rather than `debug_span!`, and that is not a taste
     // call: a span disabled by the filter contributes no fields, so at the
@@ -224,7 +184,7 @@ async fn serve_connection(
     }
 
     span.in_scope(|| tracing::info!("peer disconnected"));
-    state.remove_peer(peer);
+    state.peers.remove(peer, &state.lifecycle);
 }
 
 /// Wait until the peer actually has the response, then let the guard go.
