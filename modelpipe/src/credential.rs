@@ -13,11 +13,13 @@
 
 use std::fmt;
 use std::sync::{Arc, RwLock};
+use std::time::Duration;
 
 use subtle::ConstantTimeEq;
 
 use crate::ServeError;
 use crate::base32;
+use crate::grant::Grants;
 use crate::token_policy::TokenPolicy;
 
 /// Bytes of entropy in a generated token: 256 bits, which is not a number
@@ -34,6 +36,10 @@ pub(crate) struct Credential {
     /// pointer rather than mutating a buffer some request may be part way
     /// through comparing against.
     enforced: RwLock<Option<Arc<Enforced>>>,
+    /// Credentials that admit once. Consulted only after the enforced
+    /// token has failed to match, so nothing here can widen what the
+    /// primary admits — only add a single, expiring exception to it.
+    grants: Grants,
 }
 
 /// The token a listener enforces.
@@ -68,6 +74,7 @@ impl Credential {
         };
         let cell = Self {
             enforced: RwLock::new(token.clone().map(Enforced::new)),
+            grants: Grants::new(),
         };
         Ok((cell, token))
     }
@@ -118,7 +125,27 @@ impl Credential {
         }
         let expected = enforced.token.as_bytes();
         let presented = &offered[scheme..];
-        expected.len() == presented.len() && bool::from(expected.ct_eq(presented))
+        if expected.len() == presented.len() && bool::from(expected.ct_eq(presented)) {
+            return true;
+        }
+        // Not the token. A grant is the one other thing it could be, and
+        // presenting it spends it.
+        self.grants.consume(presented)
+    }
+
+    /// Admit one request bearing `token` before `ttl` elapses, without
+    /// touching what is enforced.
+    ///
+    /// Returns whether it took: a token nothing can present is refused for
+    /// the reason [`Credential::new`] refuses it. Has no effect while
+    /// serving open, where everything is admitted already — the grant is
+    /// stored, and is simply never the reason a request got in.
+    pub(crate) fn grant(&self, token: String, ttl: Duration) -> bool {
+        if !presentable(&token) {
+            return false;
+        }
+        self.grants.add(token, ttl);
+        true
     }
 
     /// What the listener currently enforces, or `None` when serving open.
@@ -175,14 +202,21 @@ impl Credential {
 
 impl fmt::Debug for Credential {
     /// Reports only whether a credential is enforced, never which one — the
-    /// same rule `Debug for TokenPolicy` follows one screen up.
+    /// same rule `Debug for TokenPolicy` follows one screen up. Grants are
+    /// counted, not shown, for the same reason.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let state = if self.read().is_some() {
             "enforced"
         } else {
             "open"
         };
-        f.debug_tuple("Credential").field(&state).finish()
+        // `finish_non_exhaustive` rather than `finish`: the token field is
+        // deliberately absent, and the lint that asks for every field is
+        // right to ask — the answer is that this one is withheld on purpose.
+        f.debug_struct("Credential")
+            .field("state", &state)
+            .field("grants", &self.grants.count())
+            .finish_non_exhaustive()
     }
 }
 

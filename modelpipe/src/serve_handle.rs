@@ -154,6 +154,47 @@ impl ServeHandle {
         }
     }
 
+    /// Admit **one** request bearing `secret` before `ttl` elapses, on top
+    /// of whatever [`set_token`](Self::set_token) enforces.
+    ///
+    /// A pairing primitive, not a second key. An embedder that wants a new
+    /// device to *fetch* the real credential over the encrypted hop mints a
+    /// short code, grants it here, shows it once, and serves a handshake
+    /// route behind the tunnel: the device presents the code as its bearer,
+    /// the edge lets exactly that request through, and the route answers
+    /// with the key. The code is spent when presented and dead anyway when
+    /// `ttl` passes, so a photograph of the screen is worth nothing later.
+    ///
+    /// **While live, a grant is equivalent to the token for the whole
+    /// tunnel** — the edge cannot scope the one request it admits. Keep
+    /// `ttl` short, make the secret unguessable for that window, and count
+    /// attempts on the handshake route. The enforced token is untouched:
+    /// [`token`](Self::token) still reports it, it still admits, and a
+    /// rotation through [`set_token`](Self::set_token) neither spends nor
+    /// extends a grant.
+    ///
+    /// # Errors
+    ///
+    /// [`ServeError::InvalidToken`] if `secret` is empty or nothing but
+    /// whitespace, in which case nothing is granted — the value
+    /// [`set_token`](Self::set_token) refuses, refused for the same reason.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn example(serving: &modelpipe::ServeHandle) -> Result<(), Box<dyn std::error::Error>> {
+    /// serving.grant_once("483920".to_owned(), std::time::Duration::from_mins(2))?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn grant_once(&self, secret: String, ttl: Duration) -> Result<(), ServeError> {
+        if self.state.credential.grant(secret, ttl) {
+            Ok(())
+        } else {
+            Err(ServeError::InvalidToken)
+        }
+    }
+
     /// [`set_token`](Self::set_token) with a freshly minted random
     /// token, returned so the caller can redistribute it. The recovery
     /// move for a leaked generated token.

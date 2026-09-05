@@ -21,6 +21,17 @@ connect at all; the token gates who can make requests. The token is
 deliberately not inside the ticket, so a leaked ticket alone cannot make a
 request and a leaked token alone cannot reach the listener.
 
+**A grant is a one-request credential, and while it is live it is a full
+one.** `ServeHandle::grant_once` lets an embedder admit a single request
+bearing a code of its choosing, so a pairing handshake can run through the
+tunnel and hand a new device the real key without the key ever being shown.
+The grant is consumed on first use and expires unused; the enforced token is
+not affected. What the edge cannot do is scope it — the one request it
+admits may name any path — so the embedder's pairing route must count
+attempts, keep the window short, and choose a code that survives that
+window. modelpipe checks it in constant time and never logs it, like the
+token.
+
 **The backend must be local.** Loopback always, private ranges only behind
 an explicit flag, link-local — where cloud instance metadata lives — never,
 whatever that flag says. The check runs against the *resolved* address of

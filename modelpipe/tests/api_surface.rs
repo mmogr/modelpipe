@@ -161,6 +161,19 @@ fn both_error_types_are_std_errors_and_send_sync() {
     assert!(boxed.to_string().contains("could not reach"));
 }
 
+/// A grant is refused the same way a rotation is, with the same variant,
+/// and a dependent is likewise forced to look.
+#[test]
+fn a_dependent_cannot_ignore_a_grant_that_was_refused() {
+    fn pair(handle: &ServeHandle, code: String) -> Result<(), ServeError> {
+        handle.grant_once(code, std::time::Duration::from_mins(2))?;
+        Ok(())
+    }
+    // Named so it cannot be dropped as dead code, and never called: there
+    // is no live listener here, and the promise being checked is the type.
+    let _ = pair;
+}
+
 /// Rotation reports refusal, and the type says so from outside the crate.
 ///
 /// This is a signature test as much as a behaviour one: `set_token` is
