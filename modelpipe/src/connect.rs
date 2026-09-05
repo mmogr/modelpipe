@@ -11,6 +11,7 @@ use crate::connect_handle::ConnectHandle;
 use crate::dialer;
 use crate::peer;
 use crate::ticket::Ticket;
+use crate::transport;
 
 /// Why [`connect`] failed. Same contract as [`ServeError`](crate::ServeError): variants a
 /// retry policy can match on, transport details behind `source`.
@@ -40,6 +41,14 @@ pub enum ConnectError {
     /// [`ServeError::Bind`](crate::ServeError::Bind), and retryable for the
     /// same reason: no address here was chosen by anyone.
     Endpoint(std::io::Error),
+    /// [`ConnectOptions::relay`] does not parse as a relay URL. The twin of
+    /// [`ServeError::InvalidRelay`](crate::ServeError::InvalidRelay), with
+    /// the same scope: syntactic, before anything is dialled, and the
+    /// operator's to fix.
+    InvalidRelay {
+        /// The offending URL, for the error message.
+        url: String,
+    },
 }
 
 impl ConnectError {
@@ -63,7 +72,7 @@ impl ConnectError {
     pub const fn is_retryable(&self) -> bool {
         match self {
             Self::PeerUnreachable | Self::Endpoint(_) => true,
-            Self::Bind(_) => false,
+            Self::Bind(_) | Self::InvalidRelay { .. } => false,
         }
     }
 }
@@ -79,6 +88,12 @@ impl fmt::Display for ConnectError {
             // both prints the OS error twice.
             Self::Bind(_) => f.write_str("could not bind the requested local address"),
             Self::Endpoint(_) => f.write_str("could not set up the p2p endpoint"),
+            Self::InvalidRelay { url } => {
+                write!(
+                    f,
+                    "{url} does not parse as a relay URL — check the value passed as the relay"
+                )
+            }
         }
     }
 }
@@ -86,7 +101,7 @@ impl fmt::Display for ConnectError {
 impl std::error::Error for ConnectError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Self::PeerUnreachable => None,
+            Self::PeerUnreachable | Self::InvalidRelay { .. } => None,
             Self::Bind(e) | Self::Endpoint(e) => Some(e),
         }
     }
@@ -96,11 +111,33 @@ impl std::error::Error for ConnectError {
 ///
 /// Derives `Debug` where [`ServeOptions`](crate::ServeOptions) hand-writes one: nothing here
 /// is a credential, so there is nothing to redact.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 #[non_exhaustive]
 pub struct ConnectOptions {
     /// Local address to bind. `None` picks a free port on loopback.
     pub bind: Option<SocketAddr>,
+    /// Self-hosted relay URL for *this* side's endpoint. `None` uses iroh's
+    /// public relays. The serve side's relay travels in the ticket and is
+    /// dialled regardless; this is the relay this endpoint registers with
+    /// and falls back to, which until now was always a public one.
+    pub relay: Option<String>,
+    /// Same as [`ServeOptions::port_mapping`](crate::ServeOptions#structfield.port_mapping).
+    pub port_mapping: bool,
+    /// Same as [`ServeOptions::discovery`](crate::ServeOptions#structfield.discovery),
+    /// from the side that *resolves*: with it off, this side dials only
+    /// the paths the ticket carries.
+    pub discovery: bool,
+}
+
+impl Default for ConnectOptions {
+    fn default() -> Self {
+        Self {
+            bind: None,
+            relay: None,
+            port_mapping: true,
+            discovery: true,
+        }
+    }
 }
 
 /// Bind a local port that transparently is the remote backend. Point any
@@ -141,7 +178,12 @@ pub struct ConnectOptions {
 /// # }
 /// ```
 pub async fn connect(ticket: &Ticket, opts: ConnectOptions) -> Result<ConnectHandle, ConnectError> {
-    let (state, listener) = dialer::dial(ticket, opts.bind).await?;
+    // Cheapest and the operator's to fix, so first — the order `serve`
+    // keeps for the same value.
+    if let Some(relay) = opts.relay.as_deref() {
+        transport::validate_relay_for_connect(relay)?;
+    }
+    let (state, listener) = dialer::dial(ticket, &opts).await?;
     tokio::spawn(dialer::local_loop(state.clone(), listener));
     // The reconnect loop takes the two halves it needs by reference, so
     // the `Arc` that keeps them alive is held here rather than threaded
@@ -178,5 +220,26 @@ mod tests {
     fn a_connect_bind_failure_is_not_retryable_because_the_caller_chose_the_address() {
         let e = ConnectError::Bind(std::io::Error::other("address in use"));
         assert!(!e.is_retryable(), "{e} should not be retryable");
+    }
+
+    /// The operator typed the relay, so no amount of waiting fixes it —
+    /// the same verdict the serve side gives the same value.
+    #[test]
+    fn an_unparseable_relay_is_permanent_and_names_the_value() {
+        let e = ConnectError::InvalidRelay {
+            url: "not a url".to_owned(),
+        };
+        assert!(!e.is_retryable());
+        assert!(e.to_string().contains("not a url"));
+        assert!(std::error::Error::source(&e).is_none());
+    }
+
+    /// The defaults are what every version before this one did.
+    #[test]
+    fn the_default_options_keep_every_network_contact_on() {
+        let opts = ConnectOptions::default();
+        assert!(opts.port_mapping);
+        assert!(opts.discovery);
+        assert!(opts.relay.is_none());
     }
 }
