@@ -7,7 +7,7 @@
 
 use clap::Parser as _;
 
-use super::{Cli, Ticket, TokenPolicy, qr, token_policy};
+use super::{Cli, Ticket, TokenPolicy, qr, token_line, token_policy};
 
 /// clap's own consistency checks are debug-only, so they are compiled
 /// out of the `cargo install` binary whose `--help` this defines. This
@@ -170,4 +170,53 @@ fn verbosity_counts_what_was_typed() {
     ])
     .expect("the long form, thrice");
     assert_eq!((none.verbose, one.verbose, spelled.verbose), (0, 1, 3));
+}
+
+/// A credential the operator supplied is acknowledged, never echoed.
+///
+/// `--token-file` and `MODELPIPE_TOKEN` exist so the value stays out of
+/// `argv`, where `ps` and shell history can read it. Printing it to stdout
+/// afterwards hands it straight back to the place the flags were chosen to
+/// avoid — and the README tells people to pipe that stream.
+#[test]
+fn a_supplied_token_is_named_rather_than_printed() {
+    let line = token_line(true, Some("sk-secret".to_owned())).expect("auth is on");
+    assert_eq!(line, "token:  (supplied)");
+    assert!(
+        !line.contains("sk-secret"),
+        "the supplied credential must not reach stdout: {line}"
+    );
+}
+
+/// The other half, and the reason this is not simply "never print a token":
+/// a generated one exists nowhere else, so withholding it would leave the
+/// listener enforcing a credential nobody can present.
+#[test]
+fn a_generated_token_is_printed_in_full() {
+    assert_eq!(
+        token_line(false, Some("sk-minted".to_owned())).expect("auth is on"),
+        "token:  sk-minted"
+    );
+}
+
+/// Serving open has no token to name, and the caller turns that into the
+/// warning on stderr rather than a line on stdout.
+#[test]
+fn serving_open_produces_no_token_line() {
+    assert!(token_line(false, None).is_none());
+    assert!(token_line(true, None).is_none());
+}
+
+/// Both lines are read off a screen together, so the value column has to
+/// line up. `ticket: ` is eight characters; `token:  ` matches it with two
+/// spaces, and a single-space "fix" would silently un-align them.
+#[test]
+fn the_token_line_aligns_with_the_ticket_line() {
+    let token = token_line(false, Some("x".to_owned())).expect("auth is on");
+    let ticket = "ticket: pipeabc";
+    assert_eq!(
+        token.find('x'),
+        ticket.find('p'),
+        "the value columns must agree: {token:?} vs {ticket:?}"
+    );
 }
