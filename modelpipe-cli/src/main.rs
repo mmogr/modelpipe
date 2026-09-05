@@ -189,8 +189,10 @@ async fn main() -> anyhow::Result<()> {
     // during it.
     diagnostics::install(cli.verbose);
     // Created before either subcommand runs and held across both phases, so
-    // the interrupt that asks for shutdown and the one that gives up
-    // waiting are heard by the same listener.
+    // the signal that asks for shutdown and the one that gives up waiting
+    // are heard by the same listener. On Unix that listener hears SIGINT
+    // and SIGTERM alike, so `kill` and a service manager get the same drain
+    // Ctrl-C gets.
     let mut interrupt = Interrupt::new()?;
     match cli.command {
         Command::Serve {

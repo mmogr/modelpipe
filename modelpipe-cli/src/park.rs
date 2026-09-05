@@ -16,7 +16,8 @@ use modelpipe::PipeStatus;
 
 use crate::interrupt::Interrupt;
 
-/// Park until Ctrl-C, reporting the transport path and every change to it.
+/// Park until a shutdown signal, reporting the transport path and every
+/// change to it.
 ///
 /// `Relayed` is worth surfacing: it explains latency, and a user who does
 /// not know their traffic is going through a relay has no way to guess why
@@ -54,8 +55,8 @@ pub(crate) async fn park(
 /// Shut down gracefully, unless the operator asks again.
 ///
 /// The graceful path can legitimately take a while — it is waiting for
-/// admitted requests to finish, which is the whole promise — so the second
-/// Ctrl-C has to be able to stop waiting. Dropping the handle is the cut,
+/// admitted requests to finish, which is the whole promise — so a second
+/// signal has to be able to stop waiting. Dropping the handle is the cut,
 /// and returning from here does exactly that.
 pub(crate) async fn shut_down(handle: impl Future<Output = ()>, interrupt: &mut Interrupt) {
     tokio::select! {
