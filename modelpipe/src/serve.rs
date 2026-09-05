@@ -6,6 +6,7 @@
 
 use std::fmt;
 use std::sync::Arc;
+use std::time::Duration;
 
 use crate::backend::TcpBackend;
 use crate::credential::Credential;
@@ -56,6 +57,30 @@ pub struct ServeOptions {
     /// public addresses are refused whatever it is set to. The full rule
     /// is on [`ServeError::BackendNotLocal`].
     pub allow_private_backend: bool,
+    /// Wait, up to this long, for the endpoint to reach a relay before
+    /// [`serve`] returns.
+    ///
+    /// `None` — the default — returns as soon as the socket is bound and
+    /// the accept loop is running, which is the fastest a listener can
+    /// start and is what an embedder holding the handle in a daemon wants.
+    /// The cost is paid by [`ServeHandle::ticket`]: a ticket read in that
+    /// first instant carries only what the endpoint has found so far, and
+    /// reaching a relay takes a network round trip that binding does not.
+    ///
+    /// Set it when a *person* is about to be handed the ticket — printed,
+    /// or rendered as a QR code — because that ticket is copied once and
+    /// then used from a machine that is not this one. Waiting costs
+    /// seconds; a ticket that is missing the path its holder needed costs
+    /// a re-pair.
+    ///
+    /// A duration rather than a `bool` because the underlying wait has no
+    /// natural end: it is satisfied by a relay handshake completing, so on
+    /// a machine with no route to one — an air-gapped LAN, a laptop in
+    /// flight — it would never return. **Expiry is not an error.** The
+    /// listener is up either way, and a ticket with direct addresses and
+    /// no relay still pairs across a LAN, so [`serve`] returns `Ok` and
+    /// the caller is free to say nothing about it.
+    pub wait_online: Option<Duration>,
 }
 
 impl fmt::Debug for ServeOptions {
@@ -69,6 +94,7 @@ impl fmt::Debug for ServeOptions {
             .field("relay", &self.relay)
             .field("identity", &self.identity)
             .field("allow_private_backend", &self.allow_private_backend)
+            .field("wait_online", &self.wait_online)
             .finish()
     }
 }
@@ -148,6 +174,13 @@ pub async fn serve(backend_url: &str, opts: ServeOptions) -> Result<ServeHandle,
         .transpose()?;
     let backend = TcpBackend::new(backend_url, opts.allow_private_backend).await?;
     let endpoint = transport::bind(opts.relay.as_deref(), key).await?;
+    // After the endpoint exists and before the handle wraps it, which is
+    // the only window where waiting is free of consequence: nothing has
+    // been spawned yet, so a caller who gives up here has nothing to tear
+    // down. Deliberately not an error on expiry — see the field's docs.
+    if let Some(within) = opts.wait_online {
+        transport::wait_online(&endpoint, within).await;
+    }
 
     let state = Arc::new(ServeState::new(endpoint, credential, backend));
     tokio::spawn(accept_loop(state.clone()));

@@ -33,6 +33,7 @@
 
 use std::net::SocketAddr;
 use std::str::FromStr;
+use std::time::Duration;
 
 use iroh::endpoint::presets;
 use iroh::{Endpoint, EndpointAddr, EndpointId, RelayMode, RelayUrl, SecretKey, TransportAddr};
@@ -134,6 +135,26 @@ pub(crate) async fn bind(
         .bind()
         .await
         .map_err(|e| BindFailure::Io(bind_io(&e)))
+}
+
+/// Wait, up to `within`, for the endpoint to reach a relay.
+///
+/// iroh considers an endpoint "online" once a relay handshake has
+/// completed, which is what puts a relay address into the set
+/// [`ticket_from`] reads — binding alone does not. That makes this the
+/// difference between a ticket a remote machine can dial and one that
+/// describes only the paths this machine could see from where it sits.
+///
+/// The cap is not optional and not tuning. iroh's own wait has no timeout
+/// and pends forever where no relay is reachable, so a bare await would
+/// turn "no route to the internet" into a listener that never starts. This
+/// is why the caller passes a `Duration` and why running out of it is
+/// silent: the endpoint is live either way, and there is nothing here the
+/// operator could fix.
+pub(crate) async fn wait_online(endpoint: &Endpoint, within: Duration) {
+    // The result is deliberately discarded: `Err` means the deadline won,
+    // which is a slower pairing and not a failure to report.
+    let _ = tokio::time::timeout(within, endpoint.online()).await;
 }
 
 /// Check that a relay value is a relay URL at all.

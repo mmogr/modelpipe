@@ -2,6 +2,7 @@
 //! in `modelpipe`; this file parses arguments and prints.
 
 use std::path::PathBuf;
+use std::time::Duration;
 
 use clap::{Parser, Subcommand};
 use modelpipe::{ConnectOptions, ServeOptions, Ticket, TokenPolicy};
@@ -220,6 +221,16 @@ async fn main() -> anyhow::Result<()> {
             opts.relay = relay;
             let ephemeral = identity.is_none();
             opts.identity = identity;
+            // The ticket below is printed once and carried to another
+            // machine by hand, so it is worth a few seconds to let the
+            // endpoint find its relay first. Ten of them is what iroh
+            // recommends waiting on a network report; running out is not an
+            // error, and `serve` says nothing when it does.
+            opts.wait_online = Some(Duration::from_secs(10));
+
+            // To stderr, and before the wait rather than after it, so a
+            // terminal that is about to sit still for a moment says why.
+            eprintln!("finding a relay…");
             let mut handle = modelpipe::serve(&backend_url, opts).await?;
             let ticket = handle.ticket();
             println!("ticket: {ticket}");
