@@ -198,10 +198,15 @@ pub(crate) fn expects_continue(fields: &[(String, String)]) -> bool {
 }
 
 /// Apply the edge's header rules in the order they must happen.
-pub(crate) fn rewrite_for_backend(head: &mut RequestHead, authority: &str) {
+///
+/// `peer` is the connecting endpoint's fingerprint, which the backend is
+/// told alongside the fact that the request came through the tunnel at
+/// all — see [`headers::set_tunnel_markers`].
+pub(crate) fn rewrite_for_backend(head: &mut RequestHead, authority: &str, peer: &str) {
     headers::strip_hop_by_hop(&mut head.headers);
     headers::strip_inbound_forwarded(&mut head.headers);
     headers::set_host(&mut head.headers, authority);
+    headers::set_tunnel_markers(&mut head.headers, peer);
     // The same sentence the response carries to the client, said to the
     // other side for the same reason: this connection carries one exchange.
     // The edge opens a fresh one per exchange and drops it afterwards, so

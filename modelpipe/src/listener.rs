@@ -155,15 +155,18 @@ async fn serve_connection(
     // they handed out and see whether the device that turned up is the one
     // they meant. The whole endpoint id would be ninety-six characters on
     // every line; the public key it is a prefix of is not a secret either
-    // way.
-    //
+    // way. The same twelve characters reach the backend on every request
+    // from this peer, as `X-Modelpipe-Peer`, so a backend's log and this
+    // one name a device identically.
+    let peer_name: std::sync::Arc<str> = fingerprint::of(connection.remote_id().as_bytes()).into();
+
     // `info_span!` rather than `debug_span!`, and that is not a taste
     // call: a span disabled by the filter contributes no fields, so at the
     // default verbosity a `debug` span here would leave every exchange line
     // unattributable — which is the one thing this span exists to prevent.
     let span = tracing::info_span!(
         "peer",
-        peer = %fingerprint::of(connection.remote_id().as_bytes()),
+        peer = %peer_name,
         // A snapshot, honest about the moment it was taken, exactly as the
         // status published above is. `PipeStatus::as_str` rather than a
         // second spelling of the same two words, because the CLI already
@@ -194,6 +197,7 @@ async fn serve_connection(
         // accept cannot observe zero in flight and return while this
         // exchange is starting.
         let guard = state.lifecycle.enter();
+        let peer_name = peer_name.clone();
         // `.instrument`, not an `enter()`: the guard a synchronous enter
         // returns is not `Send` across an await, and this task is spawned.
         // Attaching the span to the future is also what makes the peer
@@ -206,8 +210,13 @@ async fn serve_connection(
                 // `join` is what lets the edge stay generic: it never learns
                 // that these two halves came from QUIC.
                 let mut stream = tokio::io::join(recv, send);
-                let _ =
-                    exchange::serve_exchange(&mut stream, &state.credential, &state.backend).await;
+                let _ = exchange::serve_exchange(
+                    &mut stream,
+                    &state.credential,
+                    &state.backend,
+                    &peer_name,
+                )
+                .await;
                 deliver(stream).await;
             }
             .instrument(span.clone()),

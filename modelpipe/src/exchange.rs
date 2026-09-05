@@ -77,6 +77,7 @@ pub(crate) async fn serve_exchange<S, B>(
     stream: &mut S,
     credential: &Credential,
     backend: &B,
+    peer: &str,
 ) -> std::io::Result<Outcome>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send,
@@ -89,7 +90,7 @@ where
     let span = tracing::info_span!("exchange", method = Empty, path = Empty, status = Empty);
     async {
         let started = std::time::Instant::now();
-        let result = run(stream, credential, backend).await;
+        let result = run(stream, credential, backend, peer).await;
         // Saturating rather than `as`: a truncating cast is a lint here and
         // a wrong number anywhere, and an exchange that ran for half a
         // billion years is better reported as a large one than a small one.
@@ -120,7 +121,12 @@ where
 }
 
 /// The state machine itself, from the first byte to the last.
-async fn run<S, B>(stream: &mut S, credential: &Credential, backend: &B) -> std::io::Result<Outcome>
+async fn run<S, B>(
+    stream: &mut S,
+    credential: &Credential,
+    backend: &B,
+    peer: &str,
+) -> std::io::Result<Outcome>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send,
     B: Backend + Sync,
@@ -166,7 +172,7 @@ where
     // Read before the rewrite, which is where the head stops being the
     // client's.
     let expects_continue = http_head::expects_continue(&head.headers);
-    http_head::rewrite_for_backend(&mut head, backend.authority());
+    http_head::rewrite_for_backend(&mut head, backend.authority(), peer);
     // A backend that will not take the connection is a gateway failure with
     // an answer, not a stream that dies silently. Without this the client
     // received nothing at all — not a status, not a malformed response, no

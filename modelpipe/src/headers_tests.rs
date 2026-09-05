@@ -249,6 +249,45 @@ fn a_request_with_no_host_gains_one() {
     assert_eq!(names(&h), ["host", "accept"]);
 }
 
+// ── Tunnel markers ───────────────────────────────────────────────────────
+
+/// The edge says the request came through it and from whom. A request that
+/// arrives already saying so — in any casing, any number of times — has its
+/// claim replaced, not extended: there is one hop, and the backend hears
+/// about it from the hop.
+#[test]
+fn tunnel_markers_are_set_by_the_edge_and_never_inherited_from_the_client() {
+    let mut h = headers(&[
+        ("Via", "1.1 somebody-else"),
+        ("VIA", "1.0 another"),
+        ("x-modelpipe-peer", "000000000000"),
+        ("Accept", "*/*"),
+    ]);
+    set_tunnel_markers(&mut h, "3ca82708b995");
+
+    assert_eq!(names(&h), ["accept", "via", "x-modelpipe-peer"]);
+    assert_eq!(h[1].1, VIA);
+    assert_eq!(h[2].1, "3ca82708b995");
+}
+
+#[test]
+fn a_request_with_no_markers_gains_both() {
+    let mut h = headers(&[("Accept", "*/*")]);
+    set_tunnel_markers(&mut h, "3ca82708b995");
+    assert_eq!(names(&h), ["accept", "via", "x-modelpipe-peer"]);
+}
+
+/// A backend cannot restate a marker in a trailer, for the reason it cannot
+/// restate `Content-Length` there: the head is where the edge decided what
+/// the message says about its hop.
+#[test]
+fn tunnel_markers_are_forbidden_in_trailers() {
+    assert!(is_stripped("Via"));
+    assert!(is_stripped("X-Modelpipe-Peer"));
+    assert!(is_forbidden_in_trailer("via"));
+    assert!(is_forbidden_in_trailer("x-modelpipe-peer"));
+}
+
 // ── Composition ──────────────────────────────────────────────────────────
 
 /// The order the edge applies these in, checked once so that the

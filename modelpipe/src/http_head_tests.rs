@@ -301,7 +301,7 @@ fn rewriting_for_the_backend_replaces_the_connection_and_keeps_the_message() {
             ("Content-Type", "application/json"),
         ]),
     };
-    rewrite_for_backend(&mut head, "127.0.0.1:11434");
+    rewrite_for_backend(&mut head, "127.0.0.1:11434", "3ca82708b995");
 
     let names: Vec<String> = head
         .headers
@@ -314,9 +314,18 @@ fn rewriting_for_the_backend_replaces_the_connection_and_keeps_the_message() {
     // default keep-alive apply to a connection it is about to close.
     assert_eq!(
         names,
-        ["host", "authorization", "content-type", "connection"]
+        [
+            "host",
+            "authorization",
+            "content-type",
+            "via",
+            "x-modelpipe-peer",
+            "connection"
+        ]
     );
     assert_eq!(head.headers[0].1, "127.0.0.1:11434");
+    assert_eq!(head.headers[3].1, "1.1 modelpipe", "the edge names itself");
+    assert_eq!(head.headers[4].1, "3ca82708b995", "and the peer");
     assert_eq!(
         head.headers.last().expect("connection"),
         &("Connection".to_owned(), "close".to_owned())

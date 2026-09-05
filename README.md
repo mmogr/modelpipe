@@ -76,6 +76,14 @@ and the relay only ever sees ciphertext. The machines' keys are their
 identities. No certificates, no certificate authorities, nobody in the
 middle who can read a byte.
 
+Two headers reach your backend on every tunnelled request, set by the
+serve side and never inherited from the client: `Via: 1.1 modelpipe`, and
+`X-Modelpipe-Peer` carrying the same twelve-character fingerprint the log
+uses for that device. They let a backend *restrict* — refuse a route to
+remote requests, count them, name the device — and are not for trusting
+beyond that: a local client can forge them, and gains nothing by it but a
+refusal.
+
 ## Auth is not optional
 
 `serve` checks `Authorization: Bearer …` in constant time before a byte
