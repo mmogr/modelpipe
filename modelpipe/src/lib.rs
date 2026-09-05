@@ -7,6 +7,15 @@
 //! can match a retry policy against, with the transport's own error
 //! reachable only as an opaque [`source`](std::error::Error::source).
 //!
+//! # Features
+//!
+//! `serde` (off by default) implements `Serialize` and `Deserialize` for
+//! [`Ticket`] — as its canonical string, the same text `Display` prints
+//! and `FromStr` reads, never as a struct — and for [`PipeStatus`] and
+//! [`PeerView`], as the identifiers [`PipeStatus::as_str`] already
+//! freezes. For an embedder that renders a status page from a JSON DTO;
+//! the CLI has no use for it.
+//!
 //! # Diagnostics
 //!
 //! This crate emits [`tracing`] events and installs no subscriber. A
@@ -68,6 +77,8 @@ mod request_body;
 mod status;
 mod ticket;
 mod ticket_addr;
+#[cfg(feature = "serde")]
+mod ticket_serde;
 mod ticket_string;
 mod token_policy;
 mod transport;

@@ -21,8 +21,25 @@ categories = ["network-programming", "asynchronous"]
 [lints]
 workspace = true
 
+[features]
+# `Serialize`/`Deserialize` for `Ticket` (as its canonical string),
+# `PipeStatus` and `PeerView`. Off by default: the CLI never needs them, and
+# an embedder that puts a ticket in a status DTO opts in with one line.
+serde = ["dep:serde"]
+
+# What docs.rs builds. The `serde` impls only exist under the feature, so
+# without this the published page would show the types and not the impls an
+# embedder is deciding whether to opt into.
+[package.metadata.docs.rs]
+all-features = true
+
 [dependencies]
 iroh = { workspace = true }
+# Optional, and behind the feature of the same name. Already in the graph
+# via iroh (which serializes its own address records), so turning the
+# feature on costs no additional compilation; `derive` is what `PipeStatus`
+# and `PeerView` use, and `serde_derive` is in the graph for the same reason.
+serde = { version = "1", optional = true, default-features = false, features = ["derive"] }
 # Constant-time comparison for the bearer check. Taken rather than
 # hand-rolled: the README promises the comparison is constant time, and at
 # `opt-level = 2` with `lto = "thin"`, under `unsafe_code = "deny"` and with
@@ -83,3 +100,9 @@ tokio = { workspace = true, features = ["macros", "rt-multi-thread", "io-util", 
 # comments — the "already in the graph" line the four dependencies above
 # carry is a justification, not a formula, and it does not apply here.
 tracing-subscriber = { version = "0.3", default-features = false, features = ["std", "fmt"] }
+# For the `serde` feature's tests only, which run under `--all-features`.
+# Like `tracing-subscriber` above, this is NOT already in the graph: it is
+# new compilation, in the test profile, and only when the feature is on —
+# which is the honest price of proving what the feature emits rather than
+# asserting it.
+serde_json = "1"
