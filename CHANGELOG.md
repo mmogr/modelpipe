@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0](https://github.com/mmogr/modelpipe/compare/v0.1.0...v0.2.0) - 2026-09-05
+
+### Added
+
+- *(serve)* CLI quick fixes, signal handling, and ticket timing ([#36](https://github.com/mmogr/modelpipe/pull/36))
+
+### Other
+
+- *(readme)* Link the published crates from the top of the page ([#34](https://github.com/mmogr/modelpipe/pull/34))
+
 ## [0.1.0](https://github.com/mmogr/modelpipe/releases/tag/v0.1.0) - 2026-09-03
 
 ### Other

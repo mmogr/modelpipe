@@ -3,7 +3,7 @@ resolver = "3"
 members = ["modelpipe", "modelpipe-cli"]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 # The honest floor: the iroh stack declares rust-version 1.91, so claiming
 # anything lower would promise a build this workspace cannot deliver. A user
@@ -29,7 +29,7 @@ authors = ["mmogr"]
 # protects this: ^0.1.0 admits 0.1.1, so from the first minor release onward
 # a requirement left behind by a hand edit would build, package and publish
 # cleanly while shipping a permanently loose dependency.
-modelpipe = { path = "modelpipe", version = "0.1.0" }
+modelpipe = { path = "modelpipe", version = "0.2.0" }
 # The engine. The requirement stays the usual caret major — downstream users
 # of the library resolve iroh for themselves — while the committed Cargo.lock
 # is what actually pins the version this workspace builds and tests against.
