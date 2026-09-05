@@ -21,6 +21,11 @@
 /// value describes no single peer, and a per-peer accessor is the
 /// additive change that would fix that if the need proves real.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize, serde::Deserialize),
+    serde(rename_all = "lowercase")
+)]
 #[non_exhaustive]
 pub enum PipeStatus {
     /// No peer is connected — waiting for the first, or between
@@ -69,6 +74,7 @@ impl PipeStatus {
 /// renders both with one `as_str`; for a single peer it is only ever
 /// `Direct` or `Relayed`.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub struct PeerView {
     /// The peer's fingerprint: twelve hex characters, the same rule the
