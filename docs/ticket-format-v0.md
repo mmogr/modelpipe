@@ -244,9 +244,22 @@ this; a listener may offer several, which is what makes introducing
 The version here is **independent of the ticket's version byte**. They are
 separate compatibility spaces, and the ticket's version cannot cover for
 this one: a ticket that parses perfectly still reaches a peer you cannot
-speak to if the ALPNs do not overlap. A refusal to negotiate is what a
-client sees when the two sides speak different protocol versions, and it is
-distinct from being unable to reach the peer at all.
+speak to if the ALPNs do not overlap.
+
+At the protocol level a refusal to negotiate and an unreachable peer are
+different events, and an implementation is encouraged to report them
+differently — "this machine speaks a version you do not" is actionable in a
+way "this machine did not answer" is not.
+
+**The reference implementation does not do this, and a client should not
+expect it to.** Every dial failure — a refused ALPN, a TLS error, a timeout,
+no route — collapses into one `PeerUnreachable`, rendered as "could not
+reach the serve side, directly or via a relay". A client pointed at a
+`modelpipe/1`-only listener is told the same thing it would be told about a
+machine that is switched off. This is a known limitation of v0 and is
+recorded here rather than left to be discovered, because building error
+handling around a distinction this page describes and the shipped code
+never surfaces is the mistake the paragraph above would otherwise invite.
 
 What travels *over* an accepted connection is not specified in this
 document. It will be, before anything claims to be stable — until then, a

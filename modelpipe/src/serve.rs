@@ -28,10 +28,17 @@ pub struct ServeOptions {
     /// What the listener requires in `Authorization: Bearer …`.
     pub auth: TokenPolicy,
     /// Self-hosted relay URL. `None` uses iroh's public relays, which
-    /// carry only ciphertext either way. Parsed when [`serve`] starts: a
-    /// value that is not a relay URL at all is
-    /// [`ServeError::InvalidRelay`] up front; a well-formed URL naming
-    /// the wrong relay still fails later, as transport.
+    /// carry only ciphertext either way. Parsed when [`serve`] starts, and
+    /// that parse is the only check there is: a value that is not a relay
+    /// URL at all is [`ServeError::InvalidRelay`] up front.
+    ///
+    /// A well-formed URL naming a relay that does not exist is **accepted
+    /// silently**. Nothing dials it here, so the endpoint binds, `serve`
+    /// returns `Ok`, and the ticket carries the URL verbatim. The cost is
+    /// paid by whoever holds that ticket: they lose one path to this
+    /// machine, which is invisible when hole-punching finds a direct one
+    /// and is [`ConnectError::PeerUnreachable`](crate::ConnectError::PeerUnreachable)
+    /// when it does not.
     pub relay: Option<String>,
     /// Where to keep this listener's endpoint key, so its ticket survives
     /// a restart.

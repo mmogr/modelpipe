@@ -167,8 +167,9 @@ pub(crate) async fn wait_online(endpoint: &Endpoint, within: Duration) {
 /// discarded.
 ///
 /// Syntactic only, and the error says so. A well-formed URL naming a relay
-/// that does not exist is indistinguishable from one that is merely down,
-/// and surfaces later as a transport failure.
+/// that does not exist is indistinguishable from one that is merely down —
+/// and both are accepted, because nothing on this side dials the relay to
+/// find out. Neither surfaces here or anywhere else on the serve side.
 pub(crate) fn validate_relay(url: &str) -> Result<(), ServeError> {
     RelayUrl::from_str(url)
         .map(|_| ())

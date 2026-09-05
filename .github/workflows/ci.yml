@@ -183,11 +183,13 @@ jobs:
           RUSTDOCFLAGS: -D warnings
         run: cargo doc -p modelpipe --no-deps
 
-  # ubuntu clippy above never sees the inside of a `#[cfg(windows)]` block. This
-  # crate has none yet — it is a transport that will grow socket and
-  # process-lifetime code, which is exactly where platform blocks appear, and a
-  # lint that has never run on a branch is a lint that will fail on the change
-  # that first needs it.
+  # ubuntu clippy above never sees the inside of a `#[cfg(windows)]` block, and
+  # this crate has them: the identity file's permissions are unix-only with a
+  # `#[cfg(not(unix))]` twin, and the CLI's shutdown-signal listener is written
+  # twice. A lint that never runs on a branch is a lint that fails on the change
+  # that first needs it — which is not hypothetical here. These jobs have
+  # already caught a Windows build break at compile, before a single test body
+  # ran.
   #
   # PR-only, and gated behind `clippy`: no sense spending macOS and Windows
   # minutes on a tree ubuntu has already rejected.
