@@ -106,18 +106,22 @@ sees endpoint identities, both IP addresses, timing and volume.
 *Observability is not readability, and it is not nothing.*
 
 **What the default configuration contacts before any client connects.** With
-default settings, iroh publishes address records to n0's discovery service
-and may solicit a UPnP/NAT-PMP port mapping on your LAN. "No cloud in the
-path" is a claim about your data — which is true — not a claim that nothing
-is contacted.
+default settings, on both sides, iroh registers with n0's public relays,
+publishes a signed address record to n0's discovery service and republishes
+it while the process runs, and may solicit a UPnP/NAT-PMP port mapping on
+your LAN. "No cloud in the path" is a claim about your data — which is true
+— not a claim that nothing is contacted. The README's "What it contacts"
+table names each contact, what it reveals, and the flag that removes it.
 
-**And `--relay` does not change that.** It swaps the relay map and nothing
-else: the discovery publisher and resolver still point at n0's DNS, and the
-port-mapping attempt is untouched. It applies to `serve` only, so a connect
-side always uses the public relays and the public discovery service
-regardless. v0 offers no way to disable discovery. This is worth stating
-plainly because the flag reads like the mitigation for this paragraph and
-is not one.
+**`--relay` changes one of the three.** It swaps the relay and nothing
+else; discovery and port-mapping are `--no-discovery` and `--no-portmap`,
+on either side, and they are separate flags because they cost different
+things. Turning discovery off removes the presence record n0 holds for
+you, and with it the property that a ticket keeps working after the serve
+side changes network — which is what `--identity` depends on. Turning
+port-mapping off costs nothing that matters. There is no switch for the
+relay itself: two machines behind NATs need an introduction from
+somewhere, and running your own is the option.
 
 **Anything reachable from the local port on the connect side.** That port is
 the one hop with no encryption in front of it. It binds to loopback by

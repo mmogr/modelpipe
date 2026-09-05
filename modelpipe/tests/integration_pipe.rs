@@ -49,6 +49,47 @@ async fn paired(
     (serving, connected, url)
 }
 
+/// With discovery and port-mapping off on both sides, the ticket carries
+/// every path its holder has — on one machine, that is enough. This is the
+/// configuration an embedder that minted the ticket a moment ago and will
+/// never need it to survive a change of network can run in, and it is the
+/// one that contacts nothing but the relay.
+#[tokio::test]
+async fn a_pairing_still_forms_with_discovery_and_port_mapping_off() {
+    let backend = MockBackend::json(200, OK_BODY).await;
+    let mut serve_opts = ServeOptions::default();
+    serve_opts.auth = TokenPolicy::Generate;
+    serve_opts.port_mapping = false;
+    serve_opts.discovery = false;
+    let serving = within(
+        "serve must bind without discovery",
+        Box::pin(modelpipe::serve(&backend.url, serve_opts)),
+    )
+    .await
+    .expect("serve");
+
+    let mut connect_opts = ConnectOptions::default();
+    connect_opts.port_mapping = false;
+    connect_opts.discovery = false;
+    let connected = within(
+        "connect must pair on the ticket's own paths",
+        Box::pin(modelpipe::connect(&serving.ticket(), connect_opts)),
+    )
+    .await
+    .expect("connect");
+
+    let response = within(
+        "a request must cross the pipe",
+        request(&connected.base_url(), "/v1/models", Some(&bearer(&serving))),
+    )
+    .await
+    .expect("request");
+    assert!(response.starts_with("HTTP/1.1 200 OK"), "got: {response}");
+
+    connected.shutdown().await;
+    serving.shutdown().await;
+}
+
 /// Wait until the connect side reports `wanted`.
 ///
 /// Polled rather than driven by `status_changed`, and the difference is the

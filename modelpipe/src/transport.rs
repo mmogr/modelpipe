@@ -35,7 +35,7 @@ use std::net::SocketAddr;
 use std::str::FromStr;
 use std::time::Duration;
 
-use iroh::endpoint::presets;
+use iroh::endpoint::{PortmapperConfig, presets};
 use iroh::{Endpoint, EndpointAddr, EndpointId, RelayMode, RelayUrl, SecretKey, TransportAddr};
 
 use crate::ticket::{BackendHint, Ticket};
@@ -87,21 +87,41 @@ impl From<BindFailure> for ServeError {
 impl From<BindFailure> for ConnectError {
     fn from(e: BindFailure) -> Self {
         match e {
-            // The connect side has no `InvalidRelay` of its own: it is not
-            // configured with a relay, so this arm is unreachable from
-            // `dial`, which calls `bind(None)`. It is still written out
-            // rather than collapsed with a wildcard — a wildcard here would
-            // silently absorb a variant added later, which is the mistake
-            // the `is_retryable` matches avoid for the same reason.
-            BindFailure::InvalidRelay(url) => Self::Endpoint(std::io::Error::other(format!(
-                "relay {url} is not a relay URL"
-            ))),
+            // The connect side takes a relay too now, so this arm is
+            // reachable and has its own permanent variant, for the reason
+            // the serve side has one: the operator typed it.
+            BindFailure::InvalidRelay(url) => Self::InvalidRelay { url },
             // Not `Bind`. That variant means the address the *caller* named
             // through `ConnectOptions::bind`, and is classified permanent
             // on exactly that basis; this is the p2p endpoint, which nobody
             // chose, and which `serve` reports as the retryable
             // `ServeError::Bind`.
             BindFailure::Io(e) => Self::Endpoint(e),
+        }
+    }
+}
+
+/// What an endpoint does on the network besides carry the pipe.
+///
+/// Both default to on, which is what every version before this one did
+/// and what iroh's own preset does. Each is a contact the README's "what
+/// it contacts" section names, and each `false` here removes exactly that
+/// contact and nothing else — see the field docs on
+/// [`ServeOptions`](crate::ServeOptions) for what it costs.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct NetOptions {
+    /// Ask the local gateway for a `UPnP` / NAT-PMP / PCP mapping.
+    pub(crate) port_mapping: bool,
+    /// Publish this endpoint's addresses to, and resolve peers through,
+    /// n0's discovery service.
+    pub(crate) discovery: bool,
+}
+
+impl Default for NetOptions {
+    fn default() -> Self {
+        Self {
+            port_mapping: true,
+            discovery: true,
         }
     }
 }
@@ -118,9 +138,13 @@ impl From<BindFailure> for ConnectError {
 /// It arrives as bare bytes rather than as an iroh type so that
 /// [`crate::identity`] — which decides where those bytes come from and who
 /// may read them — needs to know nothing about the transport.
+///
+/// `net` is what else the endpoint may do on the network; see
+/// [`NetOptions`].
 pub(crate) async fn bind(
     relay: Option<&str>,
     key: Option<[u8; crate::identity::KEY_BYTES]>,
+    net: NetOptions,
 ) -> Result<Endpoint, BindFailure> {
     let mut builder = Endpoint::builder(presets::N0).alpns(vec![ALPN.to_vec()]);
     if let Some(bytes) = key {
@@ -130,6 +154,16 @@ pub(crate) async fn bind(
         let parsed =
             RelayUrl::from_str(url).map_err(|_| BindFailure::InvalidRelay(url.to_owned()))?;
         builder = builder.relay_mode(RelayMode::Custom(parsed.into()));
+    }
+    if !net.port_mapping {
+        builder = builder.portmapper_config(PortmapperConfig::Disabled);
+    }
+    if !net.discovery {
+        // Removes both halves: this endpoint publishes nothing about
+        // itself, and resolves nothing about a peer. A ticket then has to
+        // carry every path its holder will need — which on one LAN it
+        // does, and across a change of network it does not.
+        builder = builder.clear_address_lookup();
     }
     builder
         .bind()
@@ -155,6 +189,15 @@ pub(crate) async fn wait_online(endpoint: &Endpoint, within: Duration) {
     // The result is deliberately discarded: `Err` means the deadline won,
     // which is a slower pairing and not a failure to report.
     let _ = tokio::time::timeout(within, endpoint.online()).await;
+}
+
+/// [`validate_relay`], with the verdict spelled as the connect side's error.
+pub(crate) fn validate_relay_for_connect(url: &str) -> Result<(), ConnectError> {
+    RelayUrl::from_str(url)
+        .map(|_| ())
+        .map_err(|_| ConnectError::InvalidRelay {
+            url: url.to_owned(),
+        })
 }
 
 /// Check that a relay value is a relay URL at all.

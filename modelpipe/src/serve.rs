@@ -22,7 +22,6 @@ use crate::transport;
 /// Start from `Default` — the recommended configuration — and set what
 /// you need. `#[non_exhaustive]`, so a new option is not a breaking
 /// change for callers who construct it that way.
-#[derive(Default)]
 #[non_exhaustive]
 pub struct ServeOptions {
     /// What the listener requires in `Authorization: Bearer …`.
@@ -88,6 +87,52 @@ pub struct ServeOptions {
     /// no relay still pairs across a LAN, so [`serve`] returns `Ok` and
     /// the caller is free to say nothing about it.
     pub wait_online: Option<Duration>,
+    /// Ask the local gateway for a `UPnP` / NAT-PMP / PCP port mapping, so
+    /// a peer behind a stricter NAT can reach this machine directly more
+    /// often.
+    ///
+    /// `true` — the default — is what every version before this one did.
+    /// `false` skips the gateway probe entirely, including the SSDP
+    /// multicast that raises firewall dialogs on some desktops; the cost
+    /// is a connection that falls back to the relay a little more often
+    /// behind some NATs. Nothing about pairing changes either way.
+    pub port_mapping: bool,
+    /// Publish this endpoint's addresses to n0's discovery service, and
+    /// resolve peers through it.
+    ///
+    /// `true` — the default — is what makes a ticket work after this
+    /// machine changes network: the ticket names the endpoint, and
+    /// discovery is how a holder finds where it is now. It is also a
+    /// contact with n0 before any client connects, refreshed while the
+    /// listener runs, and it is what
+    /// [`identity`](Self::identity) depends on to make a stored key worth
+    /// anything.
+    ///
+    /// `false` removes that contact, and the property with it: a ticket
+    /// then carries every path its holder will ever have, so it works on
+    /// the LAN it was minted on and through the relay it names, and fails
+    /// the moment this machine's addresses change. An embedder that mints
+    /// a fresh ticket per session — and so never needed a stale one to
+    /// keep working — loses little; one relying on `identity` loses the
+    /// thing it was for.
+    pub discovery: bool,
+}
+
+impl Default for ServeOptions {
+    /// Written out because two of the booleans default to `true`, which
+    /// `#[derive(Default)]` cannot express — and because "the default is
+    /// what every version before did" is a promise worth a function.
+    fn default() -> Self {
+        Self {
+            auth: TokenPolicy::default(),
+            relay: None,
+            identity: None,
+            allow_private_backend: false,
+            wait_online: None,
+            port_mapping: true,
+            discovery: true,
+        }
+    }
 }
 
 impl fmt::Debug for ServeOptions {
@@ -102,6 +147,8 @@ impl fmt::Debug for ServeOptions {
             .field("identity", &self.identity)
             .field("allow_private_backend", &self.allow_private_backend)
             .field("wait_online", &self.wait_online)
+            .field("port_mapping", &self.port_mapping)
+            .field("discovery", &self.discovery)
             .finish()
     }
 }
@@ -180,7 +227,11 @@ pub async fn serve(backend_url: &str, opts: ServeOptions) -> Result<ServeHandle,
         .map(identity::load_or_mint)
         .transpose()?;
     let backend = TcpBackend::new(backend_url, opts.allow_private_backend).await?;
-    let endpoint = transport::bind(opts.relay.as_deref(), key).await?;
+    let net = transport::NetOptions {
+        port_mapping: opts.port_mapping,
+        discovery: opts.discovery,
+    };
+    let endpoint = transport::bind(opts.relay.as_deref(), key, net).await?;
     // After the endpoint exists and before the handle wraps it, which is
     // the only window where waiting is free of consequence: nothing has
     // been spawned yet, so a caller who gives up here has nothing to tear
