@@ -42,18 +42,29 @@ impl ServeHandle {
     ///
     /// Returns an owned clone, for the same reason
     /// [`token`](Self::token) does — and for one this handle has that a
-    /// credential does not. iroh discovers direct addresses *over time*:
-    /// a ticket read the instant [`serve`](fn@crate::serve) returns is legitimately
-    /// relay-only, and the same call later carries the direct addresses
-    /// hole-punching has since found. A borrow would force the listener
-    /// to mint one ticket at startup and hand out that snapshot forever,
-    /// so the cheaper signature is the one that quietly makes the ticket
-    /// wrong.
+    /// credential does not. **The address set behind a ticket fills in
+    /// over time**, so a ticket read the instant
+    /// [`serve`](fn@crate::serve) returns is not the ticket the same call
+    /// makes a moment later. A borrow would force the listener to mint one
+    /// at startup and hand out that snapshot forever, so the cheaper
+    /// signature is the one that quietly makes the ticket wrong.
+    ///
+    /// The half that is usually missing first is the **relay**. Local
+    /// interface addresses are there almost immediately — binding a socket
+    /// is enough to enumerate them — while reaching a relay takes a
+    /// handshake over the network, and it is the relay that lets a peer
+    /// which cannot hole-punch to this machine reach it at all. Measured on
+    /// a host with no route to one: the ticket carried a direct address and
+    /// nothing else.
+    ///
+    /// [`ServeOptions::wait_online`](crate::ServeOptions#structfield.wait_online)
+    /// is the answer where the ticket is about to be handed to a person,
+    /// because that copy is taken once. Where it is not set, prefer calling
+    /// this again over caching what it returned.
     pub fn ticket(&self) -> Ticket {
         // Minted fresh from the endpoint's *current* address set, which is
-        // the reason this returns owned: iroh discovers direct addresses
-        // over time, so a ticket read a minute after `serve` returned
-        // carries paths the first one could not have.
+        // the reason this returns owned: a ticket read a minute after
+        // `serve` returned carries paths the first one could not have.
         transport::ticket_from(&self.state.endpoint.addr())
     }
 

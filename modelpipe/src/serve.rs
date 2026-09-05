@@ -6,6 +6,7 @@
 
 use std::fmt;
 use std::sync::Arc;
+use std::time::Duration;
 
 use crate::backend::TcpBackend;
 use crate::credential::Credential;
@@ -27,10 +28,17 @@ pub struct ServeOptions {
     /// What the listener requires in `Authorization: Bearer …`.
     pub auth: TokenPolicy,
     /// Self-hosted relay URL. `None` uses iroh's public relays, which
-    /// carry only ciphertext either way. Parsed when [`serve`] starts: a
-    /// value that is not a relay URL at all is
-    /// [`ServeError::InvalidRelay`] up front; a well-formed URL naming
-    /// the wrong relay still fails later, as transport.
+    /// carry only ciphertext either way. Parsed when [`serve`] starts, and
+    /// that parse is the only check there is: a value that is not a relay
+    /// URL at all is [`ServeError::InvalidRelay`] up front.
+    ///
+    /// A well-formed URL naming a relay that does not exist is **accepted
+    /// silently**. Nothing dials it here, so the endpoint binds, `serve`
+    /// returns `Ok`, and the ticket carries the URL verbatim. The cost is
+    /// paid by whoever holds that ticket: they lose one path to this
+    /// machine, which is invisible when hole-punching finds a direct one
+    /// and is [`ConnectError::PeerUnreachable`](crate::ConnectError::PeerUnreachable)
+    /// when it does not.
     pub relay: Option<String>,
     /// Where to keep this listener's endpoint key, so its ticket survives
     /// a restart.
@@ -56,6 +64,30 @@ pub struct ServeOptions {
     /// public addresses are refused whatever it is set to. The full rule
     /// is on [`ServeError::BackendNotLocal`].
     pub allow_private_backend: bool,
+    /// Wait, up to this long, for the endpoint to reach a relay before
+    /// [`serve`] returns.
+    ///
+    /// `None` — the default — returns as soon as the socket is bound and
+    /// the accept loop is running, which is the fastest a listener can
+    /// start and is what an embedder holding the handle in a daemon wants.
+    /// The cost is paid by [`ServeHandle::ticket`]: a ticket read in that
+    /// first instant carries only what the endpoint has found so far, and
+    /// reaching a relay takes a network round trip that binding does not.
+    ///
+    /// Set it when a *person* is about to be handed the ticket — printed,
+    /// or rendered as a QR code — because that ticket is copied once and
+    /// then used from a machine that is not this one. Waiting costs
+    /// seconds; a ticket that is missing the path its holder needed costs
+    /// a re-pair.
+    ///
+    /// A duration rather than a `bool` because the underlying wait has no
+    /// natural end: it is satisfied by a relay handshake completing, so on
+    /// a machine with no route to one — an air-gapped LAN, a laptop in
+    /// flight — it would never return. **Expiry is not an error.** The
+    /// listener is up either way, and a ticket with direct addresses and
+    /// no relay still pairs across a LAN, so [`serve`] returns `Ok` and
+    /// the caller is free to say nothing about it.
+    pub wait_online: Option<Duration>,
 }
 
 impl fmt::Debug for ServeOptions {
@@ -69,6 +101,7 @@ impl fmt::Debug for ServeOptions {
             .field("relay", &self.relay)
             .field("identity", &self.identity)
             .field("allow_private_backend", &self.allow_private_backend)
+            .field("wait_online", &self.wait_online)
             .finish()
     }
 }
@@ -148,6 +181,13 @@ pub async fn serve(backend_url: &str, opts: ServeOptions) -> Result<ServeHandle,
         .transpose()?;
     let backend = TcpBackend::new(backend_url, opts.allow_private_backend).await?;
     let endpoint = transport::bind(opts.relay.as_deref(), key).await?;
+    // After the endpoint exists and before the handle wraps it, which is
+    // the only window where waiting is free of consequence: nothing has
+    // been spawned yet, so a caller who gives up here has nothing to tear
+    // down. Deliberately not an error on expiry — see the field's docs.
+    if let Some(within) = opts.wait_online {
+        transport::wait_online(&endpoint, within).await;
+    }
 
     let state = Arc::new(ServeState::new(endpoint, credential, backend));
     tokio::spawn(accept_loop(state.clone()));

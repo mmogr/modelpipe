@@ -2,6 +2,7 @@
 //! in `modelpipe`; this file parses arguments and prints.
 
 use std::path::PathBuf;
+use std::time::Duration;
 
 use clap::{Parser, Subcommand};
 use modelpipe::{ConnectOptions, ServeOptions, Ticket, TokenPolicy};
@@ -141,6 +142,30 @@ fn token_policy(
     })
 }
 
+/// The `token:` line to print, or `None` when nothing is enforced.
+///
+/// A token the operator supplied is acknowledged rather than echoed. They
+/// already hold it — that is what "supplied" means — so printing it back
+/// buys nothing and costs the one thing `--token-file` exists to protect:
+/// it puts the credential on stdout, which is the stream the README tells
+/// people to pipe. `hide_env_values` on `--token` already refuses to render
+/// a supplied credential in `--help`; this is the same rule applied to the
+/// other place the value would otherwise surface.
+///
+/// A *generated* token is printed in full, because this is the only place
+/// it exists. Withholding it would leave the listener enforcing a
+/// credential nobody can present.
+fn token_line(supplied: bool, token: Option<String>) -> Option<String> {
+    // Two spaces after the colon, aligning the value with the ticket's on
+    // the line above. Both are meant to be read off a screen together.
+    let token = token?;
+    Some(if supplied {
+        "token:  (supplied)".to_owned()
+    } else {
+        format!("token:  {token}")
+    })
+}
+
 /// The ticket as a QR code, or `None` if it will not fit one.
 ///
 /// Uppercased first, which is not cosmetic: QR alphanumeric mode encodes
@@ -165,8 +190,10 @@ async fn main() -> anyhow::Result<()> {
     // during it.
     diagnostics::install(cli.verbose);
     // Created before either subcommand runs and held across both phases, so
-    // the interrupt that asks for shutdown and the one that gives up
-    // waiting are heard by the same listener.
+    // the signal that asks for shutdown and the one that gives up waiting
+    // are heard by the same listener. On Unix that listener hears SIGINT
+    // and SIGTERM alike, so `kill` and a service manager get the same drain
+    // Ctrl-C gets.
     let mut interrupt = Interrupt::new()?;
     match cli.command {
         Command::Serve {
@@ -185,18 +212,32 @@ async fn main() -> anyhow::Result<()> {
             // existing callers (this one included).
             let mut opts = ServeOptions::default();
             opts.auth = token_policy(token, token_file, insecure_no_auth)?;
+            // Read before `opts` is moved into `serve`, and the only thing
+            // that survives it: all three supplying flags collapse into
+            // `Supplied`, so this is the last point at which the CLI can
+            // tell an operator's own credential from one minted here.
+            let supplied = matches!(opts.auth, TokenPolicy::Supplied(_));
             opts.allow_private_backend = allow_private_backend;
             opts.relay = relay;
             let ephemeral = identity.is_none();
             opts.identity = identity;
+            // The ticket below is printed once and carried to another
+            // machine by hand, so it is worth a few seconds to let the
+            // endpoint find its relay first. Ten of them is what iroh
+            // recommends waiting on a network report; running out is not an
+            // error, and `serve` says nothing when it does.
+            opts.wait_online = Some(Duration::from_secs(10));
 
+            // To stderr, and before the wait rather than after it, so a
+            // terminal that is about to sit still for a moment says why.
+            eprintln!("finding a relay…");
             let mut handle = modelpipe::serve(&backend_url, opts).await?;
             let ticket = handle.ticket();
             println!("ticket: {ticket}");
-            match handle.token() {
+            match token_line(supplied, handle.token()) {
                 // Two lines, two credentials: the ticket and the token
                 // travel to client machines separately on purpose.
-                Some(token) => println!("token:  {token}"),
+                Some(line) => println!("{line}"),
                 None => eprintln!(
                     "WARNING: serving open — anyone holding the ticket can use your backend"
                 ),

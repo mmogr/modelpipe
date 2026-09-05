@@ -33,6 +33,7 @@
 
 use std::net::SocketAddr;
 use std::str::FromStr;
+use std::time::Duration;
 
 use iroh::endpoint::presets;
 use iroh::{Endpoint, EndpointAddr, EndpointId, RelayMode, RelayUrl, SecretKey, TransportAddr};
@@ -136,6 +137,26 @@ pub(crate) async fn bind(
         .map_err(|e| BindFailure::Io(bind_io(&e)))
 }
 
+/// Wait, up to `within`, for the endpoint to reach a relay.
+///
+/// iroh considers an endpoint "online" once a relay handshake has
+/// completed, which is what puts a relay address into the set
+/// [`ticket_from`] reads — binding alone does not. That makes this the
+/// difference between a ticket a remote machine can dial and one that
+/// describes only the paths this machine could see from where it sits.
+///
+/// The cap is not optional and not tuning. iroh's own wait has no timeout
+/// and pends forever where no relay is reachable, so a bare await would
+/// turn "no route to the internet" into a listener that never starts. This
+/// is why the caller passes a `Duration` and why running out of it is
+/// silent: the endpoint is live either way, and there is nothing here the
+/// operator could fix.
+pub(crate) async fn wait_online(endpoint: &Endpoint, within: Duration) {
+    // The result is deliberately discarded: `Err` means the deadline won,
+    // which is a slower pairing and not a failure to report.
+    let _ = tokio::time::timeout(within, endpoint.online()).await;
+}
+
 /// Check that a relay value is a relay URL at all.
 ///
 /// Returns `()` and never the parsed URL, which is not fastidiousness: a
@@ -146,8 +167,9 @@ pub(crate) async fn bind(
 /// discarded.
 ///
 /// Syntactic only, and the error says so. A well-formed URL naming a relay
-/// that does not exist is indistinguishable from one that is merely down,
-/// and surfaces later as a transport failure.
+/// that does not exist is indistinguishable from one that is merely down —
+/// and both are accepted, because nothing on this side dials the relay to
+/// find out. Neither surfaces here or anywhere else on the serve side.
 pub(crate) fn validate_relay(url: &str) -> Result<(), ServeError> {
     RelayUrl::from_str(url)
         .map(|_| ())

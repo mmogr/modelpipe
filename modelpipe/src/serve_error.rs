@@ -83,9 +83,13 @@ pub enum ServeError {
     /// [`ServeOptions::relay`](crate::ServeOptions::relay) does not parse as a relay URL. Syntactic
     /// validation only, before the listener starts: it catches the typo
     /// class that mangles the URL itself, and is permanent and
-    /// user-fixable like [`BackendNotLocal`](Self::BackendNotLocal). A
-    /// well-formed URL naming the wrong host is indistinguishable from a
-    /// downed relay, and still surfaces as a transport error.
+    /// user-fixable like [`BackendNotLocal`](Self::BackendNotLocal).
+    ///
+    /// A well-formed URL naming the wrong host is a different matter, and
+    /// is **not** reported at all. Nothing on this side ever dials the
+    /// relay, so there is no variant here it could arrive as — the
+    /// listener starts, and the misconfiguration travels out in the ticket
+    /// to be discovered, or not, by the peer that dials it.
     InvalidRelay {
         /// The offending URL, for the error message.
         url: String,
