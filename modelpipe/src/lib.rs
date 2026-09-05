@@ -62,6 +62,7 @@ mod listener;
 mod locality;
 mod outcome;
 mod peer;
+mod peers;
 mod refusal;
 mod request_body;
 mod status;
@@ -77,6 +78,7 @@ mod connect_handle;
 mod serve;
 mod serve_error;
 mod serve_handle;
+mod serve_status;
 
 // This block is the public API. Everything above is a private module,
 // free to be rearranged at will; every name below is versioned. Adding to
@@ -86,7 +88,7 @@ pub use connect_handle::ConnectHandle;
 pub use serve::{ServeOptions, serve};
 pub use serve_error::ServeError;
 pub use serve_handle::ServeHandle;
-pub use status::PipeStatus;
+pub use status::{PeerView, PipeStatus};
 pub use ticket::{Ticket, TicketParseError};
 pub use token_policy::TokenPolicy;
 
@@ -108,6 +110,7 @@ const fn auto_trait_promises() {
     assert::<ServeHandle>();
     assert::<ConnectHandle>();
     assert::<PipeStatus>();
+    assert::<PeerView>();
     assert::<ServeError>();
     assert::<ConnectError>();
     assert::<TicketParseError>();
@@ -128,6 +131,7 @@ const fn auto_trait_promises() {
     // `PipeStatus: Copy + Eq` is stated at its derive and relied on by
     // `status_changed`'s snapshot comparison.
     assert_clone::<Ticket>();
+    assert_clone::<PeerView>();
     assert_copy_eq::<PipeStatus>();
 }
 

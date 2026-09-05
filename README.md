@@ -178,7 +178,10 @@ takes over entirely if you want to pick targets and levels yourself.
 
 Embedding the library? It emits [`tracing`](https://docs.rs/tracing) events
 and installs no subscriber, so they go wherever your binary already sends
-them, and nowhere if it sends them nowhere.
+them, and nowhere if it sends them nowhere. For a status page rather than
+a log, `ServeHandle::status` is the aggregate (the worst path across every
+connected peer) and `ServeHandle::peers` is the list behind it — each peer
+by the same fingerprint the log shows, with its own direct-or-relayed path.
 
 ## What it contacts, and what it doesn't
 

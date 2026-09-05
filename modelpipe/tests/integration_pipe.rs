@@ -627,7 +627,26 @@ async fn a_live_pairing_reports_a_transport_path_on_both_sides() {
         );
     }
 
+    // The per-peer view names the one peer and agrees with the aggregate.
+    let peers = serving.peers();
+    assert_eq!(peers.len(), 1, "one connect side is paired: {peers:?}");
+    assert_eq!(
+        peers[0].path,
+        serving.status(),
+        "one peer: the aggregate is it"
+    );
+    assert_eq!(peers[0].fingerprint.len(), 12);
+    assert!(peers[0].fingerprint.chars().all(|c| c.is_ascii_hexdigit()));
+
     connected.shutdown().await;
+    // The peer's departure is noticed asynchronously; wait for the set to
+    // say so rather than asserting a race.
+    within("the peer leaves the set", async {
+        while !serving.peers().is_empty() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await;
     serving.shutdown().await;
 }
 
