@@ -89,6 +89,14 @@ second off takes the first with it. `README.md` records the measurement.
 **A malicious connect side.** Anyone you give a ticket and token to has the
 access above. There is no per-client scoping, quota or audit.
 
+**The tunnel markers are for restricting, not trusting.** The edge sets
+`Via: 1.1 modelpipe` and `X-Modelpipe-Peer: <fingerprint>` on every request
+it forwards, after removing any copy the client sent. A backend may refuse
+or count on them; it must not grant on them, because anything that reaches
+the backend without passing through modelpipe can write them too. The one
+direction that matters holds: a tunnelled peer cannot make its request look
+local, because the edge always overwrites.
+
 **A compromised backend.** modelpipe forwards what your server says. If it
 is compromised, modelpipe faithfully delivers whatever it returns.
 
