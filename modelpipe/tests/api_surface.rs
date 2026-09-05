@@ -21,8 +21,8 @@
 use std::error::Error;
 
 use modelpipe::{
-    ConnectError, ConnectHandle, ConnectOptions, PipeStatus, ServeError, ServeHandle, ServeOptions,
-    Ticket, TicketParseError, TokenPolicy,
+    ConnectError, ConnectHandle, ConnectOptions, PeerView, PipeStatus, ServeError, ServeHandle,
+    ServeOptions, Ticket, TicketParseError, TokenPolicy,
 };
 
 /// Every name the crate promises, reachable at the flat path it promises it
@@ -44,6 +44,7 @@ fn the_public_names_resolve_at_the_crate_root() {
     nameable::<ConnectHandle>();
     nameable::<TokenPolicy>();
     nameable::<PipeStatus>();
+    nameable::<PeerView>();
 
     // The two entry points. Passed as values rather than ascribed a type:
     // both are `async fn`, so their return is an opaque future no caller
@@ -137,6 +138,22 @@ fn a_status_can_be_copied_compared_and_named() {
     assert_eq!(a, b);
     assert_ne!(a, PipeStatus::Direct);
     assert_eq!(a.as_str(), "relayed");
+}
+
+/// A peer view is readable field by field from outside, and `peers` is on
+/// the handle — the shape a status page renders from.
+#[test]
+fn a_peer_view_is_readable_from_outside() {
+    fn render(handle: &ServeHandle) -> Vec<String> {
+        handle
+            .peers()
+            .iter()
+            .map(|peer: &PeerView| format!("{} {}", peer.fingerprint, peer.path.as_str()))
+            .collect()
+    }
+    // Named so it cannot be dropped as dead code, and never called: there
+    // is no live listener here, and the promise being checked is the type.
+    let _ = render;
 }
 
 /// The redaction promise, checked from outside, because a dependent's own
