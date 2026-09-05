@@ -21,17 +21,6 @@ use crate::lifecycle::{Lifecycle, aggregate};
 use crate::peer;
 use crate::peers::PeerRegistry;
 
-/// How many exchanges one peer may have in flight at once.
-///
-/// Backpressure rather than refusal: a peer may open more streams, and they
-/// wait. What is bounded is the work and the memory a single ticket-holder
-/// can command, which — with the head size and the head timeout — is the
-/// whole of what a leaked ticket is worth before it authenticates.
-///
-/// Deliberately generous. A client pipelining a page of requests is normal;
-/// a client with sixty-four in flight is not a client.
-const MAX_CONCURRENT_STREAMS_PER_PEER: usize = 64;
-
 /// Everything a live listener shares.
 ///
 /// One `Arc`, held by the handle, the accept loop, and every in-flight
@@ -118,7 +107,9 @@ async fn serve_connection(
     // to an embedder — so every surface names a device identically.
     let peer_name: std::sync::Arc<str> = fingerprint::of(connection.remote_id().as_bytes()).into();
     let peer = state.peers.add(peer_name.clone(), path, &state.lifecycle);
-    let slots = std::sync::Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_STREAMS_PER_PEER));
+    // The peer's budget, not this connection's: every connection from one
+    // endpoint draws on the same sixty-four — see `peers::MAX_CONCURRENT_STREAMS_PER_PEER`.
+    let slots = state.peers.slots(&peer_name);
 
     // `info_span!` rather than `debug_span!`, and that is not a taste
     // call: a span disabled by the filter contributes no fields, so at the
@@ -148,8 +139,8 @@ async fn serve_connection(
         let state = state.clone();
         // Acquired before the stream is taken on, so a peer opening streams
         // faster than they complete waits here rather than accumulating
-        // tasks. `acquire_owned` cannot fail: the semaphore lives as long as
-        // this loop and is never closed.
+        // tasks. `acquire_owned` cannot fail: the semaphore lives at least
+        // as long as this loop and is never closed.
         let Ok(slot) = slots.clone().acquire_owned().await else {
             break;
         };

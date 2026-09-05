@@ -71,3 +71,83 @@ fn removing_one_peer_leaves_the_others_alone() {
         .collect();
     assert_eq!(left, ["bbbbbbbbbbbb"]);
 }
+
+// ── The stream budget ────────────────────────────────────────────────────
+
+/// The cap is per peer: two connections from one endpoint draw on one
+/// semaphore, and a different endpoint gets its own.
+#[test]
+fn connections_from_one_peer_share_a_budget_and_peers_do_not() {
+    let registry = PeerRegistry::new();
+    let lifecycle = Lifecycle::new();
+    let alice = name("aaaaaaaaaaaa");
+    let bob = name("bbbbbbbbbbbb");
+    registry.add(alice.clone(), PeerPath::Direct, &lifecycle);
+    registry.add(alice.clone(), PeerPath::Direct, &lifecycle);
+    registry.add(bob.clone(), PeerPath::Direct, &lifecycle);
+
+    let first = registry.slots(&alice);
+    let second = registry.slots(&alice);
+    let other = registry.slots(&bob);
+    assert!(Arc::ptr_eq(&first, &second), "one peer, one budget");
+    assert!(!Arc::ptr_eq(&first, &other), "another peer, another budget");
+    assert_eq!(first.available_permits(), MAX_CONCURRENT_STREAMS_PER_PEER);
+}
+
+/// A permit taken over one connection is a permit the same peer's other
+/// connection cannot take — which is the whole of what "per peer" means.
+#[test]
+fn a_stream_on_one_connection_counts_against_the_peers_other_connections() {
+    let registry = PeerRegistry::new();
+    let lifecycle = Lifecycle::new();
+    let alice = name("aaaaaaaaaaaa");
+    registry.add(alice.clone(), PeerPath::Direct, &lifecycle);
+    registry.add(alice.clone(), PeerPath::Direct, &lifecycle);
+    let via_first = registry.slots(&alice);
+    let via_second = registry.slots(&alice);
+
+    let held: Vec<_> = (0..MAX_CONCURRENT_STREAMS_PER_PEER)
+        .map(|_| {
+            via_first
+                .clone()
+                .try_acquire_owned()
+                .expect("within the cap")
+        })
+        .collect();
+    assert!(
+        via_second.clone().try_acquire_owned().is_err(),
+        "the other connection finds the budget spent"
+    );
+    drop(held);
+    assert!(
+        via_second.try_acquire_owned().is_ok(),
+        "and refilled once released"
+    );
+}
+
+/// The budget outlives any one connection and dies with the last, so a
+/// peer that paired once and left holds nothing for the life of the
+/// listener.
+#[test]
+fn a_budget_survives_one_connection_leaving_and_dies_with_the_last() {
+    let registry = PeerRegistry::new();
+    let lifecycle = Lifecycle::new();
+    let alice = name("aaaaaaaaaaaa");
+    let first = registry.add(alice.clone(), PeerPath::Direct, &lifecycle);
+    let second = registry.add(alice.clone(), PeerPath::Direct, &lifecycle);
+    let budget = registry.slots(&alice);
+    let _also = registry.slots(&alice);
+
+    registry.remove(first, &lifecycle);
+    assert!(
+        Arc::ptr_eq(&budget, &registry.slots(&alice)),
+        "the surviving connection still draws on the same budget"
+    );
+    registry.release(&alice); // the share `slots` above just took, for the assertion
+
+    registry.remove(second, &lifecycle);
+    assert!(
+        !Arc::ptr_eq(&budget, &registry.slots(&alice)),
+        "a peer that comes back after leaving entirely starts a fresh budget"
+    );
+}
