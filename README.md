@@ -199,6 +199,16 @@ connected peer) and `ServeHandle::peers` is the list behind it — each peer
 by the same fingerprint the log shows, with its own direct-or-relayed path,
 re-read while it is connected, and the round-trip time over it.
 
+Four more accessors, on both handles, for the things a status line and a
+mobile client need and could not previously ask for:
+
+| Call | What it answers |
+|---|---|
+| `status_changed_since(held)` | Everything after the value you last rendered — no transition coalesced away, and the sequence **ends** (`None`) once the pipe is closed, rather than repeating `Closed` for ever. `status_changed()` is unchanged and still snapshots at the call. |
+| `notify_network_change()` | Nothing — it *tells* the pipe the network moved and forces a rebind. Call it from an app's resume handler: on iOS and Android nothing else will, and a pipe bound to an interface that no longer exists cannot repair itself. |
+| `network_metrics()` | Relay connections made, failed, and **rate limited**. A throttled pipe is not a broken one — every other signal says it is fine — so this is the only place that distinction shows. |
+| `Ticket::relay_urls()` / `direct_addrs()` | What the ticket you are about to print actually carries. The relay is the half that arrives last, so a ticket read the instant `serve` returns can name direct addresses and nothing else; an empty `relay_urls()` is how you find out before somebody copies it. |
+
 ## What it contacts, and what it doesn't
 
 "No cloud in the path" is a claim about your **data**, and it holds: the

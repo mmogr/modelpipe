@@ -11,9 +11,10 @@
 //!
 //! `serde` (off by default) implements `Serialize` and `Deserialize` for
 //! [`Ticket`] — as its canonical string, the same text `Display` prints
-//! and `FromStr` reads, never as a struct — and for [`PipeStatus`] and
-//! [`PeerView`], as the identifiers [`PipeStatus::as_str`] already
-//! freezes. For an embedder that renders a status page from a JSON DTO;
+//! and `FromStr` reads, never as a struct — and for [`PipeStatus`],
+//! [`PeerView`] and [`NetworkMetrics`], the first as the identifiers
+//! [`PipeStatus::as_str`] already freezes and the other two as their own
+//! fields. For an embedder that renders a status page from a JSON DTO;
 //! the CLI has no use for it.
 //!
 //! # Diagnostics
@@ -81,12 +82,14 @@ mod ticket_addr;
 #[cfg(feature = "serde")]
 mod ticket_serde;
 mod ticket_string;
+mod ticket_view;
 mod token_policy;
 mod transport;
 
 // Orchestration: the two entry points, and the live pipes they return.
 mod connect;
 mod connect_handle;
+mod network;
 mod serve;
 mod serve_error;
 mod serve_handle;
@@ -97,6 +100,7 @@ mod serve_status;
 // this block is the one edit in the crate that cannot be walked back.
 pub use connect::{ConnectError, ConnectOptions, connect};
 pub use connect_handle::ConnectHandle;
+pub use network::NetworkMetrics;
 pub use serve::{ServeOptions, serve};
 pub use serve_error::ServeError;
 pub use serve_handle::ServeHandle;
@@ -126,6 +130,10 @@ const fn auto_trait_promises() {
     assert::<ServeError>();
     assert::<ConnectError>();
     assert::<TicketParseError>();
+    // A metrics snapshot is read on one task and rendered on another —
+    // that is what a status page is — so it needs the same bounds the
+    // views beside it have.
+    assert::<NetworkMetrics>();
     // The options structs and the policy they carry. Until now these were
     // only *accidentally* `Send`, by way of `future_promises` pinning the
     // futures that consume them; nothing said so, and an implementation
@@ -145,6 +153,11 @@ const fn auto_trait_promises() {
     assert_clone::<Ticket>();
     assert_clone::<PeerView>();
     assert_copy_eq::<PipeStatus>();
+    // And the same pair for the metrics snapshot: `Copy` is what the doc
+    // means by "holding one in a UI's state costs nothing", and `Eq` is
+    // what lets a caller notice that two readings are identical rather
+    // than comparing three fields by hand.
+    assert_copy_eq::<NetworkMetrics>();
 }
 
 // The async surface gets the same treatment: a spawned task awaiting one
@@ -158,9 +171,13 @@ fn future_promises(serve_side: &ServeHandle, connect_side: &ConnectHandle, ticke
     assert_send(serve("", ServeOptions::default()));
     assert_send(connect(ticket, ConnectOptions::default()));
     assert_send(serve_side.status_changed());
+    assert_send(serve_side.status_changed_since(PipeStatus::Idle));
+    assert_send(serve_side.notify_network_change());
     assert_send(serve_side.shutdown());
     assert_send(serve_side.shutdown_timeout(Duration::from_secs(0)));
     assert_send(connect_side.status_changed());
+    assert_send(connect_side.status_changed_since(PipeStatus::Idle));
+    assert_send(connect_side.notify_network_change());
     assert_send(connect_side.shutdown());
     assert_send(connect_side.shutdown_timeout(Duration::from_secs(0)));
 }

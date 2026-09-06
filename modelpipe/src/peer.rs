@@ -48,9 +48,9 @@ use crate::transport;
 
 /// The serve side, as this end knows how to reach it.
 pub(crate) struct Peer {
-    /// Held for the life of the pipe: it owns the socket every connection
-    /// below is opened on, and it is what a re-dial dials from.
-    endpoint: Endpoint,
+    /// Held for the life of the pipe: it owns every connection's socket, is
+    /// what a re-dial dials from, and is what [`crate::network`] borrows.
+    pub(crate) endpoint: Endpoint,
     /// Where to dial, kept rather than derived once. A ticket is a
     /// borrowed argument to [`bind`](Self::bind) and the pipe outlives the
     /// call.

@@ -1,14 +1,15 @@
 //! The iroh endpoint, and the one place a ticket meets an iroh address.
 //!
-//! Four modules in this crate name an iroh type — this one, which binds the
-//! endpoint, [`crate::listener`], which accepts on it, [`crate::peer`],
-//! which holds one connection and re-dials it, and [`crate::path_watch`],
-//! which reads how a live one is routed. That is deliberate rather than
-//! incidental, and the line is drawn at *lifetime*: anything that owns an
-//! iroh value for longer than a call is here or in those three. Everything
-//! above them — the codec, the locality rule, the header edge, the request
-//! exchange — is generic or pure, which is why the whole authentication
-//! edge is exercised over `tokio::io::duplex()` with no socket anywhere.
+//! Four modules in this crate own an iroh value past the end of a call —
+//! this one, which binds the endpoint, [`crate::listener`], which accepts
+//! on it, [`crate::peer`], which holds one connection and re-dials it, and
+//! [`crate::path_watch`], which reads how a live one is routed. A fifth,
+//! [`crate::network`], names one and keeps nothing, which is that same line
+//! seen from the other side: what is deliberate here is not the count but
+//! the *lifetime*. Everything above them — the codec, the locality rule,
+//! the header edge, the request exchange — is generic or pure, which is why
+//! the whole authentication edge is exercised over `tokio::io::duplex()`
+//! with no socket anywhere.
 //!
 //! (It said "the only module" until the listener, the peer and the path
 //! watcher arrived. The invariant none of them breaks is the one below.)

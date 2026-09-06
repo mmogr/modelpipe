@@ -15,7 +15,9 @@ mod common;
 use std::time::Duration;
 
 use common::{MockBackend, Scratch, request, within};
-use modelpipe::{CloseReason, ConnectOptions, PipeStatus, ServeOptions, Ticket, TokenPolicy};
+use modelpipe::{
+    CloseReason, ConnectOptions, NetworkMetrics, PipeStatus, ServeOptions, Ticket, TokenPolicy,
+};
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 
 const OK_BODY: &str = r#"{"object":"list","data":[]}"#;
@@ -55,14 +57,26 @@ async fn paired(
     (serving, connected, url)
 }
 
+/// Wait until `ready` holds, checking it on a slow tick.
+///
+/// Deliberately without a deadline of its own: every caller wraps it in
+/// [`within`], so a property that never arrives is named by the wait it
+/// was waiting for rather than by a bare elapsed timer. Written once
+/// because the two handles are separate types — a serve-side wait and a
+/// connect-side wait cannot share a signature, and a closure is the only
+/// thing they can share.
+async fn until(mut ready: impl FnMut() -> bool) {
+    while !ready() {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+}
+
 /// Wait until the connect side has actually reached the peer.
 ///
 /// `Idle` is the state a freshly returned handle is in, and the state it
 /// stays in while the dial runs; anything else means a connection formed.
 async fn carrying(handle: &modelpipe::ConnectHandle) {
-    while handle.status() == PipeStatus::Idle {
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
+    until(|| handle.status() != PipeStatus::Idle).await;
 }
 
 /// With discovery and port-mapping off on both sides, the ticket carries
@@ -118,9 +132,7 @@ async fn a_pairing_still_forms_with_discovery_and_port_mapping_off() {
 /// so a `status_changed` called afterwards waited for a second change that
 /// was never coming.
 async fn settles_on(handle: &modelpipe::ConnectHandle, wanted: PipeStatus) {
-    while handle.status() != wanted {
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
+    until(|| handle.status() == wanted).await;
 }
 
 fn bearer(handle: &modelpipe::ServeHandle) -> String {
@@ -1212,4 +1224,476 @@ async fn an_aborted_upload_does_not_wedge_the_serve_side_drain() {
         "and the client is told, rather than left with an empty stream: {seen}"
     );
     connected.shutdown().await;
+}
+
+// ── What an embedder can ask of a live pipe ──────────────────────────────
+
+/// The transition `status()` + `status_changed()` cannot see, seen.
+///
+/// This is the whole reason `status_changed_since` exists, and it is the
+/// one claim about it that needs two live sides: the window it closes is
+/// between a caller reading the status and going back to waiting, and only
+/// a real pipe moves on its own inside that window.
+///
+/// The sequence below arranges the window deliberately rather than racing
+/// for it — the peer is taken away and the transition is *waited out* — so
+/// what is being asserted is a property of the two methods rather than the
+/// timing of the machine running them. `status_changed` snapshots inside
+/// itself, so by the time it is called there is nothing left to report and
+/// it parks; `status_changed_since` is handed the value that was rendered,
+/// so it answers at once. Both halves are asserted, because either alone
+/// would pass against a method that simply always returned immediately.
+#[tokio::test]
+async fn a_transition_that_lands_before_the_next_wait_is_reported_rather_than_lost() {
+    let backend = MockBackend::json(200, OK_BODY).await;
+    let (serving, connected, _url) = paired(&backend, TokenPolicy::Generate).await;
+
+    // What a caller would have rendered: a live path, read once.
+    let rendered = connected.status();
+    assert!(
+        matches!(rendered, PipeStatus::Direct | PipeStatus::Relayed),
+        "a live pairing reports the path it is using: {rendered:?}"
+    );
+
+    // Now the pipe moves, and the move completes while nobody is waiting.
+    serving.shutdown().await;
+    within(
+        "the connect side must notice its peer has gone",
+        settles_on(&connected, PipeStatus::Idle),
+    )
+    .await;
+
+    // The coalescing form has nothing left to say and waits for a further
+    // change that is not coming — a peer that is gone stays gone, and iroh
+    // spends about thirty seconds on each dial after it.
+    assert!(
+        tokio::time::timeout(Duration::from_millis(200), connected.status_changed())
+            .await
+            .is_err(),
+        "status_changed snapshots at the call, so the transition is already behind it"
+    );
+
+    // The same fact, asked with the value that was rendered.
+    let seen = within(
+        "a caller holding its own snapshot must be told what it missed",
+        connected.status_changed_since(rendered),
+    )
+    .await;
+    assert_eq!(
+        seen,
+        Some(PipeStatus::Idle),
+        "the transition happened, and this is the form that reports it"
+    );
+
+    connected.shutdown().await;
+}
+
+/// The same window, on the other side of the pipe.
+///
+/// Mirrored rather than shared, and not for symmetry's sake. The two
+/// handles are separate types carrying separate bodies of one contract,
+/// so the property that separates `status_changed_since` from
+/// `status_changed` — that the snapshot comes from the *caller* — is a
+/// claim about each body on its own. Measured: with the serve side's
+/// method rewritten to snapshot inside itself, exactly as the coalescing
+/// form does, the whole suite still passed. That is the entire defect this
+/// pair of methods exists to close, and it survived on one side.
+///
+/// `a_watcher_carrying_its_last_value_forward_ends_when_the_pipe_does`
+/// does watch both sides, and cannot see this: a watcher whose own held
+/// value has reached `Closed` still ends under the coalescing body, so it
+/// passes either way.
+///
+/// The sequence is the connect-side test's, run the other way round — the
+/// *peer* is taken away rather than the listener, because a listener that
+/// shut itself down is closed and has no `Idle` to report.
+#[tokio::test]
+async fn the_serve_side_reports_a_transition_that_lands_before_its_next_wait_too() {
+    let backend = MockBackend::json(200, OK_BODY).await;
+    let (serving, connected, _url) = paired(&backend, TokenPolicy::Generate).await;
+
+    // `paired` waits on the *connect* side's view of the pairing. Each side
+    // publishes its own, and what this test renders has to be there first.
+    within(
+        "the serve side must see the peer it is carrying",
+        until(|| serving.status() != PipeStatus::Idle),
+    )
+    .await;
+
+    // What a caller would have rendered: a live path, read once.
+    let rendered = serving.status();
+    assert!(
+        matches!(rendered, PipeStatus::Direct | PipeStatus::Relayed),
+        "a live pairing reports the path it is carrying: {rendered:?}"
+    );
+
+    // Now the pipe moves, and the move completes while nobody is waiting.
+    connected.shutdown().await;
+    within(
+        "the serve side must notice its last peer has gone",
+        until(|| serving.status() == PipeStatus::Idle),
+    )
+    .await;
+
+    // The coalescing form has nothing left to say: the peer that left is
+    // not coming back, and no second change is on its way.
+    assert!(
+        tokio::time::timeout(Duration::from_millis(200), serving.status_changed())
+            .await
+            .is_err(),
+        "status_changed snapshots at the call, so the transition is already behind it"
+    );
+
+    // The same fact, asked with the value that was rendered.
+    let seen = within(
+        "a caller holding its own snapshot must be told what it missed",
+        serving.status_changed_since(rendered),
+    )
+    .await;
+    assert_eq!(
+        seen,
+        Some(PipeStatus::Idle),
+        "the peer left while nobody waited, and this is the form that reports it"
+    );
+
+    serving.shutdown().await;
+}
+
+/// The loop a language binding writes, run over a real pipe until it ends.
+///
+/// `Closed` is terminal, so a watcher that carries its last value forward
+/// would be handed `Closed` again for ever, immediately, with no await
+/// anywhere in the path — a torn-down pipe costing a core until the app is
+/// killed.
+///
+/// **Bounded rather than timed, and the bound is the assertion.** A loop
+/// with no await in it starves the runtime it is on, timers included, so a
+/// timeout around this hangs the suite instead of failing it — measured,
+/// not assumed. Counting the turns is what turns that defect into a
+/// message.
+///
+/// Both sides, because they are two implementations of one contract and
+/// the prose describing that contract has drifted between them before.
+#[tokio::test]
+async fn a_watcher_carrying_its_last_value_forward_ends_when_the_pipe_does() {
+    let backend = MockBackend::json(200, OK_BODY).await;
+    let (serving, connected, _url) = paired(&backend, TokenPolicy::Generate).await;
+    // Shared rather than moved: the watchers have to outlive the call that
+    // ends the pipe, and both handles take `&self` for teardown precisely
+    // so an embedder can hold them like this.
+    let serving = std::sync::Arc::new(serving);
+    let connected = std::sync::Arc::new(connected);
+
+    /// Carry the last value forward until the sequence ends, and report
+    /// where it ended.
+    macro_rules! watch {
+        ($handle:expr) => {{
+            let handle = $handle.clone();
+            tokio::spawn(async move {
+                // Idle, a path, and the close is three; ten leaves room for
+                // a pipe that flaps once and still names a repeat for what
+                // it is.
+                let mut turns = 0;
+                let mut held = handle.status();
+                let mut last = held;
+                while let Some(next) = handle.status_changed_since(held).await {
+                    last = next;
+                    held = next;
+                    turns += 1;
+                    assert!(turns <= 10, "the sequence has to end rather than repeat");
+                }
+                last
+            })
+        }};
+    }
+    let serve_watch = watch!(serving);
+    let connect_watch = watch!(connected);
+
+    // Both are parked on live pipes; ending the pipes is what has to end
+    // them, and nothing else in this test will.
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    connected.shutdown().await;
+    serving.shutdown().await;
+
+    assert_eq!(
+        within(
+            "the connect side's watcher must end with its pipe",
+            connect_watch
+        )
+        .await
+        .expect("the watcher must not panic"),
+        PipeStatus::Closed,
+        "the last value a watcher sees is the terminal one"
+    );
+    assert_eq!(
+        within(
+            "the serve side's watcher must end with its pipe",
+            serve_watch
+        )
+        .await
+        .expect("the watcher must not panic"),
+        PipeStatus::Closed
+    );
+}
+
+/// Telling a live pipe that the network moved does not disturb it.
+///
+/// The notice itself has no effect this machine can observe — iroh re-reads
+/// the interface state and returns early when nothing actually changed, and
+/// nothing here changes one — so what is asserted is the property an
+/// embedder relies on when it wires this into a resume handler it will call
+/// on every foreground: that calling it is free. A request crossing the
+/// pipe afterwards is the evidence.
+///
+/// Both handles, and both before and after, because "free" is a claim about
+/// each side's endpoint separately.
+#[tokio::test]
+async fn telling_both_sides_the_network_moved_leaves_the_pipe_carrying() {
+    let backend = MockBackend::json(200, OK_BODY).await;
+    let (serving, connected, url) = paired(&backend, TokenPolicy::Generate).await;
+
+    within(
+        "the serve side must accept a network-change notice",
+        serving.notify_network_change(),
+    )
+    .await;
+    within(
+        "and so must the connect side",
+        connected.notify_network_change(),
+    )
+    .await;
+
+    let response = within(
+        "a request must still cross the pipe afterwards",
+        request(&url, "/v1/models", Some(&bearer(&serving))),
+    )
+    .await
+    .expect("request");
+    assert!(response.starts_with("HTTP/1.1 200 OK"), "got: {response}");
+    assert!(
+        !matches!(connected.status(), PipeStatus::Closed),
+        "and the pipe is still up, not closed under the notice"
+    );
+
+    connected.shutdown().await;
+    serving.shutdown().await;
+}
+
+/// The counters are readable from both handles while the pipe is live, and
+/// they describe two separate endpoints.
+///
+/// The rate-limit field is what this accessor exists for and is the one no
+/// test can produce — a relay has to decide to throttle, and nothing in
+/// this process can make it. So what is pinned here is everything around
+/// it: the numbers are readable without a runtime trick, they are each
+/// side's own, and nothing that happens to a healthy pipe counts as a
+/// throttle. A pipe that reported a rate limit it had not been given would
+/// send an operator looking at the wrong machine.
+#[tokio::test]
+async fn both_sides_report_their_own_transport_counters() {
+    let backend = MockBackend::json(200, OK_BODY).await;
+    let (serving, connected, url) = paired(&backend, TokenPolicy::Generate).await;
+
+    let response = within(
+        "a request must cross the pipe first, so the counters describe a used pipe",
+        request(&url, "/v1/models", Some(&bearer(&serving))),
+    )
+    .await
+    .expect("request");
+    assert!(response.starts_with("HTTP/1.1 200 OK"), "got: {response}");
+
+    for (side, metrics) in [
+        ("serve", serving.network_metrics()),
+        ("connect", connected.network_metrics()),
+    ] {
+        assert_eq!(
+            metrics.relay_connections_ratelimited, 0,
+            "nothing throttled the {side} side, and it must not say otherwise: {metrics:?}"
+        );
+        // `Copy`, which is what the doc means by holding one in a UI's own
+        // state costing nothing — and what lets two readings be compared.
+        let held = metrics;
+        assert_eq!(held, metrics);
+    }
+
+    connected.shutdown().await;
+    serving.shutdown().await;
+}
+
+/// Each side counts the relay connection its own endpoint could not make.
+///
+/// **The reading the test above cannot make.** A healthy pipe leaves every
+/// field at zero, so `both_sides_report_their_own_transport_counters` is
+/// satisfied by a `network_metrics` that returns `NetworkMetrics::default()`
+/// and never looks at an endpoint at all — measured, on both facade methods
+/// at once, with the whole suite still passing. Only a counter that has
+/// actually moved separates the two, and `metrics_of` being pinned beside
+/// itself in `network_tests` does not pin the two public methods that call
+/// it.
+///
+/// **A relay that answers and is not one is what moves it**, and the
+/// distinction is iroh's rather than this test's. A URL nothing is behind
+/// is never dialled at all: the probe that decides whether a relay is
+/// reachable fails first, no relay connection is ever attempted, and the
+/// counters stay at zero — which is what `network_tests` observes of its
+/// `never` endpoint and why an unreachable relay cannot be used here. A
+/// plain HTTP server answering `200` passes that probe and then fails the
+/// handshake, so each endpoint counts a relay connection it could not make,
+/// retries, and counts another.
+///
+/// Hermetic, unlike the tests around it: the fake relay is a socket on
+/// loopback, the pairing forms over the ticket's direct addresses — the
+/// configuration `a_pairing_still_forms_with_discovery_and_port_mapping_off`
+/// covers — and nothing here waits on a route to the internet.
+///
+/// The third listener is what keeps each reading *that handle's*. It knows
+/// only a relay nothing is behind, so it never dials one and reports
+/// nothing at all, while the two sides beside it count failure after
+/// failure — a facade wired to a process-wide number rather than to an
+/// endpoint is one this still catches.
+#[tokio::test]
+async fn each_side_counts_the_relay_connection_its_own_endpoint_could_not_make() {
+    let backend = MockBackend::json(200, OK_BODY).await;
+    // Answers every request with `200 OK`, which is exactly what a relay
+    // must not answer the handshake with: the upgrade to the relay protocol
+    // needs `101 Switching Protocols`.
+    let fake_relay = MockBackend::json(200, OK_BODY).await;
+
+    let mut serve_opts = ServeOptions::default();
+    serve_opts.auth = TokenPolicy::Generate;
+    serve_opts.relay = Some(fake_relay.url.clone());
+    serve_opts.port_mapping = false;
+    serve_opts.discovery = false;
+    let serving = within(
+        "serve must bind against a relay that is not one",
+        Box::pin(modelpipe::serve(&backend.url, serve_opts)),
+    )
+    .await
+    .expect("a relay that does not behave like one is not a startup error");
+
+    let mut connect_opts = ConnectOptions::default();
+    connect_opts.relay = Some(fake_relay.url.clone());
+    connect_opts.port_mapping = false;
+    connect_opts.discovery = false;
+    let connected = within(
+        "connect must bind against the same one",
+        Box::pin(modelpipe::connect(&serving.ticket(), connect_opts)),
+    )
+    .await
+    .expect("connect");
+    within(
+        "the pairing must still form, on the ticket's direct addresses",
+        carrying(&connected),
+    )
+    .await;
+
+    // Each side, read from its own handle. A default snapshot never arrives
+    // at this, because a default is zero for ever.
+    within(
+        "the serve side must count the relay connection its endpoint could not make",
+        until(|| serving.network_metrics().relay_connections_failed > 0),
+    )
+    .await;
+    within(
+        "and the connect side must count its own",
+        until(|| connected.network_metrics().relay_connections_failed > 0),
+    )
+    .await;
+
+    // The other half of the same claim: a count of failures is evidence
+    // only if the successes stayed where they belong. Nothing on either side
+    // reached a relay, and neither may say it did.
+    for (side, metrics) in [
+        ("serve", serving.network_metrics()),
+        ("connect", connected.network_metrics()),
+    ] {
+        assert_eq!(
+            metrics.relay_connections, 0,
+            "the {side} side reached no relay, and must not count one: {metrics:?}"
+        );
+        assert_eq!(
+            metrics.relay_connections_ratelimited, 0,
+            "a relay that never completed a handshake cannot have throttled \
+             the {side} side: {metrics:?}"
+        );
+    }
+
+    // A listener that knows only a relay nothing is behind — loopback on a
+    // port nothing listens on, as `network_tests` names it, so nothing here
+    // waits on a resolver. Never dialled and never paired.
+    let mut nowhere = ServeOptions::default();
+    nowhere.relay = Some("https://127.0.0.1:1/".to_owned());
+    nowhere.port_mapping = false;
+    nowhere.discovery = false;
+    let elsewhere = within(
+        "a listener must bind against a relay that is not there",
+        Box::pin(modelpipe::serve(&backend.url, nowhere)),
+    )
+    .await
+    .expect("a relay that does not answer is not a startup error");
+    assert_eq!(
+        elsewhere.network_metrics(),
+        NetworkMetrics::default(),
+        "an endpoint that dialled nothing has nothing to report, whatever the \
+         pipe beside it has been counting: {:?}",
+        elsewhere.network_metrics()
+    );
+
+    elsewhere.shutdown().await;
+    connected.shutdown().await;
+    serving.shutdown().await;
+}
+
+/// A ticket an embedder is about to print can be asked what it carries.
+///
+/// The failure this closes is documented at `ServeHandle::ticket` and had
+/// no accessor to check it with: the relay is the half that arrives last,
+/// so a ticket read the instant `serve` returns can name direct addresses
+/// and nothing else — and a machine that cannot be hole-punched to is then
+/// unreachable through it. `wait_online` is the switch that waits; this is
+/// how an embedder finds out whether it worked.
+///
+/// **This needs a route to a relay**, and so it must: what is being checked
+/// is that the accessor sees one on a ticket a live listener minted, which
+/// no ticket built in a test can stand in for. `network_tests` and
+/// `transport_tests` carry the same dependency, for the same kind of reason.
+/// The unit tests beside `relay_urls` cover its behaviour against the
+/// normative vectors and need nothing at all.
+#[tokio::test]
+async fn a_live_ticket_says_which_paths_it_carries() {
+    let backend = MockBackend::json(200, OK_BODY).await;
+    let mut serve_opts = ServeOptions::default();
+    serve_opts.auth = TokenPolicy::Generate;
+    serve_opts.wait_online = Some(Duration::from_secs(20));
+    let serving = within(
+        "serve must bind",
+        Box::pin(modelpipe::serve(&backend.url, serve_opts)),
+    )
+    .await
+    .expect("serve");
+
+    let ticket = serving.ticket();
+    assert!(
+        !ticket.relay_urls().is_empty(),
+        "a listener that waited to come online carries the relay it reached: {ticket:?}"
+    );
+    for url in ticket.relay_urls() {
+        assert!(
+            url.starts_with("http"),
+            "a relay body is a URL, handed back as written: {url}"
+        );
+    }
+    // The direct addresses are the machine's own interfaces, and this test
+    // runs on a machine that has some.
+    assert!(
+        !ticket.direct_addrs().is_empty(),
+        "and the local paths beside it: {ticket:?}"
+    );
+    // Round-tripping through the printed form is the journey a real ticket
+    // makes, and the accessors have to survive it.
+    let printed: Ticket = ticket.to_string().parse().expect("its own string parses");
+    assert_eq!(printed.relay_urls(), ticket.relay_urls());
+    assert_eq!(printed.direct_addrs(), ticket.direct_addrs());
+
+    serving.shutdown().await;
 }
