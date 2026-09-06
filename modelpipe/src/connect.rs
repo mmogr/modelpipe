@@ -18,18 +18,20 @@ use crate::transport;
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum ConnectError {
-    /// The peer could not be reached, directly or through a relay.
-    /// Retryable: the serve side may be offline, or the network in
-    /// between temporarily unwilling.
+    /// The ticket names an address nobody could ever be at — an endpoint
+    /// id that is not a key. Retryable in the sense the other variants
+    /// are, and dialling it again will fail again.
     ///
-    /// This is also what a ticket outlived by its listener looks like.
-    /// There is no "ticket rejected" case to distinguish it from: a serve
-    /// side that restarted **without** an identity file is a *different*
-    /// endpoint, so dialing the old ticket reaches nobody rather than
-    /// reaching someone who refuses. With one, the id survives the restart
-    /// and this variant means only what it says. Either way a caller that
-    /// wants to tell "offline" from "re-paired" has to ask a human, not
-    /// this enum.
+    /// **Not what an offline serve side looks like.** [`connect`] returns
+    /// once the local port is bound, so a peer that is merely absent is
+    /// never reported here: it is a handle at
+    /// [`PipeStatus::Idle`](crate::PipeStatus::Idle) that keeps trying. A
+    /// ticket outlived by its listener is that case too, and there is no
+    /// "ticket rejected" to distinguish it from — a serve side that
+    /// restarted **without** an identity file is a *different* endpoint, so
+    /// the old ticket reaches nobody rather than reaching someone who
+    /// refuses. A caller wanting to tell "offline" from "re-paired" has to
+    /// ask a human, not this enum.
     PeerUnreachable,
     /// The local address the caller asked for could not be bound.
     ///
@@ -144,6 +146,29 @@ impl Default for ConnectOptions {
 /// OpenAI-compatible client at [`ConnectHandle::base_url`], with the
 /// serve side's bearer token as the API key.
 ///
+/// **Returns as soon as that port is bound.** Reaching the serve side runs
+/// on a background task, so an absent peer costs the caller nothing: iroh
+/// spends about thirty seconds giving up on one, and a caller blocked for
+/// that long cannot even be told which port it was given, let alone point a
+/// client at it. Requests arriving before the pairing forms are answered
+/// `502` rather than refused, which is the same answer they get if the peer
+/// goes away later.
+///
+/// The dial's outcome is the handle's to report, not this `Result`'s:
+/// [`ConnectHandle::status`] reads [`PipeStatus::Idle`](crate::PipeStatus::Idle)
+/// until a connection forms and [`Direct`](crate::PipeStatus::Direct) or
+/// [`Relayed`](crate::PipeStatus::Relayed) once one has, and
+/// [`ConnectHandle::status_changed`] delivers each transition. A dial that
+/// fails is not an error and not the end — this side keeps trying, because
+/// a sleeping laptop, a dead one and a serve side five seconds from
+/// starting are the same picture from here. **Deciding how long to wait
+/// before giving up is the caller's**, and `modelpipe-cli` is one worked
+/// example of making that decision.
+///
+/// What this `Result` still reports is everything local and immediate: an
+/// address that will not bind, a relay that will not parse, an endpoint
+/// this machine will not open.
+///
 /// # Examples
 ///
 /// ```no_run
@@ -183,13 +208,16 @@ pub async fn connect(ticket: &Ticket, opts: ConnectOptions) -> Result<ConnectHan
     if let Some(relay) = opts.relay.as_deref() {
         transport::validate_relay_for_connect(relay)?;
     }
-    let (state, listener) = dialer::dial(ticket, &opts).await?;
+    let (state, listener) = dialer::bind(ticket, &opts).await?;
     tokio::spawn(dialer::local_loop(state.clone(), listener));
     // The reconnect loop takes the two halves it needs by reference, so
     // the `Arc` that keeps them alive is held here rather than threaded
     // through `peer`, which has no business knowing how the connect side
     // stores its state.
     let watching = state.clone();
+    // The dial lives in here, first attempt included. Spawning it rather
+    // than awaiting it is the whole of this function's contract: the handle
+    // below is handed out with a port already answering.
     tokio::spawn(async move { peer::keep_connected(&watching.peer, &watching.lifecycle).await });
     Ok(ConnectHandle::new(state))
 }

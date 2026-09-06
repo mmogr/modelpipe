@@ -39,14 +39,30 @@ async fn paired(
 
     let ticket = serving.ticket();
     let connected = within(
-        "connect must pair with the listener",
+        "connect must bind its local port",
         Box::pin(modelpipe::connect(&ticket, ConnectOptions::default())),
     )
     .await
     .expect("connect");
+    // `connect` returns with the port bound and the dial still running, so
+    // the pairing is not up yet. Every test below sends a request the
+    // moment this returns, and a pipe with no connection behind it answers
+    // 502 — which would make this helper the source of a failure belonging
+    // to nothing it is testing.
+    within("the pairing must form", carrying(&connected)).await;
 
     let url = connected.base_url();
     (serving, connected, url)
+}
+
+/// Wait until the connect side has actually reached the peer.
+///
+/// `Idle` is the state a freshly returned handle is in, and the state it
+/// stays in while the dial runs; anything else means a connection formed.
+async fn carrying(handle: &modelpipe::ConnectHandle) {
+    while handle.status() == PipeStatus::Idle {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
 }
 
 /// With discovery and port-mapping off on both sides, the ticket carries
@@ -72,11 +88,12 @@ async fn a_pairing_still_forms_with_discovery_and_port_mapping_off() {
     connect_opts.port_mapping = false;
     connect_opts.discovery = false;
     let connected = within(
-        "connect must pair on the ticket's own paths",
+        "connect must bind on the ticket's own paths",
         Box::pin(modelpipe::connect(&serving.ticket(), connect_opts)),
     )
     .await
     .expect("connect");
+    within("the pairing must form on those paths", carrying(&connected)).await;
 
     let response = within(
         "a request must cross the pipe",
@@ -108,6 +125,68 @@ async fn settles_on(handle: &modelpipe::ConnectHandle, wanted: PipeStatus) {
 
 fn bearer(handle: &modelpipe::ServeHandle) -> String {
     format!("Bearer {}", handle.token().expect("a token is enforced"))
+}
+
+// ── Coming up ────────────────────────────────────────────────────────────
+
+/// `connect` returns when the **local port** is bound, not when the peer
+/// answers.
+///
+/// The dial is what takes the time: iroh spends about thirty seconds giving
+/// up on a peer that is not there, and a caller blocked for it cannot even
+/// be told which port it was given, let alone point a client at it. That
+/// wait is the whole reason the dial moved off `connect`'s path, and this
+/// is the test that would have to be deleted to move it back.
+///
+/// Written against a peer that is genuinely gone — a listener minted and
+/// then shut down — rather than a fabricated address, because a bogus
+/// endpoint id fails at `addr_from` without ever reaching the dial and
+/// would pass just as happily with the old ordering.
+#[tokio::test]
+async fn connect_binds_its_port_without_waiting_for_a_peer_that_is_not_there() {
+    let backend = MockBackend::json(200, OK_BODY).await;
+    let serving = within(
+        "serve",
+        Box::pin(modelpipe::serve(&backend.url, ServeOptions::default())),
+    )
+    .await
+    .expect("serve");
+    let ticket = serving.ticket();
+    serving.shutdown().await;
+    drop(serving);
+
+    // Five seconds is the assertion. The old ordering took about thirty,
+    // and no amount of slow machine turns thirty into five.
+    let connected = tokio::time::timeout(
+        Duration::from_secs(5),
+        Box::pin(modelpipe::connect(&ticket, ConnectOptions::default())),
+    )
+    .await
+    .expect("connect must not wait on a dial that will not land")
+    .expect("binding the local port is all it has to do");
+
+    assert_eq!(
+        connected.status(),
+        PipeStatus::Idle,
+        "nobody has been reached, and the handle is what says so"
+    );
+
+    // And the port is genuinely open, which is the point of returning
+    // early: a client can be pointed at it now and gets a 502 rather than a
+    // refused connection while this side keeps looking.
+    let authority = connected.local_addr().to_string();
+    within("the advertised port must accept", async {
+        tokio::net::TcpStream::connect(&authority)
+            .await
+            .expect("the local listener is up");
+    })
+    .await;
+
+    within(
+        "shutdown must not wait on the dial either",
+        connected.shutdown(),
+    )
+    .await;
 }
 
 // ── The first byte ───────────────────────────────────────────────────────

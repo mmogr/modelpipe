@@ -253,13 +253,17 @@ way "this machine did not answer" is not.
 
 **The reference implementation does not do this, and a client should not
 expect it to.** Every dial failure — a refused ALPN, a TLS error, a timeout,
-no route — collapses into one `PeerUnreachable`, rendered as "could not
-reach the serve side, directly or via a relay". A client pointed at a
-`modelpipe/1`-only listener is told the same thing it would be told about a
-machine that is switched off. This is a known limitation of v0 and is
-recorded here rather than left to be discovered, because building error
-handling around a distinction this page describes and the shipped code
-never surfaces is the mistake the paragraph above would otherwise invite.
+no route — collapses into the same non-event: `connect` returns as soon as
+its local port is bound, the dial runs behind the handle, and a failed one
+leaves the status at `idle` while this side keeps trying. A client pointed
+at a `modelpipe/1`-only listener therefore sees what it would see for a
+machine that is switched off, and waits just as long for it. `modelpipe
+connect` picks a deadline of its own and renders the whole set as "could
+not reach the serve side, directly or via a relay". This is a known
+limitation of v0 and is recorded here rather than left to be discovered,
+because building error handling around a distinction this page describes
+and the shipped code never surfaces is the mistake the paragraph above
+would otherwise invite.
 
 What travels *over* an accepted connection is not specified in this
 document. It will be, before anything claims to be stable — until then, a

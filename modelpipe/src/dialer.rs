@@ -31,8 +31,15 @@ pub(crate) struct ConnectState {
     pub(crate) lifecycle: Lifecycle,
 }
 
-/// Dial the ticket's endpoint and bind the local listener.
-pub(crate) async fn dial(
+/// Bind the local listener and this side's p2p endpoint.
+///
+/// **Nothing is dialled here.** Reaching the serve side is
+/// [`crate::peer::keep_connected`]'s, first attempt included, so what comes
+/// back is everything `connect` needs to hand out a handle with a port
+/// already answering and no connection behind it yet. A dial at a peer that
+/// is not there takes iroh about thirty seconds to give up on, and that is
+/// thirty seconds a caller used to spend not knowing its own port number.
+pub(crate) async fn bind(
     ticket: &Ticket,
     opts: &ConnectOptions,
 ) -> Result<(Arc<ConnectState>, TcpListener), ConnectError> {
@@ -43,7 +50,8 @@ pub(crate) async fn dial(
     // unreachable peer spent thirty seconds dialling and then reported the
     // retryable `PeerUnreachable` — sending a supervisor into a
     // thirty-second-per-attempt spin over a port it could have been told
-    // about immediately.
+    // about immediately. The dial has since left this path entirely, and
+    // the order stays: the endpoint below still opens a socket.
     //
     // Loopback by default. The local port is the one hop with no encryption
     // in front of it, so leaving this machine is a choice the caller makes
@@ -56,17 +64,16 @@ pub(crate) async fn dial(
         .map_err(ConnectError::Bind)?;
     let local_addr = listener.local_addr().map_err(ConnectError::Bind)?;
 
-    let peer = Peer::dial(ticket, opts).await?;
+    let peer = Peer::bind(ticket, opts).await?;
 
-    // Published here, before the handle exists, rather than from the accept
-    // loop that used to own it. A spawned task has not necessarily run by
-    // the time `connect` returns, so `status()` read on the next line was
-    // `Idle` on a working pipe — which is the value this side uses to mean
-    // "the peer is gone", so the one moment the answer was wrong it was
-    // wrong in the most misleading direction available. Every change after
-    // this is `keep_connected`'s.
+    // `Idle` — where `Lifecycle::new` starts — is the honest answer the
+    // moment this returns: the port is bound and nobody has been reached.
+    // It used to be a lie told in the most misleading direction available,
+    // because the connection was already up and the status was published
+    // from a spawned task that had not necessarily run. Now there is
+    // nothing to publish here and no race to lose: every status this pipe
+    // ever reports is `keep_connected`'s.
     let lifecycle = Lifecycle::new();
-    peer.publish_path(&lifecycle);
 
     Ok((
         Arc::new(ConnectState {
