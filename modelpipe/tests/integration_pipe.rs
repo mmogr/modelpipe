@@ -15,7 +15,7 @@ mod common;
 use std::time::Duration;
 
 use common::{MockBackend, Scratch, request, within};
-use modelpipe::{ConnectOptions, PipeStatus, ServeOptions, Ticket, TokenPolicy};
+use modelpipe::{CloseReason, ConnectOptions, PipeStatus, ServeOptions, Ticket, TokenPolicy};
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 
 const OK_BODY: &str = r#"{"object":"list","data":[]}"#;
@@ -527,6 +527,49 @@ async fn a_shutdown_pipe_reports_closed_and_never_blocks_a_watcher() {
 
     connected.shutdown().await;
     assert_eq!(connected.status(), PipeStatus::Closed);
+}
+
+/// The two questions a client has to be able to answer apart, over a real
+/// pairing: **is this pipe still trying, and did it end because I asked?**
+///
+/// `status` alone answers neither. A live connect side reads `Idle` while
+/// it looks for a peer that went away, and a dead one reads `Closed`
+/// whether a caller ended it or the local listener died — so a client
+/// rendering the status alone shows "not connected" for a success and for a
+/// failure alike, which is the gap the reason exists to close.
+#[tokio::test]
+async fn a_connect_side_says_whether_it_is_still_trying_and_why_it_stopped() {
+    let backend = MockBackend::json(200, OK_BODY).await;
+    let (serving, connected, _url) = paired(&backend, TokenPolicy::Generate).await;
+
+    assert_eq!(
+        connected.close_reason(),
+        None,
+        "a live pipe has not closed, so there is nothing to explain"
+    );
+
+    // The serve side goes away. This is the case a client must NOT read as
+    // a close: the connect side is looking for it and would pick it up
+    // again, so the status drops to `Idle` and the reason stays `None`.
+    serving.shutdown().await;
+    settles_on(&connected, PipeStatus::Idle).await;
+    assert_eq!(
+        connected.close_reason(),
+        None,
+        "a peer that went away has not closed this side, and it is still trying"
+    );
+
+    connected.shutdown().await;
+    assert_eq!(connected.status(), PipeStatus::Closed);
+    assert_eq!(
+        connected.close_reason(),
+        Some(CloseReason::Shutdown),
+        "and a close this caller asked for is named as theirs"
+    );
+    assert_eq!(
+        connected.close_reason().map(CloseReason::as_str),
+        Some("shutdown")
+    );
 }
 
 /// `shutdown` completing must mean the port is free, not merely that the

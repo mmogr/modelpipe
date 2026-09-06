@@ -8,7 +8,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::dialer::{self, ConnectState};
-use crate::status::PipeStatus;
+use crate::status::{CloseReason, PipeStatus};
 
 /// A live connect side.
 ///
@@ -107,6 +107,45 @@ impl ConnectHandle {
         self.state.lifecycle.changed_since(snapshot).await
     }
 
+    /// Why the pipe closed, or `None` while it is still live.
+    ///
+    /// The diagnostic half of [`status`](Self::status), and the answer to
+    /// the question that method cannot be asked: a pipe reports
+    /// [`PipeStatus::Closed`] whether a caller ended it or the local
+    /// listener died under it, and reports [`PipeStatus::Idle`] both while
+    /// looking for a peer that went away and before ever reaching one. A
+    /// client that shows "not connected" for all four has told its user
+    /// nothing.
+    ///
+    /// Read it together with the status rather than instead of it. `None`
+    /// means the pipe is live and still trying — however idle it looks,
+    /// nothing has given up and a peer that comes back is picked up.
+    /// [`CloseReason::Shutdown`] means this side ended it on purpose, so
+    /// "disconnected" is the honest thing to show;
+    /// [`CloseReason::ListenerFailed`] means nobody did, and is worth
+    /// showing as the failure it is.
+    ///
+    /// Once set it never changes. [`PipeStatus::Closed`] is terminal, and
+    /// the first reason recorded is the one that keeps — the accept loop
+    /// closes the pipe again on its way out, and does not get to overwrite
+    /// what the caller who asked already said.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # fn example(connected: &modelpipe::ConnectHandle) -> &'static str {
+    /// match connected.close_reason() {
+    ///     // Live. `Idle` here is "looking", not "failed".
+    ///     None => "connecting",
+    ///     Some(modelpipe::CloseReason::ListenerFailed) => "the local port died",
+    ///     Some(_) => "disconnected",
+    /// }
+    /// # }
+    /// ```
+    pub fn close_reason(&self) -> Option<CloseReason> {
+        self.state.lifecycle.close_reason()
+    }
+
     /// Stop accepting local connections, let the in-flight requests
     /// finish, and wait until the local listener is gone.
     ///
@@ -141,7 +180,12 @@ impl Drop for ConnectHandle {
         // owned them was gone — while the serve side's identically
         // documented `Drop` cut immediately. `Connection::close` is
         // synchronous, so unlike the serve side this needs no runtime.
-        self.state.lifecycle.close();
+        // `Shutdown`, and not a reason of its own: dropping is a teardown
+        // this side asked for exactly as `shutdown` is, differing in what
+        // becomes of the requests in flight rather than in why the pipe
+        // ended. A separate reason would also be one nobody could read —
+        // the accessor needs a handle, and this is the handle going away.
+        self.state.lifecycle.close(CloseReason::Shutdown);
         self.state.peer.close(b"dropped");
         // Marking teardown complete is still not ours: the accept loop
         // holds the listener, and it is the loop that says when the port is

@@ -99,7 +99,7 @@ pub use connect_handle::ConnectHandle;
 pub use serve::{ServeOptions, serve};
 pub use serve_error::ServeError;
 pub use serve_handle::ServeHandle;
-pub use status::{PeerView, PipeStatus};
+pub use status::{CloseReason, PeerView, PipeStatus};
 pub use ticket::{Ticket, TicketParseError};
 pub use token_policy::TokenPolicy;
 

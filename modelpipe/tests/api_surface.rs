@@ -21,8 +21,8 @@
 use std::error::Error;
 
 use modelpipe::{
-    ConnectError, ConnectHandle, ConnectOptions, PeerView, PipeStatus, ServeError, ServeHandle,
-    ServeOptions, Ticket, TicketParseError, TokenPolicy,
+    CloseReason, ConnectError, ConnectHandle, ConnectOptions, PeerView, PipeStatus, ServeError,
+    ServeHandle, ServeOptions, Ticket, TicketParseError, TokenPolicy,
 };
 
 /// Every name the crate promises, reachable at the flat path it promises it
@@ -44,6 +44,7 @@ fn the_public_names_resolve_at_the_crate_root() {
     nameable::<ConnectHandle>();
     nameable::<TokenPolicy>();
     nameable::<PipeStatus>();
+    nameable::<CloseReason>();
     nameable::<PeerView>();
 
     // The two entry points. Passed as values rather than ascribed a type:
@@ -138,6 +139,34 @@ fn a_status_can_be_copied_compared_and_named() {
     assert_eq!(a, b);
     assert_ne!(a, PipeStatus::Direct);
     assert_eq!(a.as_str(), "relayed");
+}
+
+/// The distinction a status page cannot make on its own, exercised the way
+/// a dependent makes it: `None` is a live pipe — idle-and-retrying
+/// included — and a reason is a pipe that is over, with `Shutdown` and
+/// `ListenerFailed` the difference between a success and a failure.
+///
+/// Written as a function over the handle because the promise is the
+/// signature: `Option<CloseReason>`, on `ConnectHandle`, matchable from
+/// outside the crate with a `_` arm for the `#[non_exhaustive]` future.
+#[test]
+fn a_dependent_can_tell_a_live_pipe_from_a_close_and_a_close_from_a_failure() {
+    fn render(handle: &ConnectHandle) -> &'static str {
+        match handle.close_reason() {
+            None => "connecting",
+            Some(CloseReason::ListenerFailed) => "the local port died",
+            Some(_) => "disconnected",
+        }
+    }
+    // Named so it cannot be dropped as dead code, and never called: there
+    // is no live pipe here, and the promise being checked is the type.
+    let _ = render;
+
+    let a = CloseReason::ListenerFailed;
+    let b = a; // Copy, not a move — `a` stays usable below.
+    assert_eq!(a, b);
+    assert_ne!(a, CloseReason::Shutdown);
+    assert_eq!(a.as_str(), "listener_failed");
 }
 
 /// A peer view is readable field by field from outside, and `peers` is on

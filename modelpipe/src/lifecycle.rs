@@ -23,7 +23,7 @@
 
 use tokio::sync::watch;
 
-use crate::status::PipeStatus;
+use crate::status::{CloseReason, PipeStatus};
 
 /// How one connected peer is reaching us.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -45,6 +45,14 @@ pub(crate) struct Lifecycle {
     /// Exchanges still running. `shutdown` drains rather than cuts, so it
     /// needs to know when the last one finishes.
     in_flight: watch::Sender<usize>,
+    /// Why the pipe closed, or `None` while it has not. Separate from
+    /// `status` because [`PipeStatus`] is `Copy` and small by design and
+    /// the reason is not part of it — see [`CloseReason`].
+    ///
+    /// A `watch` like the rest, for consistency rather than because
+    /// anything waits on it: the reason is read after `Closed` has been
+    /// observed, never awaited on its own.
+    close_reason: watch::Sender<Option<CloseReason>>,
 }
 
 /// Held for as long as one exchange is running.
@@ -70,6 +78,7 @@ impl Lifecycle {
             status: watch::Sender::new(PipeStatus::Idle),
             torn_down: watch::Sender::new(false),
             in_flight: watch::Sender::new(0),
+            close_reason: watch::Sender::new(None),
         }
     }
 
@@ -146,13 +155,35 @@ impl Lifecycle {
         }
     }
 
-    /// Mark the pipe closed. Idempotent.
+    /// Mark the pipe closed, recording why. Idempotent.
     ///
     /// This says the pipe is *over*, not that its resources are released —
     /// which is why [`wait_until_torn_down`](Self::wait_until_torn_down)
     /// exists separately.
-    pub(crate) fn close(&self) {
+    ///
+    /// **First reason in is the one that keeps**, which is what makes the
+    /// answer stable rather than a race: a pipe is routinely closed more
+    /// than once — the connect side's accept loop closes it again on its
+    /// way out — and a caller who shut down cleanly must not end up reading
+    /// a listener failure for it. It is also why the reason is recorded
+    /// *before* `Closed` is published: a watcher woken by the status reads
+    /// the reason next, and would otherwise find `None` on a pipe that had
+    /// one.
+    pub(crate) fn close(&self, reason: CloseReason) {
+        self.close_reason.send_if_modified(|held| {
+            if held.is_some() {
+                false
+            } else {
+                *held = Some(reason);
+                true
+            }
+        });
         self.set_status(PipeStatus::Closed);
+    }
+
+    /// Why the pipe closed, or `None` while it has not.
+    pub(crate) fn close_reason(&self) -> Option<CloseReason> {
+        *self.close_reason.borrow()
     }
 
     /// Resolve once the pipe is closed, and not before.

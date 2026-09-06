@@ -20,6 +20,7 @@ use crate::fingerprint;
 use crate::lifecycle::{Lifecycle, aggregate};
 use crate::peer;
 use crate::peers::PeerRegistry;
+use crate::status::CloseReason;
 
 /// Everything a live listener shares.
 ///
@@ -215,7 +216,7 @@ async fn deliver(stream: tokio::io::Join<iroh::endpoint::RecvStream, iroh::endpo
 /// Measured, before the order was corrected: a client streaming a 200-frame
 /// response was cut at frame 5.
 pub(crate) async fn shutdown(state: &ServeState) {
-    state.lifecycle.close();
+    state.lifecycle.close(CloseReason::Shutdown);
     state.lifecycle.wait_until_drained().await;
     state.endpoint.close().await;
     state.lifecycle.mark_torn_down();
@@ -227,7 +228,7 @@ pub(crate) async fn shutdown(state: &ServeState) {
 /// wrapping the endpoint close as well would make the returned `bool` a
 /// statement about teardown latency rather than about the requests.
 pub(crate) async fn shutdown_timeout(state: &ServeState, grace: std::time::Duration) -> bool {
-    state.lifecycle.close();
+    state.lifecycle.close(CloseReason::Shutdown);
     let drained = tokio::time::timeout(grace, state.lifecycle.wait_until_drained())
         .await
         .is_ok();

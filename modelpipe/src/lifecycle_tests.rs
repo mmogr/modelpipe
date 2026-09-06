@@ -102,7 +102,7 @@ async fn concurrent_watchers_each_resolve_against_their_own_snapshot() {
 #[tokio::test]
 async fn a_watcher_arriving_after_close_resolves_immediately_rather_than_hanging() {
     let life = Lifecycle::new();
-    life.close();
+    life.close(CloseReason::Shutdown);
 
     for snapshot in [PipeStatus::Idle, PipeStatus::Direct, PipeStatus::Closed] {
         let seen = within(
@@ -122,7 +122,7 @@ async fn a_parked_watcher_is_woken_by_the_close() {
         tokio::spawn(async move { life.changed_since(PipeStatus::Idle).await })
     };
     tokio::task::yield_now().await;
-    life.close();
+    life.close(CloseReason::Shutdown);
 
     assert_eq!(
         within("close must wake a parked watcher", watcher)
@@ -137,7 +137,7 @@ async fn a_parked_watcher_is_woken_by_the_close() {
 #[tokio::test]
 async fn nothing_moves_a_pipe_out_of_closed() {
     let life = Lifecycle::new();
-    life.close();
+    life.close(CloseReason::Shutdown);
     for late in [PipeStatus::Idle, PipeStatus::Direct, PipeStatus::Relayed] {
         life.set_status(late);
         assert_eq!(life.status(), PipeStatus::Closed, "after a late {late:?}");
@@ -147,9 +147,71 @@ async fn nothing_moves_a_pipe_out_of_closed() {
 #[tokio::test]
 async fn closing_twice_is_harmless() {
     let life = Lifecycle::new();
-    life.close();
-    life.close();
+    life.close(CloseReason::Shutdown);
+    life.close(CloseReason::Shutdown);
     assert_eq!(life.status(), PipeStatus::Closed);
+}
+
+// ── Why it closed ────────────────────────────────────────────────────────
+
+/// `None` is what "still live" looks like, and it is the half of the
+/// contract a caller reads most: an idle pipe that has not closed is one
+/// still looking for its peer, not one that failed.
+#[tokio::test]
+async fn a_live_pipe_has_no_close_reason_however_idle_it_looks() {
+    let life = Lifecycle::new();
+    assert_eq!(life.status(), PipeStatus::Idle);
+
+    assert_eq!(life.close_reason(), None);
+}
+
+#[tokio::test]
+async fn closing_records_why() {
+    for reason in [CloseReason::Shutdown, CloseReason::ListenerFailed] {
+        let life = Lifecycle::new();
+        life.close(reason);
+        assert_eq!(life.close_reason(), Some(reason));
+    }
+}
+
+/// First reason in keeps, and this is not tidiness: the accept loop closes
+/// the pipe again on its way out, after whoever asked already said why, so
+/// a last-writer-wins cell would report every cleanly shut-down connect
+/// side as a listener that failed.
+#[tokio::test]
+async fn the_first_reason_recorded_is_the_one_that_keeps() {
+    let life = Lifecycle::new();
+    life.close(CloseReason::Shutdown);
+    life.close(CloseReason::ListenerFailed);
+
+    assert_eq!(life.close_reason(), Some(CloseReason::Shutdown));
+}
+
+/// The ordering with a symptom. A watcher woken by `Closed` reads the
+/// reason on the next line, and would find `None` on a pipe that had one if
+/// the status were published first.
+#[tokio::test]
+async fn a_watcher_woken_by_the_close_can_already_read_the_reason() {
+    let life = std::sync::Arc::new(Lifecycle::new());
+    let watcher = {
+        let life = life.clone();
+        tokio::spawn(async move {
+            let status = life.changed_since(PipeStatus::Idle).await;
+            (status, life.close_reason())
+        })
+    };
+    tokio::task::yield_now().await;
+    life.close(CloseReason::ListenerFailed);
+
+    let (status, reason) = within("close must wake a parked watcher", watcher)
+        .await
+        .unwrap();
+    assert_eq!(status, PipeStatus::Closed);
+    assert_eq!(
+        reason,
+        Some(CloseReason::ListenerFailed),
+        "the reason must be readable by the time the status says to look"
+    );
 }
 
 // ── Teardown ─────────────────────────────────────────────────────────────
@@ -161,7 +223,7 @@ async fn closing_twice_is_harmless() {
 #[tokio::test]
 async fn closing_the_pipe_does_not_by_itself_mean_teardown_finished() {
     let life = std::sync::Arc::new(Lifecycle::new());
-    life.close();
+    life.close(CloseReason::Shutdown);
     assert_eq!(life.status(), PipeStatus::Closed);
 
     let waiter = {
