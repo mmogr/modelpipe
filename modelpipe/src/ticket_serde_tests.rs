@@ -90,3 +90,28 @@ fn a_peer_view_carries_its_round_trip_time_as_one_number_or_null() {
     let back: PeerView = serde_json::from_str(&json).unwrap();
     assert_eq!(back, unmeasured);
 }
+
+/// A `PeerView` written by 0.3.0 — before `rtt_ms` existed — still parses,
+/// and parses as "not measured" rather than as an error.
+///
+/// The compatibility property the field's arrival rested on, and the one the
+/// test above does *not* check: that one round-trips a `null` this crate
+/// wrote itself, which an absent key is not. serde supplies `None` for a
+/// missing `Option` field, so this holds — but "holds" and "is pinned" are
+/// different claims, and the second was made without the first. A stored
+/// status page, a cached DTO, or a peer still on the older release all send
+/// the two-field object below, and this is what says they keep working.
+#[test]
+fn a_peer_view_written_before_the_round_trip_time_existed_still_parses() {
+    let older = r#"{"fingerprint":"3ca82708b995","path":"relayed"}"#;
+    let parsed: PeerView = serde_json::from_str(older).expect("0.3.0 wrote exactly this");
+    assert_eq!(
+        parsed,
+        PeerView {
+            fingerprint: "3ca82708b995".to_owned(),
+            path: PipeStatus::Relayed,
+            rtt_ms: None,
+        },
+        "an absent key means unmeasured, which is what `null` means too"
+    );
+}
