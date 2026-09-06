@@ -55,14 +55,26 @@ async fn paired(
     (serving, connected, url)
 }
 
+/// Wait until `ready` holds, checking it on a slow tick.
+///
+/// Deliberately without a deadline of its own: every caller wraps it in
+/// [`within`], so a property that never arrives is named by the wait it
+/// was waiting for rather than by a bare elapsed timer. Written once
+/// because the two handles are separate types — a serve-side wait and a
+/// connect-side wait cannot share a signature, and a closure is the only
+/// thing they can share.
+async fn until(mut ready: impl FnMut() -> bool) {
+    while !ready() {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+}
+
 /// Wait until the connect side has actually reached the peer.
 ///
 /// `Idle` is the state a freshly returned handle is in, and the state it
 /// stays in while the dial runs; anything else means a connection formed.
 async fn carrying(handle: &modelpipe::ConnectHandle) {
-    while handle.status() == PipeStatus::Idle {
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
+    until(|| handle.status() != PipeStatus::Idle).await;
 }
 
 /// With discovery and port-mapping off on both sides, the ticket carries
@@ -118,9 +130,7 @@ async fn a_pairing_still_forms_with_discovery_and_port_mapping_off() {
 /// so a `status_changed` called afterwards waited for a second change that
 /// was never coming.
 async fn settles_on(handle: &modelpipe::ConnectHandle, wanted: PipeStatus) {
-    while handle.status() != wanted {
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
+    until(|| handle.status() == wanted).await;
 }
 
 fn bearer(handle: &modelpipe::ServeHandle) -> String {
@@ -1274,6 +1284,77 @@ async fn a_transition_that_lands_before_the_next_wait_is_reported_rather_than_lo
     );
 
     connected.shutdown().await;
+}
+
+/// The same window, on the other side of the pipe.
+///
+/// Mirrored rather than shared, and not for symmetry's sake. The two
+/// handles are separate types carrying separate bodies of one contract,
+/// so the property that separates `status_changed_since` from
+/// `status_changed` — that the snapshot comes from the *caller* — is a
+/// claim about each body on its own. Measured: with the serve side's
+/// method rewritten to snapshot inside itself, exactly as the coalescing
+/// form does, the whole suite still passed. That is the entire defect this
+/// pair of methods exists to close, and it survived on one side.
+///
+/// `a_watcher_carrying_its_last_value_forward_ends_when_the_pipe_does`
+/// does watch both sides, and cannot see this: a watcher whose own held
+/// value has reached `Closed` still ends under the coalescing body, so it
+/// passes either way.
+///
+/// The sequence is the connect-side test's, run the other way round — the
+/// *peer* is taken away rather than the listener, because a listener that
+/// shut itself down is closed and has no `Idle` to report.
+#[tokio::test]
+async fn the_serve_side_reports_a_transition_that_lands_before_its_next_wait_too() {
+    let backend = MockBackend::json(200, OK_BODY).await;
+    let (serving, connected, _url) = paired(&backend, TokenPolicy::Generate).await;
+
+    // `paired` waits on the *connect* side's view of the pairing. Each side
+    // publishes its own, and what this test renders has to be there first.
+    within(
+        "the serve side must see the peer it is carrying",
+        until(|| serving.status() != PipeStatus::Idle),
+    )
+    .await;
+
+    // What a caller would have rendered: a live path, read once.
+    let rendered = serving.status();
+    assert!(
+        matches!(rendered, PipeStatus::Direct | PipeStatus::Relayed),
+        "a live pairing reports the path it is carrying: {rendered:?}"
+    );
+
+    // Now the pipe moves, and the move completes while nobody is waiting.
+    connected.shutdown().await;
+    within(
+        "the serve side must notice its last peer has gone",
+        until(|| serving.status() == PipeStatus::Idle),
+    )
+    .await;
+
+    // The coalescing form has nothing left to say: the peer that left is
+    // not coming back, and no second change is on its way.
+    assert!(
+        tokio::time::timeout(Duration::from_millis(200), serving.status_changed())
+            .await
+            .is_err(),
+        "status_changed snapshots at the call, so the transition is already behind it"
+    );
+
+    // The same fact, asked with the value that was rendered.
+    let seen = within(
+        "a caller holding its own snapshot must be told what it missed",
+        serving.status_changed_since(rendered),
+    )
+    .await;
+    assert_eq!(
+        seen,
+        Some(PipeStatus::Idle),
+        "the peer left while nobody waited, and this is the form that reports it"
+    );
+
+    serving.shutdown().await;
 }
 
 /// The loop a language binding writes, run over a real pipe until it ends.
