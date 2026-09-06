@@ -130,7 +130,8 @@ impl Lifecycle {
         });
     }
 
-    /// Wait until the status differs from `snapshot`, then return it.
+    /// Wait until the status differs from `snapshot`, then return it — or
+    /// `None` when nothing is ever going to differ from it again.
     ///
     /// Snapshot semantics, and deliberately **not** a bare
     /// `Receiver::changed()`. Two things that would break:
@@ -141,16 +142,30 @@ impl Lifecycle {
     /// * A dropped sender makes `changed()` return `Err`, which is not a
     ///   status. Here it can only mean the pipe is gone, so it reports
     ///   exactly that.
-    pub(crate) async fn changed_since(&self, snapshot: PipeStatus) -> PipeStatus {
+    ///
+    /// `None` is the third, and it is what keeps a caller that loops on
+    /// this from spinning. [`PipeStatus::Closed`] is terminal, so a caller
+    /// whose snapshot is *already* `Closed` has been told everything there
+    /// is; answering `Closed` again — at once, forever, with no await
+    /// anywhere in the path — turns the obvious loop into a busy loop on
+    /// one core. Ending the sequence is the answer a caller cannot get
+    /// wrong, which matters most where the caller is generated rather than
+    /// written. Every other snapshot is still delivered `Closed` exactly
+    /// once.
+    pub(crate) async fn changed_since(&self, snapshot: PipeStatus) -> Option<PipeStatus> {
         let mut rx = self.status.subscribe();
         loop {
             let current = *rx.borrow_and_update();
-            // Terminal, so a watcher can never block on a pipe already gone.
-            if current != snapshot || current == PipeStatus::Closed {
-                return current;
+            if current != snapshot {
+                return Some(current);
+            }
+            // Terminal, so a watcher can never block on a pipe already gone
+            // — and is never handed the same terminal answer twice.
+            if current == PipeStatus::Closed {
+                return None;
             }
             if rx.changed().await.is_err() {
-                return PipeStatus::Closed;
+                return Some(PipeStatus::Closed);
             }
         }
     }

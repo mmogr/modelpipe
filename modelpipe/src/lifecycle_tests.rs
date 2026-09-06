@@ -44,7 +44,7 @@ async fn a_watcher_holding_a_stale_snapshot_returns_immediately() {
         life.changed_since(PipeStatus::Idle),
     )
     .await;
-    assert_eq!(seen, PipeStatus::Direct);
+    assert_eq!(seen, Some(PipeStatus::Direct));
 }
 
 #[tokio::test]
@@ -60,7 +60,7 @@ async fn a_watcher_holding_a_current_snapshot_waits_for_the_next_change() {
     life.set_status(PipeStatus::Relayed);
 
     let seen = within("the watcher must wake", watcher).await.unwrap();
-    assert_eq!(seen, PipeStatus::Relayed);
+    assert_eq!(seen, Some(PipeStatus::Relayed));
 }
 
 /// Several callers may watch one pipe — a daemon and a status line, say —
@@ -84,12 +84,12 @@ async fn concurrent_watchers_each_resolve_against_their_own_snapshot() {
 
     assert_eq!(
         within("stale snapshot", from_idle).await.unwrap(),
-        PipeStatus::Direct,
+        Some(PipeStatus::Direct),
         "the stale watcher gets the value it had not seen"
     );
     assert_eq!(
         within("current snapshot", from_direct).await.unwrap(),
-        PipeStatus::Relayed,
+        Some(PipeStatus::Relayed),
         "the current watcher gets the new one"
     );
 }
@@ -104,14 +104,84 @@ async fn a_watcher_arriving_after_close_resolves_immediately_rather_than_hanging
     let life = Lifecycle::new();
     life.close(CloseReason::Shutdown);
 
-    for snapshot in [PipeStatus::Idle, PipeStatus::Direct, PipeStatus::Closed] {
+    for snapshot in [PipeStatus::Idle, PipeStatus::Direct, PipeStatus::Relayed] {
         let seen = within(
             "a closed pipe must never block a watcher",
             life.changed_since(snapshot),
         )
         .await;
-        assert_eq!(seen, PipeStatus::Closed, "from snapshot {snapshot:?}");
+        assert_eq!(seen, Some(PipeStatus::Closed), "from snapshot {snapshot:?}");
     }
+}
+
+/// And the clause that stops the same watcher spinning once it has been
+/// told. `Closed` is terminal, so a caller whose snapshot already *is*
+/// `Closed` has nothing left to be told; answering `Closed` again — at
+/// once, forever, with no await anywhere in the path — makes the obvious
+/// loop over this method a busy loop on one core, which is exactly the
+/// shape a generated language binding writes.
+///
+/// The two halves are one contract: every other snapshot is delivered
+/// `Closed` exactly once, and then the sequence ends.
+#[tokio::test]
+async fn a_watcher_that_already_holds_closed_is_told_there_is_nothing_further() {
+    let life = Lifecycle::new();
+    life.close(CloseReason::Shutdown);
+
+    let first = within(
+        "the close must still be delivered once",
+        life.changed_since(PipeStatus::Idle),
+    )
+    .await;
+    assert_eq!(first, Some(PipeStatus::Closed));
+
+    let again = within(
+        "and a closed pipe must never block a watcher, however it is asked",
+        life.changed_since(PipeStatus::Closed),
+    )
+    .await;
+    assert_eq!(
+        again, None,
+        "the second ask has to end the sequence rather than repeat it"
+    );
+}
+
+/// The loop the contract is written for, run to completion. A caller that
+/// carries the value it was last given ends up here, and this asserts the
+/// loop *arrives* at an end.
+///
+/// **Bounded rather than timed, and the bound is the assertion.** The
+/// failure being guarded against is a method that answers `Closed` again
+/// immediately — a loop with no await anywhere in it, which starves the
+/// runtime it is on. A timeout cannot fire inside one, so a timed version
+/// of this test hangs the suite instead of failing it; counting the turns
+/// is what turns the same defect into a message.
+#[tokio::test]
+async fn a_loop_carrying_the_last_value_forward_terminates_at_the_close() {
+    // Three transitions happen below; a watcher arriving after them is owed
+    // one value and an end. Ten is far past any honest reading of that.
+    // Declared first because an item after a statement is a clippy error.
+    const CEILING: usize = 10;
+
+    let life = Lifecycle::new();
+    life.set_status(PipeStatus::Relayed);
+    life.set_status(PipeStatus::Direct);
+    life.close(CloseReason::Shutdown);
+
+    let mut held = PipeStatus::Idle;
+    let mut seen = vec![held];
+    while let Some(next) = life.changed_since(held).await {
+        seen.push(next);
+        held = next;
+        assert!(
+            seen.len() <= CEILING,
+            "the sequence has to end rather than repeat: {seen:?}"
+        );
+    }
+
+    // The intermediate states are coalesced away — nobody was waiting for
+    // them — and the terminal one arrives exactly once.
+    assert_eq!(seen, [PipeStatus::Idle, PipeStatus::Closed]);
 }
 
 #[tokio::test]
@@ -128,7 +198,7 @@ async fn a_parked_watcher_is_woken_by_the_close() {
         within("close must wake a parked watcher", watcher)
             .await
             .unwrap(),
-        PipeStatus::Closed
+        Some(PipeStatus::Closed)
     );
 }
 
@@ -206,7 +276,7 @@ async fn a_watcher_woken_by_the_close_can_already_read_the_reason() {
     let (status, reason) = within("close must wake a parked watcher", watcher)
         .await
         .unwrap();
-    assert_eq!(status, PipeStatus::Closed);
+    assert_eq!(status, Some(PipeStatus::Closed));
     assert_eq!(
         reason,
         Some(CloseReason::ListenerFailed),

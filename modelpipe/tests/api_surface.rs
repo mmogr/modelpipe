@@ -21,8 +21,8 @@
 use std::error::Error;
 
 use modelpipe::{
-    CloseReason, ConnectError, ConnectHandle, ConnectOptions, PeerView, PipeStatus, ServeError,
-    ServeHandle, ServeOptions, Ticket, TicketParseError, TokenPolicy,
+    CloseReason, ConnectError, ConnectHandle, ConnectOptions, NetworkMetrics, PeerView, PipeStatus,
+    ServeError, ServeHandle, ServeOptions, Ticket, TicketParseError, TokenPolicy,
 };
 
 /// Every name the crate promises, reachable at the flat path it promises it
@@ -46,6 +46,7 @@ fn the_public_names_resolve_at_the_crate_root() {
     nameable::<PipeStatus>();
     nameable::<CloseReason>();
     nameable::<PeerView>();
+    nameable::<NetworkMetrics>();
 
     // The two entry points. Passed as values rather than ascribed a type:
     // both are `async fn`, so their return is an opaque future no caller
@@ -316,5 +317,156 @@ fn a_dependent_cannot_ignore_a_rotation_that_was_refused() {
     assert!(
         refused.to_string().contains("empty"),
         "and it says which value it means: {refused}"
+    );
+}
+
+/// The accessor a language binding watches on, in the shape a binding uses
+/// it: hand back the value that was rendered, and the sequence *ends*.
+///
+/// A signature test, and the signature is the promise. `Option` is what
+/// makes the loop below terminate — with a bare `PipeStatus` there is no
+/// `while let` to write, and the obvious `loop` spins on a closed pipe
+/// because `Closed` is terminal and would be answered again immediately,
+/// for ever, with no await in the path. Written against both handles
+/// because a binding wraps both, and against a `_` arm nowhere: what a
+/// caller has to handle here is the end, not a new variant.
+#[test]
+fn a_dependent_can_watch_a_status_from_its_own_snapshot_and_reach_an_end() {
+    // The coalescing form is untouched and still returns a bare status —
+    // an embedder already watching one is not asked to change. Declared
+    // alongside the two below rather than beside its own `let`: an item
+    // after a statement is a clippy error, and all three are items.
+    async fn watch_the_old_way(handle: &ConnectHandle) -> PipeStatus {
+        handle.status_changed().await
+    }
+    async fn watch_connect(handle: &ConnectHandle) -> Vec<String> {
+        let mut held: PipeStatus = handle.status();
+        let mut rendered = vec![held.as_str().to_owned()];
+        while let Some(next) = handle.status_changed_since(held).await {
+            rendered.push(next.as_str().to_owned());
+            held = next;
+        }
+        rendered
+    }
+    async fn watch_serve(handle: &ServeHandle) -> Vec<String> {
+        let mut held: PipeStatus = handle.status();
+        let mut rendered = vec![held.as_str().to_owned()];
+        while let Some(next) = handle.status_changed_since(held).await {
+            rendered.push(next.as_str().to_owned());
+            held = next;
+        }
+        rendered
+    }
+    // Named so they cannot be dropped as dead code, and never called:
+    // there is no live pipe here, and the promise being checked is the
+    // type.
+    let _ = (watch_connect, watch_serve, watch_the_old_way);
+}
+
+/// The resume hook, in the shape a phone client calls it: no arguments, no
+/// return, nothing of the transport in either.
+///
+/// The signature is the whole point. This wraps an endpoint method, and the
+/// alternative — handing the endpoint out and letting the caller call it —
+/// would put an iroh type in a public signature and make an iroh major
+/// version the *dependent's* upgrade rather than this crate's. A generated
+/// binding cannot name such a type at all.
+#[test]
+fn a_dependent_can_report_a_network_change_without_holding_a_transport() {
+    async fn on_resume(serving: &ServeHandle, connected: &ConnectHandle) {
+        // Both return `()`. A binding's resume handler is `async` and has
+        // nothing to unwrap or match.
+        let () = serving.notify_network_change().await;
+        let () = connected.notify_network_change().await;
+    }
+    // Named so it cannot be dropped as dead code, and never called: there
+    // is no live pipe here, and the promise being checked is the type.
+    let _ = on_resume;
+}
+
+/// The metrics snapshot is a plain owned value from outside the crate:
+/// constructible, `Copy`, comparable, and every field a `u64` that can be
+/// read without touching anything of iroh's.
+///
+/// `Default` is what makes it constructible at all — `#[non_exhaustive]`
+/// forbids a struct literal across a crate boundary — and it is also the
+/// honest zero: a pipe that has reached nothing has reached nothing.
+#[test]
+fn a_metrics_snapshot_is_a_plain_value_a_dependent_owns() {
+    // Declared before the first statement: an item after one is a clippy
+    // error, and this is an item.
+    fn read(serving: &ServeHandle, connected: &ConnectHandle) -> (NetworkMetrics, NetworkMetrics) {
+        (serving.network_metrics(), connected.network_metrics())
+    }
+    // Named so it cannot be dropped as dead code, and never called: there
+    // is no live pipe here, and the promise being checked is the type.
+    let _ = read;
+
+    let fresh = NetworkMetrics::default();
+    // Ascribed rather than inferred: the promise being checked is that
+    // every field is a plain integer, so rendering one is a format and not
+    // a call into somebody's metrics crate.
+    let ratelimited: u64 = fresh.relay_connections_ratelimited;
+    let connections: u64 = fresh.relay_connections;
+    let failed: u64 = fresh.relay_connections_failed;
+    assert_eq!((ratelimited, connections, failed), (0, 0, 0));
+
+    let copied = fresh; // Copy, not a move — `fresh` stays usable below.
+    assert_eq!(copied, fresh, "two readings can be compared for sameness");
+}
+
+/// A ticket says what it carries, which is what lets an embedder find out
+/// that the one it is about to print names no relay.
+///
+/// The relay comes back as a `String` and never as a parsed URL, because
+/// the format spec makes carrying the body verbatim normative and every URL
+/// library normalizes; the direct addresses come back as `std`'s own
+/// `SocketAddr`, because there is nothing this crate could add to it. Both
+/// halves are checked against a normative vector rather than a ticket built
+/// here.
+#[test]
+fn a_dependent_can_ask_a_ticket_where_it_points() {
+    // Vector 2 from docs/ticket-format-v0.md: one relay, one IPv4 address.
+    let ticket: Ticket = "pipeadlvvgabqkyqvn6vjp7nhslea45a5yls6pnkmizfv4bbu2hxa5iruaqaaangq5duobztulzpojswyylzfzsxqylnobwgkltdn5ws6aiaa3akqaihcfiqbrp5xr4q"
+        .parse()
+        .expect("a normative vector");
+
+    let relays: Vec<String> = ticket.relay_urls();
+    assert_eq!(relays, ["https://relay.example.com/"]);
+    let direct: Vec<std::net::SocketAddr> = ticket.direct_addrs();
+    assert_eq!(
+        direct,
+        ["192.168.1.7:4433".parse::<std::net::SocketAddr>().unwrap()]
+    );
+
+    // Vector 1: the minimal ticket. Empty is the answer that matters, and
+    // it is an empty list rather than an error — a ticket with no relay is
+    // a valid ticket, just one that may reach nobody behind a strict NAT.
+    let minimal: Ticket = "pipeadlvvgabqkyqvn6vjp7nhslea45a5yls6pnkmizfv4bbu2hxa5iruaaauhlp2na"
+        .parse()
+        .expect("a normative vector");
+    assert!(minimal.relay_urls().is_empty());
+    assert!(minimal.direct_addrs().is_empty());
+}
+
+/// The metrics snapshot serializes as the flat object a status DTO wants —
+/// three named integers and no wrapper — under the same feature `PeerView`
+/// is behind, for the same reason: an embedder rendering a status page opts
+/// in with one line, and the CLI never pays for it.
+#[cfg(feature = "serde")]
+#[test]
+fn a_dependents_dto_serializes_the_metrics_as_plain_numbers() {
+    #[derive(serde::Serialize)]
+    struct HealthDto {
+        transport: NetworkMetrics,
+    }
+    let json = serde_json::to_string(&HealthDto {
+        transport: NetworkMetrics::default(),
+    })
+    .expect("serializes");
+    assert_eq!(
+        json,
+        r#"{"transport":{"relay_connections":0,"relay_connections_failed":0,"relay_connections_ratelimited":0}}"#,
+        "the field names are the identifiers a dashboard keys on"
     );
 }

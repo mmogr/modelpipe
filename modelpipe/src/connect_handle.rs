@@ -45,7 +45,10 @@ use crate::status::{CloseReason, PipeStatus};
 /// trait is an additive, non-breaking change — the decision is recorded
 /// here so the duplication reads as chosen, not overlooked.
 pub struct ConnectHandle {
-    state: Arc<ConnectState>,
+    /// Shared with `network.rs`, the second `impl` block — the same
+    /// arrangement [`ServeHandle`](crate::ServeHandle) has with
+    /// `serve_status.rs`.
+    pub(crate) state: Arc<ConnectState>,
 }
 
 impl ConnectHandle {
@@ -104,6 +107,50 @@ impl ConnectHandle {
         // what makes states that came and went while nobody was waiting
         // coalesce rather than replay.
         let snapshot = self.state.lifecycle.status();
+        // `None` can only mean the snapshot taken a line above was already
+        // `Closed`, and this form owes such a caller the terminal status
+        // rather than a wait — the clause the doc above states.
+        self.state
+            .lifecycle
+            .changed_since(snapshot)
+            .await
+            .unwrap_or(PipeStatus::Closed)
+    }
+
+    /// Wait until the status differs from `snapshot`, then return it, and
+    /// `None` once the pipe is closed and `snapshot` already says so.
+    ///
+    /// Same contract as
+    /// [`ServeHandle::status_changed_since`](crate::ServeHandle::status_changed_since),
+    /// which states it in full: the caller supplies the snapshot, so a
+    /// transition landing between reading [`status`](Self::status) and
+    /// waiting again is reported rather than coalesced away, and the
+    /// sequence *ends* rather than repeating a terminal value.
+    ///
+    /// This is the form to reach for from a language binding.
+    /// [`status_changed`](Self::status_changed) snapshots inside itself,
+    /// so a generated `next()` built on it drops the transition it was
+    /// woken to report and then, after the close, returns `Closed` as fast
+    /// as it can be asked — a pipe that has been over for an hour still
+    /// costing a core. Neither is a bug in that method: they are the price
+    /// of coalescing, and this is the accessor for callers who cannot pay
+    /// it.
+    ///
+    /// # Examples
+    ///
+    /// The whole loop, with no terminal condition to get wrong:
+    ///
+    /// ```no_run
+    /// # async fn example(connected: &modelpipe::ConnectHandle) {
+    /// let mut held = connected.status();
+    /// println!("status: {}", held.as_str());
+    /// while let Some(next) = connected.status_changed_since(held).await {
+    ///     println!("status: {}", next.as_str());
+    ///     held = next;
+    /// }
+    /// # }
+    /// ```
+    pub async fn status_changed_since(&self, snapshot: PipeStatus) -> Option<PipeStatus> {
         self.state.lifecycle.changed_since(snapshot).await
     }
 

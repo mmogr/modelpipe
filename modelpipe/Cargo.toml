@@ -23,8 +23,9 @@ workspace = true
 
 [features]
 # `Serialize`/`Deserialize` for `Ticket` (as its canonical string),
-# `PipeStatus` and `PeerView`. Off by default: the CLI never needs them, and
-# an embedder that puts a ticket in a status DTO opts in with one line.
+# `PipeStatus`, `PeerView` and `NetworkMetrics`. Off by default: the CLI never
+# needs them, and an embedder that puts a ticket or a status page's numbers in
+# a DTO opts in with one line.
 serde = ["dep:serde"]
 
 # What docs.rs builds. The `serde` impls only exist under the feature, so
@@ -34,7 +35,13 @@ serde = ["dep:serde"]
 all-features = true
 
 [dependencies]
-iroh = { workspace = true }
+# `metrics` is one of iroh's own defaults, so this changes nothing about what
+# is compiled; it is named because `Endpoint::metrics` is now what
+# `NetworkMetrics` reads and a `cfg`-gated method that vanishes is a compile
+# error nobody would connect to a feature they never chose. Declared because
+# it is used — the same rule the `tokio` entry below states at length, and
+# the same failure it was written to prevent.
+iroh = { workspace = true, features = ["metrics"] }
 # Optional, and behind the feature of the same name. Already in the graph
 # via iroh (which serializes its own address records), so turning the
 # feature on costs no additional compilation; `derive` is what `PipeStatus`
