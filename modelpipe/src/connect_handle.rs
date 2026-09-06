@@ -36,8 +36,10 @@ use crate::status::{CloseReason, PipeStatus};
 /// buys, over a network where discovery is reachable. There is no
 /// rejection to observe in either case, because there is nobody to
 /// reject. [`PipeStatus::Closed`] therefore means this side is gone —
-/// shut down, dropped, or dead after an unrecoverable transport failure
-/// — never that the far side declined the pairing.
+/// shut down, dropped, or the local listener dead under it — never that
+/// the far side declined the pairing, and never that the transport gave
+/// up: an unreachable peer is [`PipeStatus::Idle`], retried for as long
+/// as the pipe is held.
 ///
 /// Deliberately shares no trait with [`ServeHandle`](crate::ServeHandle): the overlap is
 /// three methods, and embedders driving both sides duplicate a small

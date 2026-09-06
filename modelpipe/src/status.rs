@@ -36,8 +36,17 @@ pub enum PipeStatus {
     /// At least one connected peer is falling back through an (encrypted,
     /// unreadable) relay.
     Relayed,
-    /// The pipe is gone — shut down, dropped, or dead after an
-    /// unrecoverable transport failure. Terminal: no transition follows.
+    /// The pipe is gone — shut down, dropped, or, on the connect side, the
+    /// *local* listener stopped accepting under it. Terminal: no transition
+    /// follows.
+    ///
+    /// **A transport failure is not one of the ways to get here**, and the
+    /// sentence that used to say it was described a path neither side has.
+    /// Nothing gives up on reaching a peer: an unreachable one is
+    /// [`Idle`](Self::Idle), retried for as long as the pipe is held, which
+    /// is the whole reason that state and this one are different answers.
+    /// Every close is a local decision, and [`CloseReason`] says which one.
+    ///
     /// Carried as a bare state rather than a reason so this type stays
     /// `Copy`; the need proved real, and the diagnostic accessor that
     /// answers *which* of those it was is
