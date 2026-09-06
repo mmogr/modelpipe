@@ -34,7 +34,10 @@ key. That's the whole product.
 cargo install modelpipe-cli   # the binary is called `modelpipe`
 ```
 
-Embedding it in something else? `cargo add modelpipe`.
+Embedding it in something else? `cargo add modelpipe`. Add
+`--features serde` if your status DTOs hold a `Ticket` or a `PipeStatus`:
+the ticket serializes as its canonical string, the status as the
+identifier `as_str` already freezes.
 
 ## Using it
 

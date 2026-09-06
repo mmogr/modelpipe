@@ -184,6 +184,32 @@ fn a_dependents_debug_output_cannot_contain_the_supplied_token() {
     assert!(rendered.contains("daemon"), "the rest must still render");
 }
 
+/// With the feature on, a dependent's own derived `Serialize` over a struct
+/// holding a ticket and a status emits the canonical string and the frozen
+/// identifier — the shape a status DTO needs, and nothing of the layout.
+#[cfg(feature = "serde")]
+#[test]
+fn a_dependents_dto_serializes_a_ticket_as_its_string() {
+    #[derive(serde::Serialize)]
+    struct StatusDto {
+        ticket: Ticket,
+        path: PipeStatus,
+    }
+    let ticket: Ticket = "pipeadlvvgabqkyqvn6vjp7nhslea45a5yls6pnkmizfv4bbu2hxa5iruaaauhlp2na"
+        .parse()
+        .expect("a normative vector");
+    let json = serde_json::to_string(&StatusDto {
+        ticket: ticket.clone(),
+        path: PipeStatus::Direct,
+    })
+    .expect("serializes");
+    assert_eq!(
+        json,
+        format!(r#"{{"ticket":"{ticket}","path":"direct"}}"#),
+        "the ticket is its string and the status is its identifier"
+    );
+}
+
 /// Both error types are `std::error::Error`, which is what lets them ride
 /// through `anyhow` and `Box<dyn Error>` in a dependent's stack.
 #[test]

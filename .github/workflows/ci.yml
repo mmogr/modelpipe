@@ -144,6 +144,13 @@ jobs:
       - name: Run tests
         run: cargo test --workspace --no-fail-fast
 
+      # The library's optional features, which the default-feature run above
+      # never compiles. `-p modelpipe` rather than `--workspace`: the CLI
+      # has no features to turn on, and the point is to test what an
+      # embedder who opts in actually gets.
+      - name: Run the library's feature-gated tests
+        run: cargo test -p modelpipe --all-features --no-fail-fast
+
   rustdoc:
     name: Rustdoc
     runs-on: ubuntu-latest
