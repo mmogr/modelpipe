@@ -60,9 +60,10 @@ pub enum ServeError {
         url: String,
     },
     /// A token that cannot be presented — from
-    /// [`TokenPolicy::Supplied`](crate::TokenPolicy::Supplied) here, or from
+    /// [`TokenPolicy::Supplied`](crate::TokenPolicy::Supplied) here, from
     /// [`ServeHandle::set_token`](crate::ServeHandle::set_token) on a
-    /// listener already running.
+    /// listener already running, or as the secret handed to
+    /// [`ServeHandle::grant_once`](crate::ServeHandle::grant_once).
     ///
     /// Empty, or nothing but whitespace. Such a value fails *closed* — the
     /// enforced header becomes `"Bearer "` with a trailing space, and HTTP

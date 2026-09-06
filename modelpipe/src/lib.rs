@@ -52,6 +52,7 @@ mod exchange;
 mod fault;
 mod fingerprint;
 mod framing;
+mod grant;
 mod head_read;
 mod headers;
 mod http_head;

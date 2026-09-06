@@ -99,6 +99,14 @@ Already have a key you want enforced? `--token-file` and friends are in the
 table below. Tickets have no expiry and no revocation list yet, so treat
 them like keys, not invitations.
 
+Embedding the library and want a new device to *fetch* the key over the
+encrypted hop instead of a person carrying it? `ServeHandle::grant_once`
+admits exactly one request bearing a short-lived code you mint, so your
+backend can serve a pairing route that answers with the real key. The code
+is spent when presented and dead at its deadline either way. While it is
+live it is worth as much as the token, so keep the window short and count
+attempts on your side.
+
 The backend has to be local: loopback always, private ranges only behind
 `--allow-private-backend`, link-local — where cloud instance metadata
 lives — never. The check runs on resolved addresses, not URL text.

@@ -1386,6 +1386,42 @@ async fn no_line_repeats_the_credential_or_the_query_string() {
     );
 }
 
+/// A grant is a credential too, and the same rule covers it: the one
+/// request it admits is logged like any other, and the value that admitted
+/// it is not in the line.
+#[tokio::test]
+async fn a_grant_that_admits_is_logged_without_the_grant() {
+    const GRANT: &str = "sk-zzq-grant-sentinel";
+    let mut request = b"GET /v1/models HTTP/1.1\r\nHost: 127.0.0.1:8080\r\n".to_vec();
+    request.extend_from_slice(format!("Authorization: Bearer {GRANT}\r\n\r\n").as_bytes());
+
+    let backend = CountingBackend::new(OK_RESPONSE);
+    let (credential, _) = Credential::new(&supplied()).expect("a usable policy");
+    assert!(credential.grant(GRANT.to_owned(), std::time::Duration::from_mins(1)));
+
+    capturing();
+    CAPTURED.with(|slot| *slot.borrow_mut() = Some(Vec::new()));
+    let (mut client, mut edge) = duplex(64 * 1024);
+    client.write_all(&request).await.unwrap();
+    client.shutdown().await.unwrap();
+    let outcome = serve_exchange(&mut edge, &credential, &backend)
+        .await
+        .expect("no transport failure");
+    drop(edge);
+    let log = CAPTURED
+        .with(|slot| slot.borrow_mut().take())
+        .map(|bytes| String::from_utf8(bytes).expect("utf-8"))
+        .expect("armed just above");
+
+    assert_eq!(outcome, Outcome::Forwarded, "the grant admitted");
+    assert_eq!(backend.connects(), 1);
+    assert!(
+        log.contains("outcome=\"forwarded\""),
+        "captured nothing:\n{log}"
+    );
+    assert!(!log.contains(GRANT), "the grant is in the log:\n{log}");
+}
+
 /// A refusal is reported as one, and is still attributable.
 ///
 /// A 401 nobody can tie to a path tells an operator only that somebody,

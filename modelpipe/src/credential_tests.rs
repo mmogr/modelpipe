@@ -169,6 +169,106 @@ fn set_turns_auth_on_when_serving_open() {
     assert!(offers(&cell, Some(&format!("Bearer {TOKEN}"))));
 }
 
+// ── Grants ───────────────────────────────────────────────────────────────
+
+const CODE: &str = "483920";
+const LONG: std::time::Duration = std::time::Duration::from_mins(1);
+
+/// A grant is a credential that admits once: the second presentation of
+/// the same value is a plain wrong token.
+#[test]
+fn a_grant_admits_one_request_and_then_is_a_wrong_token() {
+    let cell = enforcing(TOKEN);
+    assert!(
+        cell.grant(CODE.to_owned(), LONG),
+        "a presentable code takes"
+    );
+    let as_bearer = format!("Bearer {CODE}");
+    assert!(
+        offers(&cell, Some(&as_bearer)),
+        "the first presentation admits"
+    );
+    assert!(
+        !offers(&cell, Some(&as_bearer)),
+        "the second is refused like any wrong token"
+    );
+}
+
+/// Granting changes nothing about the token: it still admits, it is still
+/// what the handle reports, and the grant is not it.
+#[test]
+fn a_grant_leaves_the_enforced_token_untouched() {
+    let cell = enforcing(TOKEN);
+    cell.grant(CODE.to_owned(), LONG);
+    assert!(offers(&cell, Some(&format!("Bearer {TOKEN}"))));
+    assert_eq!(cell.token().as_deref(), Some(TOKEN));
+    assert!(
+        offers(&cell, Some(&format!("Bearer {CODE}"))),
+        "and the grant is still unspent — the token did not consume it"
+    );
+}
+
+/// The grant follows the scheme rules the token follows: it is a bearer
+/// credential, not a magic string that admits from anywhere in the header.
+#[test]
+fn a_grant_is_presented_as_a_bearer_or_not_at_all() {
+    let cell = enforcing(TOKEN);
+    cell.grant(CODE.to_owned(), LONG);
+    assert!(!offers(&cell, Some(CODE)), "no scheme");
+    assert!(
+        !offers(&cell, Some(&format!("Basic {CODE}"))),
+        "wrong scheme"
+    );
+    assert!(
+        offers(&cell, Some(&format!("bearer {CODE}"))),
+        "the scheme is case-insensitive"
+    );
+}
+
+/// An unused grant dies at its deadline rather than lingering as a
+/// standing credential nobody remembers issuing.
+#[test]
+fn an_unused_grant_expires() {
+    let cell = enforcing(TOKEN);
+    cell.grant(CODE.to_owned(), std::time::Duration::ZERO);
+    assert!(!offers(&cell, Some(&format!("Bearer {CODE}"))));
+}
+
+/// A rotation neither spends nor extends a grant: the two are independent
+/// credentials with independent lifetimes.
+#[test]
+fn rotating_the_token_does_not_disturb_a_live_grant() {
+    let cell = enforcing(TOKEN);
+    cell.grant(CODE.to_owned(), LONG);
+    cell.set("sk-zzq-the-replacement".to_owned());
+    assert!(offers(&cell, Some(&format!("Bearer {CODE}"))));
+}
+
+/// The value `set` refuses, `grant` refuses, and for the same reason.
+#[test]
+fn an_unpresentable_grant_is_refused() {
+    let cell = enforcing(TOKEN);
+    for blank in ["", " ", "\t\n"] {
+        assert!(
+            !cell.grant(blank.to_owned(), LONG),
+            "{blank:?} must not become a grant"
+        );
+    }
+}
+
+/// Grants are counted in `Debug`, never shown.
+#[test]
+fn debug_counts_grants_and_never_shows_one() {
+    let cell = enforcing(TOKEN);
+    cell.grant(CODE.to_owned(), LONG);
+    let rendered = format!("{cell:?}");
+    assert!(!rendered.contains(CODE), "the grant leaked: {rendered}");
+    assert!(
+        rendered.contains("grants: 1"),
+        "but the count is legible: {rendered}"
+    );
+}
+
 // ── Minting ──────────────────────────────────────────────────────────────
 
 /// Two mints must never collide, and the value must be something a person
