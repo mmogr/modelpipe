@@ -57,10 +57,13 @@ fn ticket_for(endpoint: &Endpoint) -> Ticket {
 #[tokio::test]
 async fn a_ticket_for_a_live_peer_dials_it_and_holds_the_connection() {
     let (endpoint, _accepted) = accepting().await;
-    let peer = tokio::time::timeout(PATIENCE, Peer::dial(&ticket_for(&endpoint)))
-        .await
-        .expect("the dial must not hang")
-        .expect("a live peer is reachable");
+    let peer = tokio::time::timeout(
+        PATIENCE,
+        Peer::dial(&ticket_for(&endpoint), &ConnectOptions::default()),
+    )
+    .await
+    .expect("the dial must not hang")
+    .expect("a live peer is reachable");
 
     assert!(peer.current().is_some(), "and the connection is held");
 }
@@ -78,10 +81,13 @@ async fn a_ticket_for_a_live_peer_dials_it_and_holds_the_connection() {
 #[tokio::test]
 async fn a_peer_can_be_dialled_again_at_the_same_identity() {
     let (endpoint, _accepted) = accepting().await;
-    let peer = tokio::time::timeout(PATIENCE, Peer::dial(&ticket_for(&endpoint)))
-        .await
-        .expect("the dial must not hang")
-        .expect("a live peer is reachable");
+    let peer = tokio::time::timeout(
+        PATIENCE,
+        Peer::dial(&ticket_for(&endpoint), &ConnectOptions::default()),
+    )
+    .await
+    .expect("the dial must not hang")
+    .expect("a live peer is reachable");
     let first = peer.current().expect("a connection").stable_id();
 
     let path = tokio::time::timeout(PATIENCE, peer.redial())
@@ -109,10 +115,13 @@ async fn a_peer_can_be_dialled_again_at_the_same_identity() {
 #[tokio::test]
 async fn forgetting_a_replaced_connection_leaves_its_successor_alone() {
     let (endpoint, _accepted) = accepting().await;
-    let peer = tokio::time::timeout(PATIENCE, Peer::dial(&ticket_for(&endpoint)))
-        .await
-        .expect("the dial must not hang")
-        .expect("a live peer is reachable");
+    let peer = tokio::time::timeout(
+        PATIENCE,
+        Peer::dial(&ticket_for(&endpoint), &ConnectOptions::default()),
+    )
+    .await
+    .expect("the dial must not hang")
+    .expect("a live peer is reachable");
     let stale = peer.current().expect("a connection");
 
     tokio::time::timeout(PATIENCE, peer.redial())
@@ -136,10 +145,13 @@ async fn forgetting_a_replaced_connection_leaves_its_successor_alone() {
 #[tokio::test]
 async fn forgetting_the_live_connection_clears_it() {
     let (endpoint, _accepted) = accepting().await;
-    let peer = tokio::time::timeout(PATIENCE, Peer::dial(&ticket_for(&endpoint)))
-        .await
-        .expect("the dial must not hang")
-        .expect("a live peer is reachable");
+    let peer = tokio::time::timeout(
+        PATIENCE,
+        Peer::dial(&ticket_for(&endpoint), &ConnectOptions::default()),
+    )
+    .await
+    .expect("the dial must not hang")
+    .expect("a live peer is reachable");
     let live = peer.current().expect("a connection");
 
     peer.forget(&live);

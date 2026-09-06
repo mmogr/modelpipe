@@ -39,6 +39,7 @@ use std::sync::RwLock;
 use std::time::Duration;
 
 use crate::ConnectError;
+use crate::connect::ConnectOptions;
 use crate::lifecycle::{Lifecycle, PeerPath, aggregate};
 use crate::status::PipeStatus;
 use crate::ticket::Ticket;
@@ -77,12 +78,16 @@ impl Peer {
     /// [`connect`](fn@crate::connect) rather than handed a handle that will
     /// keep trying forever behind their back. Every dial *after* this one
     /// is the reconnect loop's, and those are retried rather than reported.
-    pub(crate) async fn dial(ticket: &Ticket) -> Result<Self, ConnectError> {
+    pub(crate) async fn dial(ticket: &Ticket, opts: &ConnectOptions) -> Result<Self, ConnectError> {
         let addr = transport::addr_from(ticket)?;
         // No stored key on this side: nothing dials *us*, so this
         // endpoint's identity is never in anybody's ticket and has nothing
         // to outlive. The serve side's `--identity` is the mirror of this.
-        let endpoint = transport::bind(None, None).await?;
+        let net = transport::NetOptions {
+            port_mapping: opts.port_mapping,
+            discovery: opts.discovery,
+        };
+        let endpoint = transport::bind(opts.relay.as_deref(), None, net).await?;
         let connection = endpoint
             .connect(addr.clone(), transport::ALPN)
             .await

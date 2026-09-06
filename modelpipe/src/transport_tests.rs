@@ -192,7 +192,9 @@ fn validation_yields_a_verdict_and_never_a_normalized_url() {
 /// registered, not anything about connectivity.
 #[tokio::test]
 async fn an_endpoint_binds_and_reports_its_own_identity() {
-    let endpoint = bind(None, None).await.expect("binding must succeed");
+    let endpoint = bind(None, None, NetOptions::default())
+        .await
+        .expect("binding must succeed");
     let addr = endpoint.addr();
 
     let ticket = ticket_from(&addr);
@@ -209,7 +211,7 @@ async fn an_endpoint_binds_and_reports_its_own_identity() {
 /// surfacing later as an unexplained transport failure.
 #[tokio::test]
 async fn binding_with_an_unparseable_relay_fails_before_the_endpoint_exists() {
-    let Err(failure) = bind(Some("not a url"), None).await else {
+    let Err(failure) = bind(Some("not a url"), None, NetOptions::default()).await else {
         panic!("an unparseable relay must be refused");
     };
     let err = ServeError::from(failure);
@@ -233,9 +235,15 @@ async fn the_same_key_binds_to_the_same_endpoint_and_a_different_one_does_not() 
     let key = [7u8; crate::identity::KEY_BYTES];
     let other = [9u8; crate::identity::KEY_BYTES];
 
-    let first = bind(None, Some(key)).await.expect("binds");
-    let again = bind(None, Some(key)).await.expect("binds");
-    let elsewhere = bind(None, Some(other)).await.expect("binds");
+    let first = bind(None, Some(key), NetOptions::default())
+        .await
+        .expect("binds");
+    let again = bind(None, Some(key), NetOptions::default())
+        .await
+        .expect("binds");
+    let elsewhere = bind(None, Some(other), NetOptions::default())
+        .await
+        .expect("binds");
 
     assert_eq!(
         ticket_from(&first.addr()).endpoint_id(),
@@ -253,12 +261,46 @@ async fn the_same_key_binds_to_the_same_endpoint_and_a_different_one_does_not() 
     elsewhere.close().await;
 }
 
+/// Each network option removes one contact and nothing else: an endpoint
+/// still binds, still has an identity, and still mints a ticket with every
+/// combination off. Connectivity is not what this checks — that the
+/// builder accepts the configuration is.
+#[tokio::test]
+async fn an_endpoint_binds_with_every_network_contact_switched_off() {
+    for (port_mapping, discovery) in [(false, true), (true, false), (false, false)] {
+        let net = NetOptions {
+            port_mapping,
+            discovery,
+        };
+        let endpoint = bind(None, None, net)
+            .await
+            .expect("binding must succeed whatever is switched off");
+        assert_eq!(ticket_from(&endpoint.addr()).fingerprint().len(), 12);
+        endpoint.close().await;
+    }
+}
+
+/// The connect side's relay is validated by the same rule as the serve
+/// side's, and refused as its own permanent variant.
+#[test]
+fn a_connect_relay_that_is_not_a_url_is_refused_as_the_connect_error() {
+    match validate_relay_for_connect("not a url") {
+        Err(ConnectError::InvalidRelay { url }) => assert_eq!(url, "not a url"),
+        other => panic!("expected InvalidRelay, got {other:?}"),
+    }
+    assert!(validate_relay_for_connect("https://relay.example.com/").is_ok());
+}
+
 /// The control for the default: no key means a fresh identity every time,
 /// which is the disposable ticket every version before this one had.
 #[tokio::test]
 async fn binding_without_a_key_mints_a_new_identity_each_time() {
-    let first = bind(None, None).await.expect("binds");
-    let second = bind(None, None).await.expect("binds");
+    let first = bind(None, None, NetOptions::default())
+        .await
+        .expect("binds");
+    let second = bind(None, None, NetOptions::default())
+        .await
+        .expect("binds");
 
     assert_ne!(
         ticket_from(&first.addr()).endpoint_id(),
