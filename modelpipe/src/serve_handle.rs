@@ -13,6 +13,7 @@ use std::time::Duration;
 
 use crate::listener::{self, ServeState};
 use crate::serve_error::ServeError;
+use crate::status::CloseReason;
 use crate::ticket::Ticket;
 use crate::transport;
 
@@ -261,7 +262,12 @@ impl ServeHandle {
 
 impl Drop for ServeHandle {
     fn drop(&mut self) {
-        self.state.lifecycle.close();
+        // `Shutdown`, and not a reason of its own: dropping is a teardown
+        // this side asked for exactly as `shutdown` is, differing in what
+        // becomes of the requests in flight rather than in why the pipe
+        // ended. A separate reason would also be one nobody could read —
+        // the accessor needs a handle, and this is the handle going away.
+        self.state.lifecycle.close(CloseReason::Shutdown);
         if let Ok(runtime) = tokio::runtime::Handle::try_current() {
             let state = self.state.clone();
             runtime.spawn(async move {

@@ -22,6 +22,7 @@ use crate::connect::ConnectOptions;
 use crate::lifecycle::Lifecycle;
 use crate::peer::Peer;
 use crate::refusal;
+use crate::status::CloseReason;
 use crate::ticket::Ticket;
 
 /// Everything a live connect side shares.
@@ -131,9 +132,12 @@ pub(crate) async fn local_loop(state: Arc<ConnectState>, listener: TcpListener) 
     // whole reason `mark_torn_down` is separate from publishing `Closed`.
     drop(listener);
     // The loop can also end without anyone asking — a permanent accept
-    // failure. The pipe is over either way, and a watcher that is never told
-    // waits on a status that will not change again.
-    state.lifecycle.close();
+    // failure — and the pipe is over either way: a watcher that is never
+    // told waits on a status that will not change again. The reason given
+    // here stands only in that first case, because the first reason
+    // recorded is the one that keeps and every other way out of the loop
+    // was closed by whoever asked for it.
+    state.lifecycle.close(CloseReason::ListenerFailed);
     state.lifecycle.mark_torn_down();
 }
 
@@ -258,7 +262,7 @@ const REFUSAL_DRAIN: Duration = Duration::from_secs(5);
 
 /// Stop accepting, drain, and release.
 pub(crate) async fn shutdown(state: &ConnectState) {
-    state.lifecycle.close();
+    state.lifecycle.close(CloseReason::Shutdown);
     state.lifecycle.wait_until_drained().await;
     state.peer.close(b"shutdown");
     // Waits for the accept loop to notice the close and drop the listener.
@@ -276,7 +280,7 @@ pub(crate) async fn shutdown(state: &ConnectState) {
 /// from outside returned `true` with the port still bound — and left the
 /// latch set, so a later `shutdown` lost the same guarantee.
 pub(crate) async fn shutdown_timeout(state: &ConnectState, grace: Duration) -> bool {
-    state.lifecycle.close();
+    state.lifecycle.close(CloseReason::Shutdown);
     let drained = tokio::time::timeout(grace, state.lifecycle.wait_until_drained())
         .await
         .is_ok();

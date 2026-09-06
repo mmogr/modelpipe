@@ -39,9 +39,63 @@ pub enum PipeStatus {
     /// The pipe is gone — shut down, dropped, or dead after an
     /// unrecoverable transport failure. Terminal: no transition follows.
     /// Carried as a bare state rather than a reason so this type stays
-    /// `Copy`; a diagnostic accessor on the handle can be added
-    /// compatibly if the need proves real.
+    /// `Copy`; the need proved real, and the diagnostic accessor that
+    /// answers *which* of those it was is
+    /// [`ConnectHandle::close_reason`](crate::ConnectHandle::close_reason).
     Closed,
+}
+
+/// Why a pipe reached [`PipeStatus::Closed`].
+///
+/// The distinction [`PipeStatus`] deliberately does not carry, kept out of
+/// it so that type stays `Copy` and stays small enough to sit in a
+/// watcher's own state. Read it from
+/// [`ConnectHandle::close_reason`](crate::ConnectHandle::close_reason),
+/// which answers `None` for as long as the pipe is live.
+///
+/// **What it is for is telling a failure from a success**, which the status
+/// alone cannot do. A connect side reports [`PipeStatus::Idle`] both while
+/// it is looking for a peer that has gone away and before it has ever
+/// reached one, and it reports [`PipeStatus::Closed`] whether a caller
+/// asked for that or the local listener died under it. So: `None` means the
+/// pipe is still live and still trying, however idle it looks;
+/// [`Shutdown`](Self::Shutdown) means this side ended it on purpose; and
+/// [`ListenerFailed`](Self::ListenerFailed) means nobody did.
+///
+/// `#[non_exhaustive]`, because the set of ways a pipe can end is not
+/// closed — a caller matching on it needs a `_` arm and a plan for the
+/// reasons that do not exist yet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum CloseReason {
+    /// This side ended the pipe on purpose: `shutdown`,
+    /// `shutdown_timeout`, or the handle being dropped.
+    ///
+    /// The three differ in what becomes of the requests already in flight
+    /// — `shutdown` drains, a drop cuts — and not in why the pipe ended,
+    /// which is what this answers. There is deliberately no separate
+    /// reason for the drop, because there would be no way to read one:
+    /// the accessor needs a handle, and a dropped handle is the one thing
+    /// a caller no longer has.
+    Shutdown,
+    /// The local listener stopped accepting and could not carry on. Nobody
+    /// asked for this one: it is the reason here that reports a failure
+    /// rather than an intention, and the one worth waking somebody over.
+    ListenerFailed,
+}
+
+impl CloseReason {
+    /// A stable lowercase identifier: `"shutdown"`, `"listener_failed"`.
+    ///
+    /// Same contract as [`PipeStatus::as_str`], for the same reasons —
+    /// an identifier rather than a sentence, frozen once anything greps
+    /// for it, and a reason added later returns its own new one.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Shutdown => "shutdown",
+            Self::ListenerFailed => "listener_failed",
+        }
+    }
 }
 
 impl PipeStatus {
@@ -110,5 +164,29 @@ mod tests {
             rendered.len(),
             "identifiers must be distinct"
         );
+    }
+
+    /// The same rule for the reasons, and the same reason for it.
+    #[test]
+    fn every_close_reason_renders_a_distinct_stable_identifier() {
+        let all = [CloseReason::Shutdown, CloseReason::ListenerFailed];
+        let rendered: Vec<&str> = all.iter().map(|r| r.as_str()).collect();
+        assert_eq!(rendered, ["shutdown", "listener_failed"]);
+
+        let mut deduped = rendered.clone();
+        deduped.sort_unstable();
+        deduped.dedup();
+        assert_eq!(
+            deduped.len(),
+            rendered.len(),
+            "identifiers must be distinct"
+        );
+    }
+
+    /// The whole point of the type: a pipe somebody ended and a pipe that
+    /// broke are not the same answer, and comparing them must say so.
+    #[test]
+    fn a_failure_is_not_equal_to_a_deliberate_close() {
+        assert_ne!(CloseReason::ListenerFailed, CloseReason::Shutdown);
     }
 }
