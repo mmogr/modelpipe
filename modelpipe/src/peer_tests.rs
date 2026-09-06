@@ -143,6 +143,47 @@ async fn the_reconnect_loop_makes_the_first_connection_too() {
     assert!(peer.current().is_some(), "with the connection held");
 }
 
+/// The loop goes on *reading* the connection it has, rather than publishing
+/// the path it dialled on and then waiting for a death.
+///
+/// This is the connect side's half of the defect `crate::path_watch` exists
+/// for, and it is asserted here because the watcher being correct is not the
+/// same claim as the watcher being reached: `path_watch`'s own tests call
+/// `follow` directly, and every one of them passes against a
+/// `keep_connected` whose third `select!` arm has been deleted.
+///
+/// Knocked back from outside, which is what makes it deterministic on
+/// loopback. Nothing here can make a path actually migrate — and the RTT is
+/// no use as a signal either, because two endpoints in one process report
+/// sub-millisecond round trips that `PeerView` renders as a constant zero.
+/// So the status is set back to `Idle` behind the loop's back: only a loop
+/// still reading the live connection can put it back, and one that sampled
+/// at dial and stopped leaves it `Idle` for ever.
+#[tokio::test]
+async fn a_live_connection_keeps_being_read_by_the_reconnect_loop() {
+    let (endpoint, _accepted) = accepting().await;
+    let peer = bound(&endpoint).await;
+    let lifecycle = Lifecycle::new();
+
+    tokio::time::timeout(PATIENCE, async {
+        tokio::select! {
+            () = keep_connected(&peer, &lifecycle) => {}
+            () = async {
+                while lifecycle.status() == PipeStatus::Idle {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+                let reached = lifecycle.status();
+                lifecycle.set_status(PipeStatus::Idle);
+                while lifecycle.status() != reached {
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+            } => {}
+        }
+    })
+    .await
+    .expect("a live connection must be re-read, not sampled once");
+}
+
 // ── Finding it again ─────────────────────────────────────────────────────
 
 /// The claim reconnecting rests on: the endpoint id in a ticket outlives

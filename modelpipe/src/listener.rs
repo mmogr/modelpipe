@@ -264,3 +264,7 @@ pub(crate) async fn shutdown_timeout(state: &ServeState, grace: std::time::Durat
     state.lifecycle.mark_torn_down();
     drained
 }
+
+#[cfg(test)]
+#[path = "listener_tests.rs"]
+mod listener_tests;
