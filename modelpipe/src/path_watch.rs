@@ -26,6 +26,16 @@
 //! `Connection` and yields values iroh documents as unable to cross a task
 //! boundary.)
 //!
+//! **Correcting the record.** PR #50's description — the page a reader
+//! following the changelog's link for this change arrives at — says the
+//! watcher is "a per-connection watcher on `Connection::path_events()`" and
+//! that `paths_stream` was the alternative it beat. It is neither of those:
+//! the reading is the [`Connection::paths`] poll below, for the two reasons
+//! above it. The commit body that landed on `main` describes the poll
+//! correctly, so the PR page is the only copy that is wrong — and a merged
+//! description cannot be corrected in place, which is why the correction is
+//! here, where that reader arrives next.
+//!
 //! [`Connection::paths`]: iroh::endpoint::Connection::paths
 //! [`Connection::path_events`]: iroh::endpoint::Connection::path_events
 
