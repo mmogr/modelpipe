@@ -136,7 +136,28 @@ pub struct PeerView {
     /// is one name everywhere it appears.
     pub fingerprint: String,
     /// How this peer is reaching the listener right now.
+    ///
+    /// **Right now, and re-read while the connection lives.** A connection
+    /// commonly establishes through a relay and hole-punches to a direct
+    /// path a moment later, and this follows that; before it did, a
+    /// listener reported whichever path a peer happened to arrive on for
+    /// the whole of that peer's session.
     pub path: PipeStatus,
+    /// Round-trip time to this peer over the path above, in whole
+    /// milliseconds, or `None` while no path is established yet.
+    ///
+    /// QUIC's own smoothed estimate rather than a probe this crate sends,
+    /// so it costs nothing to read and moves a little between calls even on
+    /// a path that has not changed. It is what turns [`path`](Self::path)
+    /// into a measurement: `relayed` says a peer went the long way round,
+    /// and this says what the long way round cost it.
+    ///
+    /// Milliseconds rather than a `Duration` because this struct is a DTO —
+    /// it is the shape a status page renders, and the one the `serde`
+    /// feature exists for — and `Duration` serializes as a two-field
+    /// struct of seconds and nanoseconds. A round trip is never measured
+    /// finer than this by anything that would display it.
+    pub rtt_ms: Option<u64>,
 }
 
 #[cfg(test)]

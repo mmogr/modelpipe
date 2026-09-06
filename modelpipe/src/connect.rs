@@ -129,6 +129,13 @@ pub struct ConnectOptions {
     /// from the side that *resolves*: with it off, this side dials only
     /// the paths the ticket carries.
     pub discovery: bool,
+    /// Same as [`ServeOptions::relay_only`](crate::ServeOptions#structfield.relay_only),
+    /// and it takes only one side to force the outcome: with no IP
+    /// transport here, the ticket's direct addresses are unreachable from
+    /// this endpoint and the relay is the only path left. Setting it on
+    /// this side is the cheaper of the two, because it needs no
+    /// re-pairing — the serve side keeps the ticket it already handed out.
+    pub relay_only: bool,
 }
 
 impl Default for ConnectOptions {
@@ -138,6 +145,7 @@ impl Default for ConnectOptions {
             relay: None,
             port_mapping: true,
             discovery: true,
+            relay_only: false,
         }
     }
 }

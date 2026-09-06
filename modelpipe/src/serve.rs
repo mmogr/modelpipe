@@ -23,6 +23,17 @@ use crate::transport;
 /// you need. `#[non_exhaustive]`, so a new option is not a breaking
 /// change for callers who construct it that way.
 #[non_exhaustive]
+// The lint's advice — a state machine, or two-variant enums — is for a
+// struct whose booleans interact. These do not: each one names a separate
+// thing the endpoint does or does not do on the network, they are legal in
+// all sixteen combinations, and the README documents them as four
+// independent switches. Collapsing them into an enum would invent
+// relationships the transport does not have, and every one of them is a
+// `bool` on the CLI too.
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "independent network switches, not a state machine"
+)]
 pub struct ServeOptions {
     /// What the listener requires in `Authorization: Bearer …`.
     pub auth: TokenPolicy,
@@ -116,6 +127,30 @@ pub struct ServeOptions {
     /// keep working — loses little; one relying on `identity` loses the
     /// thing it was for.
     pub discovery: bool,
+    /// Reach every peer through a relay, never directly: this endpoint
+    /// opens no IP transport at all.
+    ///
+    /// `false` — the default — is what every version before this one did,
+    /// and is what you want in production: a direct path is faster and
+    /// costs nobody's relay anything.
+    ///
+    /// **A measuring instrument, and it exists because relayed is the case
+    /// nobody can reproduce on demand.** Whether hole punching works from a
+    /// given network is decided by that network's NAT, so "it went direct"
+    /// is easy to observe and "it fell back, and the fallback is good
+    /// enough to use" is not — you would have to find a hostile enough NAT
+    /// to sit behind. With this set the fallback is the *only* path, so
+    /// what a relayed session costs can be read off
+    /// [`ServeHandle::peers`](crate::ServeHandle::peers) on any network at
+    /// all, and held against the same reading without it.
+    ///
+    /// The ticket minted while this is on carries the relay and nothing
+    /// else, because there are no IP addresses for it to carry. That is
+    /// honest rather than a limitation, and it means a ticket handed out
+    /// under this switch keeps a holder relayed even if they are on the
+    /// same LAN — which is the other half of what makes the comparison a
+    /// comparison.
+    pub relay_only: bool,
 }
 
 impl Default for ServeOptions {
@@ -131,6 +166,7 @@ impl Default for ServeOptions {
             wait_online: None,
             port_mapping: true,
             discovery: true,
+            relay_only: false,
         }
     }
 }
@@ -149,6 +185,7 @@ impl fmt::Debug for ServeOptions {
             .field("wait_online", &self.wait_online)
             .field("port_mapping", &self.port_mapping)
             .field("discovery", &self.discovery)
+            .field("relay_only", &self.relay_only)
             .finish()
     }
 }
@@ -230,6 +267,7 @@ pub async fn serve(backend_url: &str, opts: ServeOptions) -> Result<ServeHandle,
     let net = transport::NetOptions {
         port_mapping: opts.port_mapping,
         discovery: opts.discovery,
+        relay_only: opts.relay_only,
     };
     let endpoint = transport::bind(opts.relay.as_deref(), key, net).await?;
     // After the endpoint exists and before the handle wraps it, which is

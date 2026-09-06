@@ -271,6 +271,7 @@ async fn an_endpoint_binds_with_every_network_contact_switched_off() {
         let net = NetOptions {
             port_mapping,
             discovery,
+            ..NetOptions::default()
         };
         let endpoint = bind(None, None, net)
             .await
@@ -278,6 +279,34 @@ async fn an_endpoint_binds_with_every_network_contact_switched_off() {
         assert_eq!(ticket_from(&endpoint.addr()).fingerprint().len(), 12);
         endpoint.close().await;
     }
+}
+
+/// Relay-only removes every IP transport, so a ticket minted under it names
+/// the relay and nothing else.
+///
+/// That is the switch working rather than a limitation of it: the point is
+/// to make relayed the only outcome, and a ticket still carrying the LAN
+/// addresses would let a holder on the same network go direct and quietly
+/// measure the thing that was being excluded.
+#[tokio::test]
+async fn relay_only_mints_a_ticket_with_no_direct_addresses() {
+    let net = NetOptions {
+        relay_only: true,
+        ..NetOptions::default()
+    };
+    let endpoint = bind(None, None, net).await.expect("binding must succeed");
+
+    let ticket = ticket_from(&endpoint.addr());
+
+    assert!(
+        !ticket
+            .addrs()
+            .iter()
+            .any(|addr| matches!(addr, TicketAddr::V4(_) | TicketAddr::V6(_))),
+        "an endpoint with no IP transport has no IP address to advertise: {:?}",
+        ticket.addrs()
+    );
+    endpoint.close().await;
 }
 
 /// The connect side's relay is validated by the same rule as the serve

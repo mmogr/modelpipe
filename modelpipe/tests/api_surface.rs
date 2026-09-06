@@ -68,16 +68,19 @@ fn the_options_structs_are_constructible_from_outside() {
 
     serve_opts.port_mapping = false;
     serve_opts.discovery = false;
+    serve_opts.relay_only = true;
 
     let mut connect_opts = ConnectOptions::default();
     connect_opts.bind = Some("127.0.0.1:8080".parse().unwrap());
     connect_opts.relay = Some("https://relay.example.com/".to_owned());
     connect_opts.port_mapping = false;
     connect_opts.discovery = false;
+    connect_opts.relay_only = true;
 
     assert!(connect_opts.bind.is_some());
     assert!(serve_opts.allow_private_backend);
     assert!(!connect_opts.discovery && !serve_opts.discovery);
+    assert!(connect_opts.relay_only && serve_opts.relay_only);
 }
 
 /// The defaults are what every version before this one did: every network
@@ -90,6 +93,10 @@ fn the_default_options_keep_every_network_contact_on() {
     assert!(serve_opts.port_mapping && serve_opts.discovery);
     assert!(connect_opts.port_mapping && connect_opts.discovery);
     assert!(connect_opts.relay.is_none());
+    // And the direct path stays available on both sides: `relay_only` is a
+    // measuring switch, and a default that forced every pipe through a
+    // relay would be a performance regression nobody asked for.
+    assert!(!serve_opts.relay_only && !connect_opts.relay_only);
 }
 
 /// The opacity promise from the crate docs: a caller can walk to the
@@ -171,13 +178,27 @@ fn a_dependent_can_tell_a_live_pipe_from_a_close_and_a_close_from_a_failure() {
 
 /// A peer view is readable field by field from outside, and `peers` is on
 /// the handle — the shape a status page renders from.
+///
+/// The round-trip time is part of that shape: `relayed` on its own is a
+/// label, and the number beside it is what makes a status page able to say
+/// whether the relay is good enough to keep using. `Option<u64>` rather
+/// than a `Duration` so the rendering is one multiplication and the JSON is
+/// one field.
 #[test]
 fn a_peer_view_is_readable_from_outside() {
     fn render(handle: &ServeHandle) -> Vec<String> {
         handle
             .peers()
             .iter()
-            .map(|peer: &PeerView| format!("{} {}", peer.fingerprint, peer.path.as_str()))
+            .map(|peer: &PeerView| {
+                // Ascribed rather than inferred: the promise being checked
+                // is the field's type, and `Option<u64>` is what makes
+                // rendering it one multiplication rather than a match on a
+                // `Duration`'s two halves.
+                let rtt: Option<u64> = peer.rtt_ms;
+                let cost = rtt.map_or_else(String::new, |ms| format!(" {ms}ms"));
+                format!("{} {}{cost}", peer.fingerprint, peer.path.as_str())
+            })
             .collect()
     }
     // Named so it cannot be dropped as dead code, and never called: there

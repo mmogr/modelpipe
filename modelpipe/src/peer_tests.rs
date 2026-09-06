@@ -17,6 +17,7 @@ use std::time::Duration;
 use iroh::endpoint::presets;
 
 use super::*;
+use crate::lifecycle::PeerPath;
 
 /// Long enough that a failure is a failure rather than a slow machine.
 const PATIENCE: Duration = Duration::from_secs(20);
@@ -158,7 +159,7 @@ async fn a_peer_can_be_dialled_again_at_the_same_identity() {
     let peer = connected(&endpoint).await;
     let first = peer.current().expect("a connection").stable_id();
 
-    let path = tokio::time::timeout(PATIENCE, peer.redial())
+    let reading = tokio::time::timeout(PATIENCE, peer.redial())
         .await
         .expect("the re-dial must not hang")
         .expect("the same peer is still there");
@@ -166,7 +167,7 @@ async fn a_peer_can_be_dialled_again_at_the_same_identity() {
     let second = peer.current().expect("a connection").stable_id();
     assert_ne!(first, second, "a genuinely new connection, not the old one");
     assert!(
-        matches!(path, PeerPath::Direct | PeerPath::Relayed),
+        matches!(reading.path, PeerPath::Direct | PeerPath::Relayed),
         "and it reports a path it is actually using"
     );
 }

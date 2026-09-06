@@ -70,6 +70,7 @@ mod lifecycle;
 mod listener;
 mod locality;
 mod outcome;
+mod path_watch;
 mod peer;
 mod peers;
 mod refusal;

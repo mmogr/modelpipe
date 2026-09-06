@@ -105,6 +105,15 @@ pub(crate) enum Command {
         /// addresses change. --identity buys nothing with this set.
         #[arg(long)]
         no_discovery: bool,
+        /// Serve through the relay only, never directly
+        ///
+        /// A measuring switch, not a production one. Whether hole punching
+        /// works is the far NAT's decision, so relayed is the case you
+        /// cannot reproduce on demand; this makes it the only path, so what
+        /// it costs can be read off a status line on any network. The
+        /// ticket then carries the relay and no direct addresses.
+        #[arg(long)]
+        relay_only: bool,
     },
     /// Bind a local port that is the remote server
     Connect {
@@ -126,5 +135,12 @@ pub(crate) enum Command {
         /// only the paths the ticket carries
         #[arg(long)]
         no_discovery: bool,
+        /// Reach the peer through the relay only, never directly
+        ///
+        /// As for serve, and it takes only one side: with no IP transport
+        /// here the ticket's direct addresses are unreachable, so the relay
+        /// is what is left. Needs no re-pairing — the ticket is untouched.
+        #[arg(long)]
+        relay_only: bool,
     },
 }

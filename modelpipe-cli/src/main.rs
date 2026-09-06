@@ -120,6 +120,7 @@ async fn main() -> anyhow::Result<()> {
             no_qr,
             no_portmap,
             no_discovery,
+            relay_only,
         } => {
             // Mutation rather than a struct literal: the options structs
             // are #[non_exhaustive], so a literal cannot cross the crate
@@ -138,6 +139,7 @@ async fn main() -> anyhow::Result<()> {
             opts.identity = identity;
             opts.port_mapping = !no_portmap;
             opts.discovery = !no_discovery;
+            opts.relay_only = relay_only;
             // The ticket below is printed once and carried to another
             // machine by hand, so it is worth a few seconds to let the
             // endpoint find its relay first. Ten of them is what iroh
@@ -182,6 +184,7 @@ async fn main() -> anyhow::Result<()> {
             relay,
             no_portmap,
             no_discovery,
+            relay_only,
         } => {
             let ticket: Ticket = ticket.parse()?;
             if let Some(addr) = bind
@@ -199,6 +202,7 @@ async fn main() -> anyhow::Result<()> {
             opts.relay = relay;
             opts.port_mapping = !no_portmap;
             opts.discovery = !no_discovery;
+            opts.relay_only = relay_only;
             let mut handle = modelpipe::connect(&ticket, opts).await?;
             // The local port is bound; reaching the peer is not. `connect`
             // used to do both before returning, and the terminal is owed

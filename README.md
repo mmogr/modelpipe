@@ -140,6 +140,7 @@ the client.
 | `--no-qr` | Don't print the QR code beside the ticket. |
 | `--no-portmap` | Don't ask the router for a UPnP/NAT-PMP mapping. Free: pairing is unaffected, a few NATs fall back to the relay more often. |
 | `--no-discovery` | Don't publish to, or resolve through, n0's discovery service. The ticket then carries every path it will ever have — see below before using it. |
+| `--relay-only` | Serve through the relay and never directly — a measuring switch, not a production one. See below. |
 
 `modelpipe connect <TICKET>`
 
@@ -149,6 +150,7 @@ the client.
 | `--relay <URL>` | The relay *this* side registers with and falls back to. The serve side's relay is in the ticket and is dialled regardless. |
 | `--no-portmap` | As for `serve`. |
 | `--no-discovery` | Don't resolve the peer through n0; dial only the paths the ticket carries. |
+| `--relay-only` | As for `serve`, and it takes only one side. Needs no re-pairing: the ticket is untouched. |
 
 Both commands
 
@@ -179,12 +181,23 @@ The first two lines are stdout, the rest is stderr, so
 carries your token, your ticket, a header, or a query string. `RUST_LOG`
 takes over entirely if you want to pick targets and levels yourself.
 
+The `path=` field on the span above is how that peer *arrived*. A
+connection commonly establishes through the relay and hole-punches to a
+direct path a moment later, and both sides follow that while the connection
+lives — so a migration in either direction gets its own line, with what the
+new path costs:
+
+```
+2026-09-03T05:33:04.011927Z  INFO peer{peer=3ca82708b995 path="relayed"}: the path to the peer changed path="direct" rtt_ms=7
+```
+
 Embedding the library? It emits [`tracing`](https://docs.rs/tracing) events
 and installs no subscriber, so they go wherever your binary already sends
 them, and nowhere if it sends them nowhere. For a status page rather than
 a log, `ServeHandle::status` is the aggregate (the worst path across every
 connected peer) and `ServeHandle::peers` is the list behind it — each peer
-by the same fingerprint the log shows, with its own direct-or-relayed path.
+by the same fingerprint the log shows, with its own direct-or-relayed path,
+re-read while it is connected, and the round-trip time over it.
 
 ## What it contacts, and what it doesn't
 
@@ -202,6 +215,18 @@ are, by default, on both sides, and each has its own switch:
 `--relay` swaps the relay and **nothing else**: it does not turn discovery
 off, and it does not turn the port-mapping probe off. Those are the other
 two flags, and they are separate because they cost different things.
+
+`--relay-only` is the opposite kind of switch — it is an instrument. Whether
+hole punching works is the far NAT's decision, so "it went direct" is easy
+to observe and "it fell back, and the fallback is fast enough to live with"
+is not: you would have to find a hostile enough network to sit behind. This
+removes every IP transport from one endpoint, which makes the relay the only
+path left, so the same pipe can be measured with and without it on any
+network at all. On `serve` the ticket it mints then carries the relay and no
+direct addresses — which is the switch working, not a limitation of it,
+because a holder on the same LAN would otherwise go direct and quietly
+measure the case being excluded. On `connect` nothing needs re-pairing. Do
+not leave it on: a direct path is faster and costs nobody's relay anything.
 
 `--no-portmap` costs nothing that matters. Pairing works the same; behind a
 few NATs a connection falls back to the relay a little more often.
