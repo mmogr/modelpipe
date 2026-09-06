@@ -51,7 +51,7 @@ pub(crate) struct Peer {
     /// below is opened on, and it is what a re-dial dials from.
     endpoint: Endpoint,
     /// Where to dial, kept rather than derived once. A ticket is a
-    /// borrowed argument to [`dial`](Self::dial) and the pipe outlives the
+    /// borrowed argument to [`bind`](Self::bind) and the pipe outlives the
     /// call.
     addr: EndpointAddr,
     /// The live connection, or `None` while there is not one.
@@ -71,14 +71,20 @@ pub(crate) struct Peer {
 }
 
 impl Peer {
-    /// Bind an endpoint and reach the ticket's peer for the first time.
+    /// Open this side's endpoint and work out where the ticket points.
     ///
-    /// The first dial is the one allowed to fail outright: a caller that
-    /// cannot reach the serve side at all wants to be told so by
-    /// [`connect`](fn@crate::connect) rather than handed a handle that will
-    /// keep trying forever behind their back. Every dial *after* this one
-    /// is the reconnect loop's, and those are retried rather than reported.
-    pub(crate) async fn dial(ticket: &Ticket, opts: &ConnectOptions) -> Result<Self, ConnectError> {
+    /// Deliberately stops short of dialling. Every dial is
+    /// [`keep_connected`]'s, the first one included, which is what lets
+    /// [`connect`](fn@crate::connect) return with the local port bound and
+    /// nobody reached yet: iroh spends about thirty seconds giving up on a
+    /// peer that is not there, and a caller blocked for that long cannot
+    /// even be told which port it was given.
+    ///
+    /// What can still fail here is local and immediate — a ticket naming an
+    /// address nobody could be at, a relay that does not parse, a socket
+    /// this machine will not open — and that is exactly the set
+    /// [`connect`](fn@crate::connect) still reports through its `Result`.
+    pub(crate) async fn bind(ticket: &Ticket, opts: &ConnectOptions) -> Result<Self, ConnectError> {
         let addr = transport::addr_from(ticket)?;
         // No stored key on this side: nothing dials *us*, so this
         // endpoint's identity is never in anybody's ticket and has nothing
@@ -88,18 +94,12 @@ impl Peer {
             discovery: opts.discovery,
         };
         let endpoint = transport::bind(opts.relay.as_deref(), None, net).await?;
-        let connection = endpoint
-            .connect(addr.clone(), transport::ALPN)
-            .await
-            // Everything a dial can fail with is retryable, and there is
-            // no "rejected" case to tell apart: a serve side that restarted
-            // without an identity file is a different endpoint, so this
-            // reaches nobody rather than reaching someone who refuses.
-            .map_err(|_| ConnectError::PeerUnreachable)?;
         Ok(Self {
             endpoint,
             addr,
-            connection: RwLock::new(Some(connection)),
+            // Empty, and the reconnect loop fills it. `Idle` is therefore
+            // the honest status the moment a handle is handed out.
+            connection: RwLock::new(None),
         })
     }
 
@@ -139,19 +139,6 @@ impl Peer {
         let path = path_of(&connection);
         *self.write() = Some(connection);
         Some(path)
-    }
-
-    /// Publish the path the current connection is using, if there is one.
-    ///
-    /// Exists so the initial status can be set before a handle is handed
-    /// out — a spawned task has not necessarily run by the time `connect`
-    /// returns, and `Idle` is this side's word for "the peer is gone", so
-    /// the one moment the answer was wrong it was wrong in the most
-    /// misleading direction available.
-    pub(crate) fn publish_path(&self, lifecycle: &Lifecycle) {
-        if let Some(connection) = self.current() {
-            lifecycle.set_status(aggregate(&[path_of(&connection)]));
-        }
     }
 
     /// Close whatever is connected, for teardown.
@@ -222,31 +209,39 @@ pub(crate) fn path_of(connection: &Connection) -> PeerPath {
 const FIRST_RETRY: Duration = Duration::from_millis(500);
 const RETRY_CEILING: Duration = Duration::from_secs(30);
 
-/// Keep a connection to the peer for as long as the pipe is up.
+/// Reach the peer, and keep a connection to it for as long as the pipe is
+/// up.
 ///
-/// This is what makes `ConnectHandle`'s documented behaviour true rather
-/// than merely stated. Before it, `dial` opened exactly one connection and
-/// held it for life: a peer that went away left the connect side answering
-/// 502 to every request, for ever, while its status still read `direct` and
-/// nothing on the client machine ever said otherwise. Measured — the serve
-/// side killed, the connect process left running: still `direct`, still
-/// 502ing, twenty minutes later.
+/// **Every dial is this loop's, the first one included.** That is what lets
+/// [`connect`](fn@crate::connect) return once the local port is bound:
+/// [`Peer::bind`] opens an endpoint and reaches nobody, and the pipe starts
+/// life here, at `Idle`, with a listener already answering.
 ///
-/// `Idle` is published while there is no connection, which is the state the
-/// handle's own docs promised and no code could reach. It is not a failure
-/// and not a timeout: a sleeping laptop and a dead one look identical from
-/// here, so this side reports what it sees and leaves the policy to whoever
-/// is watching the status.
+/// It is also what makes `ConnectHandle`'s documented behaviour true rather
+/// than merely stated. Before it, the connect side opened exactly one
+/// connection and held it for life, so a peer that went away left it 502ing
+/// for ever while its status still read `direct` — measured twenty minutes
+/// after the serve side was killed.
+///
+/// `Idle` is published while there is no connection, and it is the only
+/// thing a caller is owed about a dial that has not landed. It is not a
+/// failure and not a timeout: a sleeping laptop, a dead one and a serve
+/// side five seconds from starting look identical from here, so this side
+/// reports what it sees and leaves the policy to whoever watches the status.
 ///
 /// The cadence below is not the whole cadence. A dial at a peer that is
-/// simply gone takes iroh about thirty seconds to give up on — the figure
-/// `dial` above already records, from the occupied-port bug — so the
+/// simply gone takes iroh about thirty seconds to give up on, so the
 /// backoff is added to that rather than being the interval between
 /// attempts. It is set for the case where dialling *fails fast*, and the
-/// ceiling is what keeps a peer that is off for the night from being dialled
+/// ceiling is what keeps a peer off for the night from being dialled
 /// thousands of times either way.
 pub(crate) async fn keep_connected(peer: &Peer, lifecycle: &Lifecycle) {
     let mut backoff = FIRST_RETRY;
+    // One line per episode of having nobody, not one per attempt. The first
+    // dial's failure is why a freshly returned handle reads `Idle`, and
+    // without saying so nothing at default verbosity does — but a serve
+    // side off for the night must not narrate every retry until morning.
+    let mut announced = false;
     loop {
         // Wait out the connection there is, if there is one.
         if let Some(live) = peer.current() {
@@ -262,10 +257,11 @@ pub(crate) async fn keep_connected(peer: &Peer, lifecycle: &Lifecycle) {
             // is the line that explains all of them — which is why it is
             // `info` while the individual attempts below are not.
             tracing::info!("the peer went away, and this side is looking for it");
+            announced = true;
             backoff = FIRST_RETRY;
         }
 
-        // And go looking for its replacement.
+        // And go looking for it.
         let dialed = tokio::select! {
             biased;
             () = lifecycle.wait_until_closed() => return,
@@ -275,14 +271,19 @@ pub(crate) async fn keep_connected(peer: &Peer, lifecycle: &Lifecycle) {
             let status = aggregate(&[path]);
             lifecycle.set_status(status);
             tracing::info!(path = status.as_str(), "the peer is back");
+            announced = false;
             continue;
+        }
+        if !announced {
+            announced = true;
+            tracing::info!("the serve side did not answer, and this side is looking for it");
         }
         // `debug`, not `info`: a serve side that is off for the night is
         // dialled until morning, and the fact worth an operator's attention
-        // is the one line above rather than every attempt under it.
+        // is the line above rather than every attempt under it.
         tracing::debug!(
             backoff_ms = u64::try_from(backoff.as_millis()).unwrap_or(u64::MAX),
-            "a re-dial found nobody"
+            "a dial found nobody"
         );
         tokio::select! {
             biased;

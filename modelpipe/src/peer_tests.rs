@@ -50,22 +50,96 @@ fn ticket_for(endpoint: &Endpoint) -> Ticket {
     transport::ticket_from(&endpoint.addr())
 }
 
+/// This side's endpoint, opened against a ticket and nothing dialled.
+async fn bound(endpoint: &Endpoint) -> Peer {
+    tokio::time::timeout(
+        PATIENCE,
+        Peer::bind(&ticket_for(endpoint), &ConnectOptions::default()),
+    )
+    .await
+    .expect("the bind must not hang")
+    .expect("an endpoint binds")
+}
+
+/// [`bound`], with one connection dialled — the state every test below the
+/// first dial starts from.
+async fn connected(endpoint: &Endpoint) -> Peer {
+    let peer = bound(endpoint).await;
+    tokio::time::timeout(PATIENCE, peer.redial())
+        .await
+        .expect("the dial must not hang")
+        .expect("a live peer is reachable");
+    peer
+}
+
 // ── The first dial ───────────────────────────────────────────────────────
+
+/// `bind` opens this side's endpoint and stops there.
+///
+/// The property `connect` returning early rests on: no dial has happened,
+/// so nothing has waited on one. If this ever holds a connection again,
+/// `connect` is back to costing its caller thirty seconds at a peer that
+/// is not there — and it would do it against a *live* endpoint, which is
+/// why this test uses one rather than an address nobody answers.
+#[tokio::test]
+async fn binding_reaches_nobody_even_when_the_peer_is_right_there() {
+    let (endpoint, _accepted) = accepting().await;
+    let peer = bound(&endpoint).await;
+
+    assert!(
+        peer.current().is_none(),
+        "binding must not have dialled anyone"
+    );
+}
 
 /// A ticket for a live peer reaches it, and the connection is available to
 /// the exchanges that will want it.
 #[tokio::test]
 async fn a_ticket_for_a_live_peer_dials_it_and_holds_the_connection() {
     let (endpoint, _accepted) = accepting().await;
-    let peer = tokio::time::timeout(
-        PATIENCE,
-        Peer::dial(&ticket_for(&endpoint), &ConnectOptions::default()),
-    )
-    .await
-    .expect("the dial must not hang")
-    .expect("a live peer is reachable");
+    let peer = connected(&endpoint).await;
 
     assert!(peer.current().is_some(), "and the connection is held");
+}
+
+/// The first connection is the reconnect loop's to make, and this is the
+/// only test that would notice if it stopped making it.
+///
+/// Every other status assertion in the crate starts from a pipe that is
+/// already up. A loop that only ever *re*-dialled would leave a freshly
+/// connected side at `Idle` for ever, with a bound port answering 502 and
+/// nothing anywhere saying why.
+#[tokio::test]
+async fn the_reconnect_loop_makes_the_first_connection_too() {
+    let (endpoint, _accepted) = accepting().await;
+    let peer = bound(&endpoint).await;
+    let lifecycle = Lifecycle::new();
+    assert_eq!(
+        lifecycle.status(),
+        PipeStatus::Idle,
+        "nothing is reached before the loop runs"
+    );
+
+    // `keep_connected` never returns, so the reached status is what ends
+    // this rather than the loop finishing.
+    tokio::time::timeout(PATIENCE, async {
+        tokio::select! {
+            () = keep_connected(&peer, &lifecycle) => {}
+            () = async {
+                while lifecycle.status() == PipeStatus::Idle {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            } => {}
+        }
+    })
+    .await
+    .expect("the loop must reach a peer that is right there");
+
+    assert!(
+        matches!(lifecycle.status(), PipeStatus::Direct | PipeStatus::Relayed),
+        "and report the path it took, not merely stop being idle"
+    );
+    assert!(peer.current().is_some(), "with the connection held");
 }
 
 // ── Finding it again ─────────────────────────────────────────────────────
@@ -81,13 +155,7 @@ async fn a_ticket_for_a_live_peer_dials_it_and_holds_the_connection() {
 #[tokio::test]
 async fn a_peer_can_be_dialled_again_at_the_same_identity() {
     let (endpoint, _accepted) = accepting().await;
-    let peer = tokio::time::timeout(
-        PATIENCE,
-        Peer::dial(&ticket_for(&endpoint), &ConnectOptions::default()),
-    )
-    .await
-    .expect("the dial must not hang")
-    .expect("a live peer is reachable");
+    let peer = connected(&endpoint).await;
     let first = peer.current().expect("a connection").stable_id();
 
     let path = tokio::time::timeout(PATIENCE, peer.redial())
@@ -115,13 +183,7 @@ async fn a_peer_can_be_dialled_again_at_the_same_identity() {
 #[tokio::test]
 async fn forgetting_a_replaced_connection_leaves_its_successor_alone() {
     let (endpoint, _accepted) = accepting().await;
-    let peer = tokio::time::timeout(
-        PATIENCE,
-        Peer::dial(&ticket_for(&endpoint), &ConnectOptions::default()),
-    )
-    .await
-    .expect("the dial must not hang")
-    .expect("a live peer is reachable");
+    let peer = connected(&endpoint).await;
     let stale = peer.current().expect("a connection");
 
     tokio::time::timeout(PATIENCE, peer.redial())
@@ -145,13 +207,7 @@ async fn forgetting_a_replaced_connection_leaves_its_successor_alone() {
 #[tokio::test]
 async fn forgetting_the_live_connection_clears_it() {
     let (endpoint, _accepted) = accepting().await;
-    let peer = tokio::time::timeout(
-        PATIENCE,
-        Peer::dial(&ticket_for(&endpoint), &ConnectOptions::default()),
-    )
-    .await
-    .expect("the dial must not hang")
-    .expect("a live peer is reachable");
+    let peer = connected(&endpoint).await;
     let live = peer.current().expect("a connection");
 
     peer.forget(&live);

@@ -14,7 +14,7 @@ mod park;
 
 use cli::{Cli, Command};
 use interrupt::Interrupt;
-use park::{park, shut_down};
+use park::{FIRST_CONTACT, first_contact, park, shut_down};
 
 /// Which credential policy a set of flags asks for.
 ///
@@ -200,6 +200,14 @@ async fn main() -> anyhow::Result<()> {
             opts.port_mapping = !no_portmap;
             opts.discovery = !no_discovery;
             let mut handle = modelpipe::connect(&ticket, opts).await?;
+            // The local port is bound; reaching the peer is not. `connect`
+            // used to do both before returning, and the terminal is owed
+            // the same sentence for an absent serve side — so the wait that
+            // used to happen inside the library happens here, where picking
+            // a deadline is this command's to do. To stderr and before it,
+            // so a terminal about to sit still says why.
+            eprintln!("reaching the serve side…");
+            first_contact(&mut handle, FIRST_CONTACT).await?;
             println!("{}", handle.base_url());
             park(&mut handle, &mut interrupt).await?;
             shut_down(handle.shutdown(), &mut interrupt).await;

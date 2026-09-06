@@ -15,10 +15,16 @@ use crate::status::PipeStatus;
 /// Teardown semantics match [`ServeHandle`](crate::ServeHandle): dropping tears down without
 /// waiting, [`shutdown`](Self::shutdown) waits.
 ///
-/// When the far end goes quiet, this side does not guess: unreachability
+/// When the far end is quiet, this side does not guess: unreachability
 /// shows as [`PipeStatus::Idle`] while it retries, and it keeps retrying.
 /// A sleeping laptop is indistinguishable from a dead one, so timeout
 /// policy belongs to the embedder.
+///
+/// That covers the first dial too. [`connect`](fn@crate::connect) returns
+/// once the local port is bound, so a handle begins life at
+/// [`PipeStatus::Idle`] whether the peer is absent or merely not reached
+/// yet — the two are the same fact, and the handle reports it rather than
+/// picking a deadline on the embedder's behalf.
 ///
 /// A listener that has restarted since the ticket was issued is *also*
 /// this case, and deliberately not a distinct one. Without an identity

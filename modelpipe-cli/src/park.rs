@@ -11,10 +11,27 @@
 //! surface that has to live with it.
 
 use std::future::Future;
+use std::time::Duration;
 
 use modelpipe::PipeStatus;
 
 use crate::interrupt::Interrupt;
+
+/// How long a fresh connect side may sit at `Idle` before this command
+/// gives up on the serve side.
+///
+/// Not a library default, and deliberately not one. `connect` returns as
+/// soon as the local port is bound and then keeps trying for as long as the
+/// handle lives, because a sleeping laptop, a dead one and a serve side
+/// five seconds from starting look identical from down there — so the
+/// deadline belongs to whoever is willing to give up, which for an
+/// interactive command is this one.
+///
+/// Longer than the thirty-odd seconds iroh spends giving up on a peer that
+/// is not there. Under that, this would report an absent peer while the
+/// first dial was still in flight, which is a worse answer than the slow
+/// one it replaced.
+pub(crate) const FIRST_CONTACT: Duration = Duration::from_secs(40);
 
 /// Park until a shutdown signal, reporting the transport path and every
 /// change to it.
@@ -49,6 +66,47 @@ pub(crate) async fn park(
                 }
             }
         }
+    }
+}
+
+/// Wait for the pipe to reach the serve side, or say that it could not.
+///
+/// This is the sentence `connect` used to produce. It blocked until the
+/// first dial landed and reported an absent peer through its `Result`;
+/// it now returns with the local port bound and the dial still running, so
+/// the wait — and the deadline it needs — moved out here rather than
+/// disappearing. The wording is the one `ConnectError::PeerUnreachable`
+/// printed, because it is the same fact reported from one step further out.
+///
+/// Nothing is printed on the way to stdout until this returns `Ok`, which
+/// is the other half of not regressing: a script capturing the URL gets one
+/// only for a pipe that actually reached its peer, exactly as before.
+///
+/// `grace` is [`FIRST_CONTACT`] everywhere but the tests, which pass a
+/// short one so that checking the decision does not mean waiting out the
+/// number.
+pub(crate) async fn first_contact(
+    mut status: impl AsyncStatus,
+    grace: Duration,
+) -> anyhow::Result<()> {
+    let reached = tokio::time::timeout(grace, async {
+        // The current value first. `changed` snapshots at the moment it is
+        // polled, so a pipe that connected before this ran has nothing left
+        // to report and waiting alone would sit here until the deadline.
+        let mut now = status.current();
+        while now == PipeStatus::Idle {
+            now = status.changed().await;
+        }
+        now
+    })
+    .await;
+    match reached {
+        // A pipe that closed without ever connecting is the same news, and
+        // there is nothing left to wait for either way.
+        Ok(PipeStatus::Closed) | Err(_) => {
+            anyhow::bail!("could not reach the serve side, directly or via a relay")
+        }
+        Ok(_) => Ok(()),
     }
 }
 
@@ -106,3 +164,7 @@ impl<T: AsyncStatus> AsyncStatus for &mut T {
         (**self).changed().await
     }
 }
+
+#[cfg(test)]
+#[path = "park_tests.rs"]
+mod park_tests;
