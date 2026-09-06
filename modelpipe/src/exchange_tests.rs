@@ -24,6 +24,8 @@ use super::*;
 use crate::token_policy::TokenPolicy;
 
 const TOKEN: &str = "sk-zzq-the-credential";
+/// The fingerprint the listener would have derived for the peer.
+const TEST_PEER: &str = "3ca82708b995";
 const OK_RESPONSE: &[u8] =
     b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n{}";
 
@@ -122,7 +124,7 @@ async fn exchange(
     let (credential, _) = Credential::new(policy).expect("a usable policy");
     let outcome = tokio::time::timeout(
         std::time::Duration::from_secs(5),
-        serve_exchange(&mut edge, &credential, backend),
+        serve_exchange(&mut edge, &credential, backend, TEST_PEER),
     )
     .await
     .expect("the exchange must not hang")
@@ -317,6 +319,51 @@ async fn the_backend_receives_the_message_headers_and_not_the_connection_ones() 
     assert!(lower.contains("accept: */*"), "a message header survives");
 }
 
+/// The backend is told the request came through the tunnel, and from whom —
+/// in the edge's words, not the client's. A client that arrives already
+/// claiming a `Via` or a peer is describing a chain that does not exist,
+/// and its claim is replaced rather than extended.
+#[tokio::test]
+async fn the_backend_sees_the_edges_tunnel_markers_and_not_the_clients() {
+    let backend = CountingBackend::new(OK_RESPONSE);
+    let mut req = b"GET /v1/models HTTP/1.1\r\nHost: 127.0.0.1:8080\r\n".to_vec();
+    req.extend_from_slice(format!("Authorization: Bearer {TOKEN}\r\n").as_bytes());
+    req.extend_from_slice(b"Via: 1.1 somebody-else\r\nVIA: 1.0 another\r\n");
+    req.extend_from_slice(b"X-Modelpipe-Peer: 000000000000\r\n\r\n");
+
+    let (outcome, _) = exchange(&req, &supplied(), &backend).await;
+    assert_eq!(outcome, Outcome::Forwarded);
+
+    let sent = String::from_utf8(backend.received().await).expect("ascii");
+    let lower = sent.to_ascii_lowercase();
+    assert_eq!(
+        lower.matches("\r\nvia:").count(),
+        1,
+        "exactly one Via: {sent}"
+    );
+    assert!(
+        sent.contains("Via: 1.1 modelpipe"),
+        "and it is the edge's: {sent}"
+    );
+    assert!(
+        !lower.contains("somebody-else") && !lower.contains("another"),
+        "{sent}"
+    );
+    assert_eq!(
+        lower.matches("\r\nx-modelpipe-peer:").count(),
+        1,
+        "exactly one peer marker: {sent}"
+    );
+    assert!(
+        sent.contains(&format!("X-Modelpipe-Peer: {TEST_PEER}")),
+        "and it names the peer the listener saw: {sent}"
+    );
+    assert!(
+        !sent.contains("000000000000"),
+        "not the one the client claimed: {sent}"
+    );
+}
+
 /// A length-framed body arrives intact and is not truncated by the head
 /// read having over-read into it.
 #[tokio::test]
@@ -371,7 +418,7 @@ async fn a_streaming_response_reaches_the_client_frame_by_frame() {
     let fixed = Fixed(Mutex::new(Some(mine)));
     let (credential, _) = Credential::new(&supplied()).expect("a usable token");
     let pump = tokio::spawn(async move {
-        serve_exchange(&mut edge, &credential, &fixed)
+        serve_exchange(&mut edge, &credential, &fixed, TEST_PEER)
             .await
             .unwrap()
     });
@@ -450,7 +497,7 @@ async fn against_keepalive(request: &[u8], response: &'static str) -> (Outcome, 
     let (credential, _) = Credential::new(&supplied()).expect("a usable token");
     let outcome = tokio::time::timeout(
         std::time::Duration::from_secs(5),
-        serve_exchange(&mut edge, &credential, &backend),
+        serve_exchange(&mut edge, &credential, &backend, TEST_PEER),
     )
     .await
     .expect("a keep-alive backend must not hang the exchange")
@@ -564,7 +611,7 @@ async fn a_backend_that_refuses_the_connection_is_reported_as_a_gateway_failure(
     client.shutdown().await.unwrap();
 
     let (credential, _) = Credential::new(&supplied()).expect("a usable token");
-    let outcome = serve_exchange(&mut edge, &credential, &Refusing)
+    let outcome = serve_exchange(&mut edge, &credential, &Refusing, TEST_PEER)
         .await
         .expect("a refused backend is an answer, not a transport failure");
     assert_eq!(outcome, Outcome::BadGateway);
@@ -672,7 +719,7 @@ async fn a_backend_that_answers_before_reading_the_body_is_still_heard() {
     let (credential, _) = Credential::new(&supplied()).expect("a usable token");
     let outcome = tokio::time::timeout(
         std::time::Duration::from_secs(5),
-        serve_exchange(&mut edge, &credential, &backend),
+        serve_exchange(&mut edge, &credential, &backend, TEST_PEER),
     )
     .await
     .expect("the answer is already in hand; waiting on the body is waiting forever")
@@ -711,7 +758,7 @@ async fn a_peer_that_never_finishes_asking_is_timed_out() {
     // `start_paused` advances the clock only when everything is idle, so
     // this resolves the moment the timeout is the only thing left to wait
     // on — no real thirty seconds pass.
-    let outcome = serve_exchange(&mut edge, &credential, &backend)
+    let outcome = serve_exchange(&mut edge, &credential, &backend, TEST_PEER)
         .await
         .expect("a timeout is not a transport failure");
 
@@ -751,7 +798,7 @@ async fn a_slow_head_that_arrives_in_time_is_served_normally() {
     });
 
     let (credential, _) = Credential::new(&supplied()).expect("a usable token");
-    let outcome = serve_exchange(&mut edge, &credential, &backend)
+    let outcome = serve_exchange(&mut edge, &credential, &backend, TEST_PEER)
         .await
         .expect("no transport failure");
     assert_eq!(outcome, Outcome::Forwarded);
@@ -942,10 +989,13 @@ async fn drive<B: Backend + Sync>(
     }
 
     let (credential, _) = Credential::new(&supplied()).expect("a usable token");
-    let outcome = tokio::time::timeout(patience, serve_exchange(&mut edge, &credential, backend))
-        .await
-        .expect("the exchange must not hang")
-        .expect("no transport failure");
+    let outcome = tokio::time::timeout(
+        patience,
+        serve_exchange(&mut edge, &credential, backend, TEST_PEER),
+    )
+    .await
+    .expect("the exchange must not hang")
+    .expect("no transport failure");
 
     drop(edge);
     let mut seen = Vec::new();
@@ -1404,7 +1454,7 @@ async fn a_grant_that_admits_is_logged_without_the_grant() {
     let (mut client, mut edge) = duplex(64 * 1024);
     client.write_all(&request).await.unwrap();
     client.shutdown().await.unwrap();
-    let outcome = serve_exchange(&mut edge, &credential, &backend)
+    let outcome = serve_exchange(&mut edge, &credential, &backend, TEST_PEER)
         .await
         .expect("no transport failure");
     drop(edge);
@@ -1553,7 +1603,7 @@ async fn logged_failure<B: Backend + Sync>(
     let (credential, _) = Credential::new(&supplied()).expect("a usable token");
     let error = tokio::time::timeout(
         std::time::Duration::from_secs(5),
-        serve_exchange(&mut edge, &credential, backend),
+        serve_exchange(&mut edge, &credential, backend, TEST_PEER),
     )
     .await
     .expect("the exchange must not hang")
@@ -1787,7 +1837,7 @@ async fn a_backend_that_was_never_reached_says_so_in_the_body() {
     client.write_all(&authed("GET")).await.unwrap();
     client.shutdown().await.unwrap();
     let (credential, _) = Credential::new(&supplied()).expect("a usable token");
-    let outcome = serve_exchange(&mut edge, &credential, &Refusing)
+    let outcome = serve_exchange(&mut edge, &credential, &Refusing, TEST_PEER)
         .await
         .unwrap();
     drop(edge);

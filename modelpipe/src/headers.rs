@@ -47,6 +47,29 @@ const FORWARDING: &[&str] = &[
     "x-real-ip",
 ];
 
+/// Headers this edge sets to say that a request came through the tunnel,
+/// and from which peer.
+///
+/// Stripped inbound and then set outbound, which is the *replace* half of
+/// the rule [`FORWARDING`] applies and not the *append* RFC 9110 §7.6.3
+/// describes for `Via`. The RFC's chain is worth describing when there is
+/// one; a private tunnel between two machines has exactly one hop, and a
+/// field a client may extend is a field a client may forge. So the backend
+/// sees what this edge says and nothing a peer said before it — which is
+/// what lets a backend *restrict* on these (refuse a route to tunnelled
+/// requests, count them) but never *trust* them for more than that: a
+/// local client forging them only denies itself.
+const TUNNEL_MARKERS: &[&str] = &["via", "x-modelpipe-peer"];
+
+/// The `Via` this edge sets. The protocol version is the one the backend
+/// hop speaks, as the RFC asks; the pseudonym is the product.
+pub(crate) const VIA: &str = "1.1 modelpipe";
+
+/// The header carrying the connecting peer's fingerprint — the same twelve
+/// hex characters the `peer` log field shows, so a backend can name a
+/// device the way the operator's log does.
+pub(crate) const PEER_HEADER: &str = "X-Modelpipe-Peer";
+
 /// Fields a `Connection` header may not nominate, whatever it says.
 ///
 /// RFC 9110 §7.6.1 forbids a sender from naming a field that is meaningful
@@ -98,7 +121,9 @@ pub(crate) fn strip_hop_by_hop(headers: &mut Vec<(String, String)>) {
 /// a field is not allowed to be *at all* when it arrives after the body.
 pub(crate) fn is_stripped(name: &str) -> bool {
     let lower = name.trim().to_ascii_lowercase();
-    HOP_BY_HOP.contains(&lower.as_str()) || FORWARDING.contains(&lower.as_str())
+    HOP_BY_HOP.contains(&lower.as_str())
+        || FORWARDING.contains(&lower.as_str())
+        || TUNNEL_MARKERS.contains(&lower.as_str())
 }
 
 /// Whether a field name is one a *trailer* may not carry.
@@ -147,6 +172,21 @@ pub(crate) fn strip_inbound_forwarded(headers: &mut Vec<(String, String)>) {
 pub(crate) fn set_host(headers: &mut Vec<(String, String)>, authority: &str) {
     headers.retain(|(name, _)| !name.eq_ignore_ascii_case("host"));
     headers.insert(0, ("Host".to_owned(), authority.to_owned()));
+}
+
+/// Mark the request as tunnelled, from `peer`.
+///
+/// Every inbound copy of either marker is removed first, for the reason
+/// [`set_host`] removes every `Host`: what the backend reads must be what
+/// this edge wrote. Appended rather than inserted at the front, so `Host`
+/// keeps the first position the tests pin it to.
+pub(crate) fn set_tunnel_markers(headers: &mut Vec<(String, String)>, peer: &str) {
+    headers.retain(|(name, _)| {
+        let lower = name.to_ascii_lowercase();
+        !TUNNEL_MARKERS.contains(&lower.as_str())
+    });
+    headers.push(("Via".to_owned(), VIA.to_owned()));
+    headers.push((PEER_HEADER.to_owned(), peer.to_owned()));
 }
 
 #[cfg(test)]
