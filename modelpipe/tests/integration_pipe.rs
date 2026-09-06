@@ -723,6 +723,59 @@ async fn a_connect_shutdown_timeout_releases_the_port_and_leaves_the_latch_hones
     serving.shutdown().await;
 }
 
+/// A connect-side `shutdown` must *tell* the serve side, not leave it to
+/// time out.
+///
+/// The bound is the whole assertion, and it is the only place in this file
+/// that puts one on the departure.
+/// `a_live_pairing_reports_a_transport_path_on_both_sides` also waits for
+/// the set to empty, but under `within`'s twenty seconds — which QUIC's
+/// idle timeout fits comfortably inside, so a pipe that told the far side
+/// nothing at all would pass it.
+///
+/// This is the property, not the mechanism, and the honest limit is worth
+/// stating: the mechanism it was written for — an endpoint dropped rather
+/// than closed, aborting the driver before the `CONNECTION_CLOSE` frame
+/// escapes — cannot be reproduced in one process, because both endpoints
+/// share a live runtime here and the queued frame goes out regardless.
+/// `peer_tests.rs` asserts the mechanism on the socket itself; this asserts
+/// what an operator on the other machine actually sees.
+#[tokio::test]
+async fn a_connect_shutdown_is_announced_rather_than_left_to_the_idle_timeout() {
+    let backend = MockBackend::json(200, OK_BODY).await;
+    let (serving, connected, url) = paired(&backend, TokenPolicy::Generate).await;
+
+    // A request first, so the peer is provably registered before the
+    // teardown that has to unregister it — the registration happens on the
+    // serve side's accept task, which `carrying` does not wait for.
+    within(
+        "a request must cross the pipe",
+        request(&url, "/v1/models", Some(&bearer(&serving))),
+    )
+    .await
+    .expect("request");
+    assert_eq!(serving.peers().len(), 1, "the peer is registered");
+
+    connected.shutdown().await;
+
+    // Two seconds against an idle timeout of fifteen at the very least: the
+    // close frame either escaped or it did not, and no slow machine turns
+    // fifteen into two.
+    let noticed = tokio::time::timeout(Duration::from_secs(2), async {
+        while !serving.peers().is_empty() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await;
+    assert!(
+        noticed.is_ok(),
+        "the serve side was never told, and still lists {:?}",
+        serving.peers()
+    );
+
+    serving.shutdown().await;
+}
+
 /// A live pairing reports the path it is actually using, on both sides.
 ///
 /// The connect side published no status at all: `Direct` and `Relayed` were

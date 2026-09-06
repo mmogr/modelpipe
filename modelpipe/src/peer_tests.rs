@@ -217,3 +217,72 @@ async fn forgetting_the_live_connection_clears_it() {
         "and the pipe now knows it has no connection"
     );
 }
+
+// ── Letting go ───────────────────────────────────────────────────────────
+
+/// A live connect side dialled at `far`, with its accept loop running —
+/// what `connect` assembles, minus the handle.
+async fn live_connect_side(far: &Endpoint) -> std::sync::Arc<crate::dialer::ConnectState> {
+    let (state, listener) = tokio::time::timeout(
+        PATIENCE,
+        crate::dialer::bind(&ticket_for(far), &ConnectOptions::default()),
+    )
+    .await
+    .expect("the bind must not hang")
+    .expect("the local port binds");
+    tokio::spawn(crate::dialer::local_loop(state.clone(), listener));
+    tokio::time::timeout(PATIENCE, state.peer.redial())
+        .await
+        .expect("the dial must not hang")
+        .expect("a live peer is reachable");
+    state
+}
+
+/// Teardown must close the endpoint, not only the connection on it.
+///
+/// `Connection::close` merely *queues* a `CONNECTION_CLOSE` frame; the
+/// endpoint's close is what flushes it, retransmits it if it is lost and
+/// waits for the acknowledgement. Dropping instead aborts the driver that
+/// would have sent it — iroh says so at ERROR, on a disconnect nobody did
+/// anything wrong in — and the serve side, never told, stays parked in
+/// `accept_bi` with a departed peer still in its registry until QUIC's idle
+/// timeout notices for it.
+///
+/// Asserted on the socket rather than on the far side's registry, and here
+/// rather than in `tests/integration_pipe.rs`, for two reasons: `endpoint`
+/// is private to this module, and one process cannot reproduce the abort at
+/// all — both endpoints share a live runtime there, so the queued frame goes
+/// out anyway and the defect is invisible end to end.
+#[tokio::test]
+async fn a_connect_shutdown_closes_the_endpoint_and_not_only_the_connection() {
+    let (far, _accepted) = accepting().await;
+    let state = live_connect_side(&far).await;
+
+    tokio::time::timeout(PATIENCE, crate::dialer::shutdown(&state))
+        .await
+        .expect("the shutdown must not hang");
+
+    assert!(
+        state.peer.endpoint.is_closed(),
+        "a dropped endpoint is one the peer is never told about"
+    );
+}
+
+/// The deadline'd path had the same omission, and the close belongs outside
+/// the deadline: the returned `bool` is a statement about requests draining,
+/// not about how long teardown took.
+#[tokio::test]
+async fn a_connect_shutdown_timeout_closes_the_endpoint_too() {
+    let (far, _accepted) = accepting().await;
+    let state = live_connect_side(&far).await;
+
+    let drained = tokio::time::timeout(PATIENCE, crate::dialer::shutdown_timeout(&state, PATIENCE))
+        .await
+        .expect("the shutdown must not hang");
+
+    assert!(drained, "nothing was in flight to wait for");
+    assert!(
+        state.peer.endpoint.is_closed(),
+        "the deadline covers the drain, not whether the peer is told at all"
+    );
+}

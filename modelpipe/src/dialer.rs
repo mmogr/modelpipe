@@ -267,11 +267,13 @@ async fn refuse_locally(local: &mut tokio::net::TcpStream) -> std::io::Result<()
 /// end of the stream.
 const REFUSAL_DRAIN: Duration = Duration::from_secs(5);
 
-/// Stop accepting, drain, and release.
+/// Stop accepting, drain, tell the peer, and release.
 pub(crate) async fn shutdown(state: &ConnectState) {
     state.lifecycle.close(CloseReason::Shutdown);
     state.lifecycle.wait_until_drained().await;
     state.peer.close(b"shutdown");
+    // Sends the frame the line above only queued — see `Peer::close_endpoint`.
+    state.peer.close_endpoint().await;
     // Waits for the accept loop to notice the close and drop the listener.
     // Without this the port is still bound when this returns, and a caller
     // that rebinds immediately gets EADDRINUSE — which is not a theoretical
@@ -292,6 +294,7 @@ pub(crate) async fn shutdown_timeout(state: &ConnectState, grace: Duration) -> b
         .await
         .is_ok();
     state.peer.close(b"shutdown");
+    state.peer.close_endpoint().await;
     state.lifecycle.wait_until_torn_down().await;
     drained
 }

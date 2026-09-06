@@ -154,6 +154,22 @@ impl Peer {
         }
     }
 
+    /// Close the endpoint, which is what makes `close` above arrive.
+    ///
+    /// `Connection::close` only *queues* a `CONNECTION_CLOSE` frame; closing
+    /// the endpoint flushes it, retransmits it if it is lost, and waits for
+    /// the acknowledgement. Dropping instead aborts the driver that would
+    /// have sent it — iroh says so at ERROR, on a disconnect nobody did
+    /// anything wrong in — and the serve side, never told, stays parked in
+    /// `accept_bi` with this pipe still in its peer registry until QUIC's
+    /// idle timeout: fifteen to thirty seconds of phantom peer in the far
+    /// machine's status. After the drain and never before, for the reason
+    /// `listener.rs` writes out. Idempotent, and async — so `ConnectHandle`'s
+    /// `Drop` cannot do it and takes the synchronous half alone.
+    pub(crate) async fn close_endpoint(&self) {
+        self.endpoint.close().await;
+    }
+
     // Poisoning is not a state this crate can be in usefully: the guarded
     // value is one cheap handle, nothing between lock and unlock can
     // observe a half-written one, and refusing to serve because some other
