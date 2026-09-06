@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0](https://github.com/mmogr/modelpipe/compare/v0.1.0...v0.2.0) - 2026-09-06
+
+### Added
+
+- *(ticket)* a serde feature for the ticket and the two status types ([#42](https://github.com/mmogr/modelpipe/pull/42))
+- *(status)* name each connected peer and its path ([#40](https://github.com/mmogr/modelpipe/pull/40))
+- *(net)* a switch for each thing the endpoint contacts ([#39](https://github.com/mmogr/modelpipe/pull/39))
+- *(edge)* tell the backend a request came through the tunnel, and from whom ([#38](https://github.com/mmogr/modelpipe/pull/38))
+- *(serve)* admit one request with a short-lived grant ([#37](https://github.com/mmogr/modelpipe/pull/37))
+- *(serve)* CLI quick fixes, signal handling, and ticket timing ([#36](https://github.com/mmogr/modelpipe/pull/36))
+
+### Fixed
+
+- *(listener)* the stream cap is per peer, as the docs said ([#43](https://github.com/mmogr/modelpipe/pull/43))
+
+### Other
+
+- *(readme)* Link the published crates from the top of the page ([#34](https://github.com/mmogr/modelpipe/pull/34))
+
 ## [0.1.0](https://github.com/mmogr/modelpipe/releases/tag/v0.1.0) - 2026-09-03
 
 ### Other
