@@ -13,7 +13,6 @@ use std::time::Duration;
 
 use crate::listener::{self, ServeState};
 use crate::serve_error::ServeError;
-use crate::status::PipeStatus;
 use crate::ticket::Ticket;
 use crate::transport;
 
@@ -30,7 +29,8 @@ use crate::transport;
 /// the same act, one extra step.
 /// (Token rotation is cheaper: [`rotate_token`](Self::rotate_token).)
 pub struct ServeHandle {
-    state: Arc<ServeState>,
+    /// Shared with `serve_status.rs`, the second `impl` block.
+    pub(crate) state: Arc<ServeState>,
 }
 
 impl ServeHandle {
@@ -206,32 +206,6 @@ impl ServeHandle {
     /// [`set_token`](Self::set_token).
     pub fn rotate_token(&self) -> String {
         self.state.credential.rotate()
-    }
-
-    /// How this side is currently reaching its peers.
-    pub fn status(&self) -> PipeStatus {
-        self.state.lifecycle.status()
-    }
-
-    /// Wait until the status changes, then return the new value.
-    ///
-    /// This is how a caller surfaces "direct ↔ relayed" changes as they
-    /// happen, rather than polling [`status`](Self::status). Snapshot
-    /// semantics: each call compares against the status at the moment
-    /// the call was made, so states that came and went while nobody was
-    /// waiting are coalesced away, never replayed. Any number of callers
-    /// may wait concurrently — a daemon and a UI stream can both watch
-    /// one handle — each resolving against its own snapshot. On
-    /// teardown, graceful or not, the status becomes
-    /// [`PipeStatus::Closed`] and every waiting call resolves with it;
-    /// once closed, calls resolve immediately, so a watcher can never
-    /// block on a pipe that is already gone.
-    pub async fn status_changed(&self) -> PipeStatus {
-        // The snapshot is taken here, at the moment of the call, which is
-        // what makes states that came and went while nobody was waiting
-        // coalesce rather than replay.
-        let snapshot = self.state.lifecycle.status();
-        self.state.lifecycle.changed_since(snapshot).await
     }
 
     /// Stop admitting new requests, let the in-flight ones finish, and

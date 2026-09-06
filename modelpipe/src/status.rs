@@ -62,6 +62,23 @@ impl PipeStatus {
     }
 }
 
+/// One connected peer, as the serve side sees it.
+///
+/// Returned by [`ServeHandle::peers`](crate::ServeHandle::peers). The
+/// `path` is a [`PipeStatus`] rather than a narrower enum so a caller
+/// renders both with one `as_str`; for a single peer it is only ever
+/// `Direct` or `Relayed`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct PeerView {
+    /// The peer's fingerprint: twelve hex characters, the same rule the
+    /// `peer` log field and the `X-Modelpipe-Peer` header use, so a device
+    /// is one name everywhere it appears.
+    pub fingerprint: String,
+    /// How this peer is reaching the listener right now.
+    pub path: PipeStatus,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
