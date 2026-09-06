@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0](https://github.com/mmogr/modelpipe/compare/v0.2.0...v0.3.0) - 2026-09-06
+
+### Added
+
+- *(status)* say why a pipe closed, not only that it did ([#47](https://github.com/mmogr/modelpipe/pull/47))
+- *(connect)* return with the listener up and dial behind the handle ([#46](https://github.com/mmogr/modelpipe/pull/46))
+
+### Fixed
+
+- *(connect)* close the endpoint, so the far side is told rather than left to time out ([#49](https://github.com/mmogr/modelpipe/pull/49))
+
 ## [0.2.0](https://github.com/mmogr/modelpipe/compare/v0.1.0...v0.2.0) - 2026-09-06
 
 ### Added
