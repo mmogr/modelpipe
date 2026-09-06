@@ -15,7 +15,9 @@ mod common;
 use std::time::Duration;
 
 use common::{MockBackend, Scratch, request, within};
-use modelpipe::{CloseReason, ConnectOptions, PipeStatus, ServeOptions, Ticket, TokenPolicy};
+use modelpipe::{
+    CloseReason, ConnectOptions, NetworkMetrics, PipeStatus, ServeOptions, Ticket, TokenPolicy,
+};
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 
 const OK_BODY: &str = r#"{"object":"list","data":[]}"#;
@@ -1514,6 +1516,130 @@ async fn both_sides_report_their_own_transport_counters() {
         assert_eq!(held, metrics);
     }
 
+    connected.shutdown().await;
+    serving.shutdown().await;
+}
+
+/// Each side counts the relay connection its own endpoint could not make.
+///
+/// **The reading the test above cannot make.** A healthy pipe leaves every
+/// field at zero, so `both_sides_report_their_own_transport_counters` is
+/// satisfied by a `network_metrics` that returns `NetworkMetrics::default()`
+/// and never looks at an endpoint at all — measured, on both facade methods
+/// at once, with the whole suite still passing. Only a counter that has
+/// actually moved separates the two, and `metrics_of` being pinned beside
+/// itself in `network_tests` does not pin the two public methods that call
+/// it.
+///
+/// **A relay that answers and is not one is what moves it**, and the
+/// distinction is iroh's rather than this test's. A URL nothing is behind
+/// is never dialled at all: the probe that decides whether a relay is
+/// reachable fails first, no relay connection is ever attempted, and the
+/// counters stay at zero — which is what `network_tests` observes of its
+/// `never` endpoint and why an unreachable relay cannot be used here. A
+/// plain HTTP server answering `200` passes that probe and then fails the
+/// handshake, so each endpoint counts a relay connection it could not make,
+/// retries, and counts another.
+///
+/// Hermetic, unlike the tests around it: the fake relay is a socket on
+/// loopback, the pairing forms over the ticket's direct addresses — the
+/// configuration `a_pairing_still_forms_with_discovery_and_port_mapping_off`
+/// covers — and nothing here waits on a route to the internet.
+///
+/// The third listener is what keeps each reading *that handle's*. It knows
+/// only a relay nothing is behind, so it never dials one and reports
+/// nothing at all, while the two sides beside it count failure after
+/// failure — a facade wired to a process-wide number rather than to an
+/// endpoint is one this still catches.
+#[tokio::test]
+async fn each_side_counts_the_relay_connection_its_own_endpoint_could_not_make() {
+    let backend = MockBackend::json(200, OK_BODY).await;
+    // Answers every request with `200 OK`, which is exactly what a relay
+    // must not answer the handshake with: the upgrade to the relay protocol
+    // needs `101 Switching Protocols`.
+    let fake_relay = MockBackend::json(200, OK_BODY).await;
+
+    let mut serve_opts = ServeOptions::default();
+    serve_opts.auth = TokenPolicy::Generate;
+    serve_opts.relay = Some(fake_relay.url.clone());
+    serve_opts.port_mapping = false;
+    serve_opts.discovery = false;
+    let serving = within(
+        "serve must bind against a relay that is not one",
+        Box::pin(modelpipe::serve(&backend.url, serve_opts)),
+    )
+    .await
+    .expect("a relay that does not behave like one is not a startup error");
+
+    let mut connect_opts = ConnectOptions::default();
+    connect_opts.relay = Some(fake_relay.url.clone());
+    connect_opts.port_mapping = false;
+    connect_opts.discovery = false;
+    let connected = within(
+        "connect must bind against the same one",
+        Box::pin(modelpipe::connect(&serving.ticket(), connect_opts)),
+    )
+    .await
+    .expect("connect");
+    within(
+        "the pairing must still form, on the ticket's direct addresses",
+        carrying(&connected),
+    )
+    .await;
+
+    // Each side, read from its own handle. A default snapshot never arrives
+    // at this, because a default is zero for ever.
+    within(
+        "the serve side must count the relay connection its endpoint could not make",
+        until(|| serving.network_metrics().relay_connections_failed > 0),
+    )
+    .await;
+    within(
+        "and the connect side must count its own",
+        until(|| connected.network_metrics().relay_connections_failed > 0),
+    )
+    .await;
+
+    // The other half of the same claim: a count of failures is evidence
+    // only if the successes stayed where they belong. Nothing on either side
+    // reached a relay, and neither may say it did.
+    for (side, metrics) in [
+        ("serve", serving.network_metrics()),
+        ("connect", connected.network_metrics()),
+    ] {
+        assert_eq!(
+            metrics.relay_connections, 0,
+            "the {side} side reached no relay, and must not count one: {metrics:?}"
+        );
+        assert_eq!(
+            metrics.relay_connections_ratelimited, 0,
+            "a relay that never completed a handshake cannot have throttled \
+             the {side} side: {metrics:?}"
+        );
+    }
+
+    // A listener that knows only a relay nothing is behind — loopback on a
+    // port nothing listens on, as `network_tests` names it, so nothing here
+    // waits on a resolver. Never dialled and never paired.
+    let mut nowhere = ServeOptions::default();
+    nowhere.relay = Some("https://127.0.0.1:1/".to_owned());
+    nowhere.port_mapping = false;
+    nowhere.discovery = false;
+    let elsewhere = within(
+        "a listener must bind against a relay that is not there",
+        Box::pin(modelpipe::serve(&backend.url, nowhere)),
+    )
+    .await
+    .expect("a relay that does not answer is not a startup error");
+    assert_eq!(
+        elsewhere.network_metrics(),
+        NetworkMetrics::default(),
+        "an endpoint that dialled nothing has nothing to report, whatever the \
+         pipe beside it has been counting: {:?}",
+        elsewhere.network_metrics()
+    );
+
+    elsewhere.shutdown().await;
     connected.shutdown().await;
     serving.shutdown().await;
 }
