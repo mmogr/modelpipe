@@ -59,9 +59,34 @@ fn a_peer_view_round_trips_as_a_plain_object() {
     let view = PeerView {
         fingerprint: "3ca82708b995".to_owned(),
         path: PipeStatus::Relayed,
+        rtt_ms: Some(91),
     };
     let json = serde_json::to_string(&view).unwrap();
-    assert_eq!(json, r#"{"fingerprint":"3ca82708b995","path":"relayed"}"#);
+    assert_eq!(
+        json,
+        r#"{"fingerprint":"3ca82708b995","path":"relayed","rtt_ms":91}"#
+    );
     let back: PeerView = serde_json::from_str(&json).unwrap();
     assert_eq!(back, view);
+}
+
+/// The reason the round-trip time is milliseconds rather than a
+/// `Duration`: this struct is the DTO a status page renders, and a
+/// `Duration` would land in it as a two-field object of seconds and
+/// nanoseconds. A path with nothing measured yet is `null` rather than a
+/// zero that reads as an impossibly fast link.
+#[test]
+fn a_peer_view_carries_its_round_trip_time_as_one_number_or_null() {
+    let unmeasured = PeerView {
+        fingerprint: "3ca82708b995".to_owned(),
+        path: PipeStatus::Relayed,
+        rtt_ms: None,
+    };
+    let json = serde_json::to_string(&unmeasured).unwrap();
+    assert_eq!(
+        json,
+        r#"{"fingerprint":"3ca82708b995","path":"relayed","rtt_ms":null}"#
+    );
+    let back: PeerView = serde_json::from_str(&json).unwrap();
+    assert_eq!(back, unmeasured);
 }

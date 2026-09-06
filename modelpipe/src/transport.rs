@@ -1,18 +1,17 @@
 //! The iroh endpoint, and the one place a ticket meets an iroh address.
 //!
-//! Three modules in this crate name an iroh type — this one, which binds
-//! the endpoint, [`crate::listener`], which accepts on it, and
-//! [`crate::peer`], which holds one connection and re-dials it. That is
-//! deliberate rather than incidental, and the line is drawn at *lifetime*:
-//! anything that owns an iroh value for longer than a call is here or in
-//! those two. Everything above them — the codec, the locality rule, the
-//! header edge, the request exchange — is generic or pure, which is why the
-//! whole authentication edge is exercised over `tokio::io::duplex()` with
-//! no socket anywhere.
+//! Four modules in this crate name an iroh type — this one, which binds the
+//! endpoint, [`crate::listener`], which accepts on it, [`crate::peer`],
+//! which holds one connection and re-dials it, and [`crate::path_watch`],
+//! which reads how a live one is routed. That is deliberate rather than
+//! incidental, and the line is drawn at *lifetime*: anything that owns an
+//! iroh value for longer than a call is here or in those three. Everything
+//! above them — the codec, the locality rule, the header edge, the request
+//! exchange — is generic or pure, which is why the whole authentication
+//! edge is exercised over `tokio::io::duplex()` with no socket anywhere.
 //!
-//! (This file said "the only module" until the listener and the peer
-//! watcher arrived. They did, and it stayed. The invariant those two do not
-//! break is the one below.)
+//! (It said "the only module" until the listener, the peer and the path
+//! watcher arrived. The invariant none of them breaks is the one below.)
 //!
 //! **Nothing iroh owns reaches the public surface.** That is the promise
 //! the crate docs make, it is what an iroh major upgrade is measured
@@ -115,6 +114,10 @@ pub(crate) struct NetOptions {
     /// Publish this endpoint's addresses to, and resolve peers through,
     /// n0's discovery service.
     pub(crate) discovery: bool,
+    /// Open no IP transport at all, so every path this endpoint has is the
+    /// relay's. The switch that makes a relayed reading something you ask
+    /// for rather than something you wait for a hostile NAT to produce.
+    pub(crate) relay_only: bool,
 }
 
 impl Default for NetOptions {
@@ -122,6 +125,7 @@ impl Default for NetOptions {
         Self {
             port_mapping: true,
             discovery: true,
+            relay_only: false,
         }
     }
 }
@@ -164,6 +168,9 @@ pub(crate) async fn bind(
         // carry every path its holder will need — which on one LAN it
         // does, and across a change of network it does not.
         builder = builder.clear_address_lookup();
+    }
+    if net.relay_only {
+        builder = builder.clear_ip_transports();
     }
     builder
         .bind()

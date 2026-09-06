@@ -18,6 +18,7 @@ use std::sync::{Arc, Mutex};
 use tokio::sync::Semaphore;
 
 use crate::lifecycle::{Lifecycle, PeerPath, aggregate};
+use crate::path_watch::{self, Reading};
 use crate::status::PeerView;
 
 /// How many exchanges one peer may have in flight at once, across every
@@ -44,10 +45,10 @@ struct Budget {
     connections: usize,
 }
 
-/// The connected peers, keyed by an id that exists only to remove the
-/// right entry when one goes.
+/// The connected peers, keyed by an id that exists only to name the right
+/// entry when one changes path or goes.
 pub(crate) struct PeerRegistry {
-    peers: Mutex<BTreeMap<u64, (Arc<str>, PeerPath)>>,
+    peers: Mutex<BTreeMap<u64, (Arc<str>, Reading)>>,
     /// Stream budgets by peer identity, shared across that peer's
     /// connections and dropped when its last one goes.
     budgets: Mutex<HashMap<Arc<str>, Budget>>,
@@ -84,12 +85,36 @@ impl PeerRegistry {
     /// which is what [`views`](Self::views) reports and what the `peer`
     /// log field and the `X-Modelpipe-Peer` header already carry — one
     /// rule, so a device is named identically everywhere it appears.
-    pub(crate) fn add(&self, name: Arc<str>, path: PeerPath, lifecycle: &Lifecycle) -> u64 {
+    ///
+    /// `reading` is how that connection is routed *at this instant*, and is
+    /// routinely not how it will be routed a second later — see
+    /// [`set_path`](Self::set_path), which is the other half of this.
+    pub(crate) fn add(&self, name: Arc<str>, reading: Reading, lifecycle: &Lifecycle) -> u64 {
         let id = self.next.fetch_add(1, Ordering::Relaxed);
         self.mutate(lifecycle, |peers| {
-            peers.insert(id, (name, path));
+            peers.insert(id, (name, reading));
         });
         id
+    }
+
+    /// Record what one peer's path has become, and republish what the set
+    /// now means.
+    ///
+    /// The write [`crate::path_watch`] makes on the serve side, keyed by the
+    /// `id` [`add`](Self::add) returned. Everything in this registry used to
+    /// be written once at accept and never again, which is exactly why a
+    /// connection that hole-punched after establishing went on being
+    /// reported as relayed for the rest of its life.
+    ///
+    /// A peer that has already left is not resurrected: a watcher may still
+    /// be a tick behind [`remove`](Self::remove), and re-inserting the entry
+    /// it just removed would leave a departed device in `peers()` for ever.
+    pub(crate) fn set_path(&self, id: u64, reading: Reading, lifecycle: &Lifecycle) {
+        self.mutate(lifecycle, |peers| {
+            if let Some((_, held)) = peers.get_mut(&id) {
+                *held = reading;
+            }
+        });
     }
 
     pub(crate) fn remove(&self, id: u64, lifecycle: &Lifecycle) {
@@ -122,9 +147,10 @@ impl PeerRegistry {
     pub(crate) fn views(&self) -> Vec<PeerView> {
         self.lock()
             .values()
-            .map(|(name, path)| PeerView {
+            .map(|(name, reading)| PeerView {
                 fingerprint: name.to_string(),
-                path: aggregate(&[*path]),
+                path: aggregate(&[reading.path]),
+                rtt_ms: reading.rtt.map(path_watch::millis),
             })
             .collect()
     }
@@ -137,11 +163,11 @@ impl PeerRegistry {
     fn mutate(
         &self,
         lifecycle: &Lifecycle,
-        f: impl FnOnce(&mut BTreeMap<u64, (Arc<str>, PeerPath)>),
+        f: impl FnOnce(&mut BTreeMap<u64, (Arc<str>, Reading)>),
     ) {
         let mut guard = self.lock();
         f(&mut guard);
-        let paths: Vec<PeerPath> = guard.values().map(|(_, path)| *path).collect();
+        let paths: Vec<PeerPath> = guard.values().map(|(_, reading)| reading.path).collect();
         // Released before publishing, so nothing observes the status while
         // the set it describes is still locked.
         drop(guard);
@@ -149,7 +175,7 @@ impl PeerRegistry {
     }
 
     // A poisoned lock cannot happen here: nothing panics while holding it.
-    fn lock(&self) -> std::sync::MutexGuard<'_, BTreeMap<u64, (Arc<str>, PeerPath)>> {
+    fn lock(&self) -> std::sync::MutexGuard<'_, BTreeMap<u64, (Arc<str>, Reading)>> {
         self.peers
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)

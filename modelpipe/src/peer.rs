@@ -8,9 +8,9 @@
 //! Splitting this from [`crate::dialer`] is a split by lifetime as much as
 //! by responsibility. The local listener is bound once and lives until
 //! teardown; the connection behind it is the thing that dies and comes
-//! back, and every question worth asking about it — is there one right now,
-//! how is it reaching the peer, what happens when it goes — belongs
-//! together and nowhere near the byte copying.
+//! back, and every question worth asking about it — is there one, how is it
+//! routed (which [`crate::path_watch`] answers), what happens when it goes
+//! — belongs together and nowhere near the byte copying.
 //!
 //! The endpoint id is what makes coming back possible at all. A ticket
 //! carries direct addresses to help the first pairing avoid the relay, but
@@ -33,14 +33,15 @@
 //! is discovery's job rather than this module's — see `identity.rs` for
 //! why a durable ticket is not automatically a reachable one.
 
-use iroh::endpoint::{Connection, Path};
+use iroh::endpoint::Connection;
 use iroh::{Endpoint, EndpointAddr};
 use std::sync::RwLock;
 use std::time::Duration;
 
 use crate::ConnectError;
 use crate::connect::ConnectOptions;
-use crate::lifecycle::{Lifecycle, PeerPath, aggregate};
+use crate::lifecycle::{Lifecycle, aggregate};
+use crate::path_watch::{self, Reading};
 use crate::status::PipeStatus;
 use crate::ticket::Ticket;
 use crate::transport;
@@ -92,6 +93,7 @@ impl Peer {
         let net = transport::NetOptions {
             port_mapping: opts.port_mapping,
             discovery: opts.discovery,
+            relay_only: opts.relay_only,
         };
         let endpoint = transport::bind(opts.relay.as_deref(), None, net).await?;
         Ok(Self {
@@ -130,15 +132,20 @@ impl Peer {
     }
 
     /// Dial again, installing the result if it succeeds.
-    pub(crate) async fn redial(&self) -> Option<PeerPath> {
+    ///
+    /// The reading it returns is the one taken at the instant the connection
+    /// formed, which is what the `the peer is back` line reports and is
+    /// routinely not the path the connection settles on — following that is
+    /// [`crate::path_watch`]'s job, from the loop below.
+    pub(crate) async fn redial(&self) -> Option<Reading> {
         let connection = self
             .endpoint
             .connect(self.addr.clone(), transport::ALPN)
             .await
             .ok()?;
-        let path = path_of(&connection);
+        let reading = path_watch::read(&connection);
         *self.write() = Some(connection);
-        Some(path)
+        Some(reading)
     }
 
     /// Close whatever is connected, for teardown.
@@ -188,31 +195,6 @@ impl Peer {
     }
 }
 
-/// How a connection is reaching the peer, read from the live paths.
-///
-/// Shared with the serve side, which asks the identical question of the
-/// identical type. It was written twice, and two copies of a rule about
-/// what counts as `Direct` is one copy too many for a value the CLI prints
-/// and an embedder watches.
-///
-/// No selected path means nothing is established yet, and the conservative
-/// reading is the one [`crate::lifecycle::aggregate`] already takes: report
-/// the worse of the two. A snapshot, honest about the moment it was taken —
-/// a path that migrates afterwards is not followed.
-pub(crate) fn path_of(connection: &Connection) -> PeerPath {
-    connection
-        .paths()
-        .iter()
-        .find(Path::is_selected)
-        .map_or(PeerPath::Relayed, |path| {
-            if path.remote_addr().is_relay() {
-                PeerPath::Relayed
-            } else {
-                PeerPath::Direct
-            }
-        })
-}
-
 /// How long to wait before the first re-dial, and the ceiling it doubles
 /// to.
 ///
@@ -259,12 +241,19 @@ pub(crate) async fn keep_connected(peer: &Peer, lifecycle: &Lifecycle) {
     // side off for the night must not narrate every retry until morning.
     let mut announced = false;
     loop {
-        // Wait out the connection there is, if there is one.
+        // Wait out the connection there is, if there is one — following
+        // where it goes while we wait. The third arm is what makes the
+        // status track a connection that hole-punches after establishing,
+        // or falls back after hole-punching; it only ever completes for the
+        // reasons the two above it do, and they win the tie.
         if let Some(live) = peer.current() {
             tokio::select! {
                 biased;
                 () = lifecycle.wait_until_closed() => return,
                 _ = live.closed() => {}
+                () = path_watch::follow(&live, lifecycle, |reading| {
+                    lifecycle.set_status(aggregate(&[reading.path]));
+                }) => {}
             }
             peer.forget(&live);
             lifecycle.set_status(PipeStatus::Idle);
@@ -283,8 +272,8 @@ pub(crate) async fn keep_connected(peer: &Peer, lifecycle: &Lifecycle) {
             () = lifecycle.wait_until_closed() => return,
             dialed = peer.redial() => dialed,
         };
-        if let Some(path) = dialed {
-            let status = aggregate(&[path]);
+        if let Some(reading) = dialed {
+            let status = aggregate(&[reading.path]);
             lifecycle.set_status(status);
             tracing::info!(path = status.as_str(), "the peer is back");
             announced = false;

@@ -5,8 +5,14 @@
 //!
 //! Almost everything here runs without a network: the bridge between a
 //! ticket and an iroh address is a pure translation, and it is where a
-//! mistake would be least visible and most expensive. The one test that
-//! binds an endpoint says so.
+//! mistake would be least visible and most expensive. The tests that bind
+//! an endpoint say so.
+//!
+//! Exactly one needs the internet rather than a socket:
+//! `relay_only_mints_a_ticket_that_names_the_relay_and_nothing_else` waits
+//! for a relay handshake, because an endpoint with no IP transport has
+//! nothing at all to advertise until one completes. That dependency is the
+//! switch's own subject rather than a shortcut in the test.
 
 use std::collections::BTreeSet;
 
@@ -271,6 +277,7 @@ async fn an_endpoint_binds_with_every_network_contact_switched_off() {
         let net = NetOptions {
             port_mapping,
             discovery,
+            ..NetOptions::default()
         };
         let endpoint = bind(None, None, net)
             .await
@@ -278,6 +285,53 @@ async fn an_endpoint_binds_with_every_network_contact_switched_off() {
         assert_eq!(ticket_from(&endpoint.addr()).fingerprint().len(), 12);
         endpoint.close().await;
     }
+}
+
+/// Relay-only removes every IP transport, so a ticket minted under it names
+/// the relay **and** nothing else.
+///
+/// That is the switch working rather than a limitation of it: the point is
+/// to make relayed the only outcome, and a ticket still carrying the LAN
+/// addresses would let a holder on the same network go direct and quietly
+/// measure the thing that was being excluded.
+///
+/// Both halves, because the absence alone is satisfied by a ticket carrying
+/// nothing at all — which is undialable, the opposite of what this switch
+/// promises, and is exactly what the endpoint advertises for the first
+/// couple of seconds of its life. The relay arrives with a handshake and not
+/// with the bind, which is what [`wait_online`] is here for and what
+/// `ServeOptions::wait_online` exists for on the public surface. This test
+/// therefore needs a route to a relay; without one there is no such thing as
+/// a working `--relay-only` listener to test.
+#[tokio::test]
+async fn relay_only_mints_a_ticket_that_names_the_relay_and_nothing_else() {
+    let net = NetOptions {
+        relay_only: true,
+        ..NetOptions::default()
+    };
+    let endpoint = bind(None, None, net).await.expect("binding must succeed");
+    wait_online(&endpoint, Duration::from_secs(20)).await;
+
+    let ticket = ticket_from(&endpoint.addr());
+
+    assert!(
+        ticket
+            .addrs()
+            .iter()
+            .any(|addr| matches!(addr, TicketAddr::Relay(_))),
+        "the relay is the only path this endpoint has, so the ticket has to \
+         carry it or name nowhere at all: {:?}",
+        ticket.addrs()
+    );
+    assert!(
+        !ticket
+            .addrs()
+            .iter()
+            .any(|addr| matches!(addr, TicketAddr::V4(_) | TicketAddr::V6(_))),
+        "an endpoint with no IP transport has no IP address to advertise: {:?}",
+        ticket.addrs()
+    );
+    endpoint.close().await;
 }
 
 /// The connect side's relay is validated by the same rule as the serve

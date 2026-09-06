@@ -18,7 +18,7 @@ use crate::credential::Credential;
 use crate::exchange;
 use crate::fingerprint;
 use crate::lifecycle::{Lifecycle, aggregate};
-use crate::peer;
+use crate::path_watch;
 use crate::peers::PeerRegistry;
 use crate::status::CloseReason;
 
@@ -92,12 +92,12 @@ async fn serve_connection(
     connection: iroh::endpoint::Connection,
 ) {
     // The path in use right now, by the rule both sides share — see
-    // `peer::path_of`, which this side and the connect side had written out
-    // identically until it moved there. Paths migrate, a connection that
-    // starts relayed may hole-punch a moment later, and following that is
-    // `paths_stream`'s job: a refinement rather than a correction, since
-    // this snapshot is honest about the moment it was taken.
-    let path = peer::path_of(&connection);
+    // `path_watch::read`, which this side and the connect side had written
+    // out identically until it moved there. This one is only the starting
+    // value: a connection that establishes over the relay commonly
+    // hole-punches a moment later, and the watcher spawned below is what
+    // keeps the registry saying so.
+    let reading = path_watch::read(&connection);
     // Named by the rule a ticket names itself by — see `crate::fingerprint`
     // — so an operator reading this line can hold it against the ticket
     // they handed out and see whether the device that turned up is the one
@@ -107,7 +107,9 @@ async fn serve_connection(
     // from this peer, as `X-Modelpipe-Peer`, and are what `peers()` reports
     // to an embedder — so every surface names a device identically.
     let peer_name: std::sync::Arc<str> = fingerprint::of(connection.remote_id().as_bytes()).into();
-    let peer = state.peers.add(peer_name.clone(), path, &state.lifecycle);
+    let peer = state
+        .peers
+        .add(peer_name.clone(), reading, &state.lifecycle);
     // The peer's budget, not this connection's: every connection from one
     // endpoint draws on the same sixty-four — see `peers::MAX_CONCURRENT_STREAMS_PER_PEER`.
     let slots = state.peers.slots(&peer_name);
@@ -119,14 +121,35 @@ async fn serve_connection(
     let span = tracing::info_span!(
         "peer",
         peer = %peer_name,
-        // A snapshot, honest about the moment it was taken, exactly as the
-        // status published above is. `PipeStatus::as_str` rather than a
-        // second spelling of the same two words, because the CLI already
-        // prints those and an operator should not have to learn two
-        // vocabularies for one fact.
-        path = aggregate(&[path]).as_str(),
+        // How this peer *arrived*, and fixed for the life of the span: a
+        // span's fields are set when it is created, so this is the one place
+        // in the crate where a path is still a snapshot. The live answer is
+        // `peers()`, and a migration is its own `info` line. `PipeStatus::as_str`
+        // rather than a second spelling of the same two words, because the
+        // CLI already prints those and an operator should not have to learn
+        // two vocabularies for one fact.
+        path = aggregate(&[reading.path]).as_str(),
     );
     span.in_scope(|| tracing::info!("peer connected"));
+
+    // Spawned rather than awaited, because the accept loop below is the
+    // other half of what this connection is doing and both run at once. It
+    // ends itself when the connection or the pipe does, and it is
+    // instrumented so a path change is attributed to the peer it happened
+    // to — which a task started here would otherwise lose.
+    let watching = tokio::spawn(
+        {
+            let state = state.clone();
+            let connection = connection.clone();
+            async move {
+                path_watch::follow(&connection, &state.lifecycle, |reading| {
+                    state.peers.set_path(peer, reading, &state.lifecycle);
+                })
+                .await;
+            }
+        }
+        .instrument(span.clone()),
+    );
 
     loop {
         // Same rule one level down: teardown stops this peer being given
@@ -175,6 +198,11 @@ async fn serve_connection(
         );
     }
 
+    // Before the removal, not after: the watcher would end on its own the
+    // moment the connection did, but this loop also breaks on teardown and
+    // on an accept failure, and a reading that landed between those and the
+    // removal below would republish a set this peer has already left.
+    watching.abort();
     span.in_scope(|| tracing::info!("peer disconnected"));
     state.peers.remove(peer, &state.lifecycle);
 }
@@ -236,3 +264,7 @@ pub(crate) async fn shutdown_timeout(state: &ServeState, grace: std::time::Durat
     state.lifecycle.mark_torn_down();
     drained
 }
+
+#[cfg(test)]
+#[path = "listener_tests.rs"]
+mod listener_tests;
