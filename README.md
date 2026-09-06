@@ -257,6 +257,11 @@ you lose the thing it was for.
 A relay, when one is used, sees endpoint identities, both IP addresses,
 timing and volume. Observability isn't readability, and it isn't nothing.
 
+The ticket discloses two addresses of its own to whoever holds it — this
+machine's LAN address, and the public IP a relay saw it from — and that's a
+disclosure to weigh rather than a filter to add, because those addresses
+*are* the direct path that keeps most traffic off a relay to begin with.
+
 [`SECURITY.md`](SECURITY.md) has the rest, including the one most people
 miss: the token is full access to your backend, `/api/pull` included.
 
