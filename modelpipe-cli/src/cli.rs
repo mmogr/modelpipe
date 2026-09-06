@@ -111,7 +111,9 @@ pub(crate) enum Command {
         /// works is the far NAT's decision, so relayed is the case you
         /// cannot reproduce on demand; this makes it the only path, so what
         /// it costs can be read off a status line on any network. The
-        /// ticket then carries the relay and no direct addresses.
+        /// ticket then carries the relay and no direct addresses — and if
+        /// no relay is reached, no addresses at all, which serve refuses to
+        /// print rather than hand you a ticket nobody could dial.
         #[arg(long)]
         relay_only: bool,
     },

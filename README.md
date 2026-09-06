@@ -235,8 +235,11 @@ path left, so the same pipe can be measured with and without it on any
 network at all. On `serve` the ticket it mints then carries the relay and no
 direct addresses — which is the switch working, not a limitation of it,
 because a holder on the same LAN would otherwise go direct and quietly
-measure the case being excluded. On `connect` nothing needs re-pairing. Do
-not leave it on: a direct path is faster and costs nobody's relay anything.
+measure the case being excluded. Where this machine reaches no relay, that
+leaves the ticket with no address in it at all, and `serve` refuses rather
+than printing a ticket nobody could dial; the refusal names which half went
+missing. On `connect` nothing needs re-pairing. Do not leave it on: a direct
+path is faster and costs nobody's relay anything.
 
 `--no-portmap` costs nothing that matters. Pairing works the same; behind a
 few NATs a connection falls back to the relay a little more often.
@@ -253,6 +256,7 @@ you lose the thing it was for.
 
 A relay, when one is used, sees endpoint identities, both IP addresses,
 timing and volume. Observability isn't readability, and it isn't nothing.
+
 [`SECURITY.md`](SECURITY.md) has the rest, including the one most people
 miss: the token is full access to your backend, `/api/pull` included.
 

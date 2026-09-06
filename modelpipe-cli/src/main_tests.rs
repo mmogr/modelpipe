@@ -7,7 +7,19 @@
 
 use clap::Parser as _;
 
-use super::{Cli, Ticket, TokenPolicy, qr, token_line, token_policy};
+use super::{Cli, Ticket, TokenPolicy, qr, token_line, token_policy, undialable};
+
+/// Vector 1 from `docs/ticket-format-v0.md`: an endpoint id and no
+/// addresses at all — the shape `--relay-only` mints on a host that reached
+/// no relay.
+const NAMES_NOWHERE: &str = "pipeadlvvgabqkyqvn6vjp7nhslea45a5yls6pnkmizfv4bbu2hxa5iruaaauhlp2na";
+
+/// Vector 2: one relay and one IPv4 address.
+const NAMES_BOTH: &str = "pipeadlvvgabqkyqvn6vjp7nhslea45a5yls6pnkmizfv4bbu2hxa5iruaqaaangq5duobztulzpojswyylzfzsxqylnobwgkltdn5ws6aiaa3akqaihcfiqbrp5xr4q";
+
+/// Vector 3: one IPv6 address and no relay — the ordinary state of a ticket
+/// read before the relay handshake lands, and one that still pairs on a LAN.
+const NAMES_ONE_ADDRESS: &str = "pipeadlvvgabqkyqvn6vjp7nhslea45a5yls6pnkmizfv4bbu2hxa5iruaicaajcaainxaaaaaaaaaaaaaaaaaaach4qaabstehw";
 
 /// clap's own consistency checks are debug-only, so they are compiled
 /// out of the `cargo install` binary whose `--help` this defines. This
@@ -272,6 +284,60 @@ fn a_generated_token_is_printed_in_full() {
 fn serving_open_produces_no_token_line() {
     assert!(token_line(false, None).is_none());
     assert!(token_line(true, None).is_none());
+}
+
+/// A ticket with no address in it is refused, and the refusal says which of
+/// the two things went missing.
+///
+/// The failure this replaces happened on the other machine: an empty ticket
+/// prints, gets scanned, and `connect` answers `PeerUnreachable` — "it may
+/// be off, offline, or its ticket replaced", none of which is what
+/// happened. The message here has to name the real cause, so that is what
+/// is asserted rather than merely that something was refused.
+#[test]
+fn a_ticket_that_names_nowhere_is_refused_with_the_cause_that_emptied_it() {
+    let empty: Ticket = NAMES_NOWHERE.parse().expect("a normative vector");
+
+    let under_relay_only = undialable(&empty, true).expect("nothing could dial this");
+    assert!(
+        under_relay_only.contains("--relay-only"),
+        "the switch that removed the addresses has to be named: {under_relay_only}"
+    );
+    assert!(
+        under_relay_only.contains("no relay in 10s"),
+        "and so does the wait that found no relay: {under_relay_only}"
+    );
+
+    // Without the switch the same empty ticket means something else, and
+    // pointing this operator at `--relay-only` would be pointing them at a
+    // flag they did not pass.
+    let without = undialable(&empty, false).expect("nothing could dial this either");
+    assert!(
+        !without.contains("--relay-only"),
+        "a flag nobody passed must not be blamed: {without}"
+    );
+    assert!(
+        without.contains("no address of its own"),
+        "the local half has to be named too: {without}"
+    );
+}
+
+/// The other half, and the reason this is not "refuse a ticket with no
+/// relay": a ticket carrying one direct address and no relay is the ordinary
+/// state of every ticket for the first second of its life, pairs perfectly
+/// well on a LAN, and must print.
+#[test]
+fn a_ticket_that_names_anywhere_at_all_is_printed() {
+    for vector in [NAMES_BOTH, NAMES_ONE_ADDRESS] {
+        let ticket: Ticket = vector.parse().expect("a normative vector");
+        for relay_only in [true, false] {
+            assert_eq!(
+                undialable(&ticket, relay_only),
+                None,
+                "{vector} names somewhere and must not be refused"
+            );
+        }
+    }
 }
 
 /// Both lines are read off a screen together, so the value column has to
