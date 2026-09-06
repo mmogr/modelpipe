@@ -4,11 +4,14 @@
 //! Split out via `#[path]` so `path_watch.rs` stays inside the file-size
 //! budget.
 //!
-//! Two layers, and the division is what each can prove. The rule and the
-//! not-yet-established case are pure and are checked as arithmetic. That
-//! this side goes on *asking* is a statement about a live connection, so the
-//! last test binds two real endpoints in this process — a stub cannot be
-//! wrong about a re-read in the way the real thing was.
+//! Three layers, and the division is what each can prove. The rule and the
+//! not-yet-established case are pure and are checked as arithmetic. The
+//! cadence and the lapse guard are driven through a scripted sequence of
+//! readings, because nothing in one process can make a real path lapse and
+//! come back. That this side goes on *asking* a live connection is a
+//! statement about iroh, so the last tests bind two real endpoints in this
+//! process — a stub cannot be wrong about a re-read in the way the real
+//! thing was.
 
 use std::net::SocketAddr;
 use std::str::FromStr as _;
@@ -64,6 +67,89 @@ fn a_round_trip_time_is_reported_in_whole_milliseconds() {
         millis(Duration::MAX),
         u64::MAX,
         "saturating, never wrapping"
+    );
+}
+
+// ── The lapse between paths ──────────────────────────────────────────────
+
+/// A reading of a hole-punched path, as a live connection produces one.
+fn direct() -> Reading {
+    Reading {
+        path: PeerPath::Direct,
+        rtt: Some(Duration::from_millis(3)),
+    }
+}
+
+/// The same, through a relay. The times differ so a carried-forward reading
+/// is visible as the wrong one rather than merely as the wrong path.
+fn relayed() -> Reading {
+    Reading {
+        path: PeerPath::Relayed,
+        rtt: Some(Duration::from_millis(87)),
+    }
+}
+
+/// The rule: a reading taken while nothing was selected carries the
+/// previous one forward, and every other reading is itself.
+///
+/// The case exists because iroh clears its selection when the selected path
+/// is abandoned and sets it again when the replacement is chosen — so a
+/// poll landing in that window sees `PENDING`, which is `Relayed`, about a
+/// connection that is not on a relay.
+#[test]
+fn a_reading_taken_between_paths_reports_the_path_that_was_in_force() {
+    assert_eq!(
+        settled(Reading::PENDING, direct()),
+        direct(),
+        "a lapse is not a trip to the relay"
+    );
+    assert_eq!(
+        settled(relayed(), direct()),
+        relayed(),
+        "and a real move to the relay still is one"
+    );
+    assert_eq!(settled(direct(), relayed()), direct(), "in both directions");
+    assert_eq!(
+        settled(Reading::PENDING, Reading::PENDING),
+        Reading::PENDING,
+        "with nothing ever established there is nothing to carry forward"
+    );
+}
+
+/// The rule where it is installed, running at the real cadence.
+///
+/// Driven by a scripted sequence rather than a socket, because nothing in
+/// one process can make a live path lapse and come back — the readings a
+/// migrating connection would produce are exactly what is unreachable here,
+/// which is why `repeat` takes its reading as a closure.
+///
+/// `start_paused` makes it deterministic rather than merely fast: the
+/// runtime advances the clock to each interval tick with no work in
+/// between, so the number of readings is the number of ticks the deadline
+/// admits and not a race with a busy machine.
+#[tokio::test(start_paused = true)]
+async fn a_watcher_that_reads_a_lapse_goes_on_reporting_the_path_it_had() {
+    // A path in force, gone for two polls, back. Everything after the
+    // script is the connection settled on its path again.
+    let mut script = [direct(), Reading::PENDING, Reading::PENDING, direct()].into_iter();
+    let mut seen: Vec<Reading> = Vec::new();
+
+    let _ = tokio::time::timeout(
+        CADENCE * 3 + CADENCE / 2,
+        repeat(
+            || script.next().unwrap_or_else(direct),
+            |reading| seen.push(reading),
+        ),
+    )
+    .await;
+
+    assert!(
+        seen.len() >= 4,
+        "the whole script must have been read, not the first entry alone: {seen:?}"
+    );
+    assert!(
+        seen.iter().all(|r| *r == direct()),
+        "a lapse must publish the reading in force, not `Relayed`: {seen:?}"
     );
 }
 

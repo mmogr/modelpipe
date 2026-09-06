@@ -79,6 +79,45 @@ impl Reading {
         path: PeerPath::Relayed,
         rtt: None,
     };
+
+    /// Whether this reading was taken while nothing was selected — whether
+    /// it is [`PENDING`](Self::PENDING), in other words.
+    ///
+    /// The absent round-trip time is what identifies it, and that is not an
+    /// accident to be tidied into a flag: [`read`] measures one over every
+    /// selected path and has nothing to measure without one, so "no path"
+    /// and "no number" are one fact read two ways.
+    const fn is_pending(&self) -> bool {
+        self.rtt.is_none()
+    }
+}
+
+/// What to publish when a reading comes back with no selected path: the
+/// previous one, unchanged.
+///
+/// [`Reading::PENDING`] is `Relayed`, which is the right answer for a
+/// connection that has established nothing yet and the wrong one for a live
+/// connection between paths. iroh clears its selection the moment the
+/// selected path is abandoned and sets it again when the replacement is
+/// chosen, so a poll landing in that window reads `PENDING` about a
+/// connection that is not on a relay and never was.
+///
+/// **This is a new failure mode and not an old one**, which is why the guard
+/// arrives with the watcher rather than being left to a later fix. Reading
+/// once at accept could not land in that window by construction; reading
+/// every second can, and each landing would publish `Direct → Relayed →
+/// Direct` — three transitions an embedder watching `status_changed()`
+/// cannot tell from two real migrations.
+///
+/// Holding the last reading, RTT included, rather than inventing a third
+/// state is the same call [`Reading::PENDING`] itself makes and for the same
+/// reason: the public [`PipeStatus`](crate::PipeStatus) has `Idle` for "no
+/// peer" and deliberately nothing for "a peer mid-migration". What is held
+/// is a measurement that was true a second ago, which is what every reading
+/// here is; what would be published instead is a path the connection is not
+/// on.
+const fn settled(now: Reading, last: Reading) -> Reading {
+    if now.is_pending() { last } else { now }
 }
 
 /// Read how `connection` is routed right now.
@@ -150,13 +189,19 @@ pub(crate) async fn follow(
         biased;
         () = lifecycle.wait_until_closed() => {}
         _ = connection.closed() => {}
-        () = repeat(connection, publish) => {}
+        () = repeat(|| read(connection), publish) => {}
     }
 }
 
 /// Read again forever, at [`CADENCE`]. Never returns; [`follow`] is what
 /// ends it.
-async fn repeat(connection: &Connection, mut publish: impl FnMut(Reading)) {
+///
+/// Takes the reading as a closure rather than the [`Connection`] it comes
+/// from, which is what lets the cadence and the [`settled`] rule be driven
+/// by a scripted sequence in a test. Nothing in one process can make a real
+/// path lapse and come back, and a guard nothing can exercise is a guard
+/// nobody can tell has stopped working.
+async fn repeat(mut sample: impl FnMut() -> Reading, mut publish: impl FnMut(Reading)) {
     let mut ticks = tokio::time::interval(CADENCE);
     // A laptop that was asleep for an hour has three thousand missed ticks
     // waiting for it, and the default behaviour is to deliver them all
@@ -169,13 +214,16 @@ async fn repeat(connection: &Connection, mut publish: impl FnMut(Reading)) {
     // already announced — published, because being the only writer is what
     // keeps the two sides' status honest, but never logged: a watcher that
     // reported its starting path as a change would be saying something
-    // happened when nothing had.
+    // happened when nothing had. Unsettled, necessarily: `settled` carries
+    // the previous reading forward and there is no previous reading here.
     ticks.tick().await;
-    let mut last = read(connection);
+    let mut last = sample();
     publish(last);
     loop {
         ticks.tick().await;
-        let now = read(connection);
+        // Settled against the reading in force, so a lapse between paths is
+        // carried through rather than announced as a trip to the relay.
+        let now = settled(sample(), last);
         if now.path != last.path {
             // `info`, the level a peer arriving and leaving are reported at,
             // because this is the same class of event: it is the line that
