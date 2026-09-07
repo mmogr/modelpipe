@@ -70,6 +70,7 @@ mod identity;
 mod lifecycle;
 mod listener;
 mod locality;
+mod minting;
 mod outcome;
 mod path_watch;
 mod peer;
