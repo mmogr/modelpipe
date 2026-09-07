@@ -87,12 +87,15 @@ impl Credential {
     /// carrying an empty value only in that neither is ever accepted while
     /// a credential is enforced.
     ///
-    /// The comparison is constant-time in the **token**, via `subtle`. Two
-    /// things deliberately are not, and both are public parameters of the
-    /// system rather than secrets: the length, so an unequal-length value is
-    /// rejected without comparing (the alternative is a padded buffer for no
-    /// gain), and the scheme, which is a fixed seven-byte string every
-    /// client sends in the clear.
+    /// The comparison is constant-time in the **token**, via `subtle`, and
+    /// so is the grace window's. What deliberately is not, in every case
+    /// because it is a public parameter of the system rather than a secret:
+    /// the length, so an unequal-length value is rejected without comparing
+    /// (the alternative is a padded buffer for no gain); the scheme, which
+    /// is a fixed seven-byte string every client sends in the clear; and
+    /// *which* of the three credentials below admitted, which follows from
+    /// the short-circuiting order and tells an attacker nothing the 200 has
+    /// not already told them.
     ///
     /// The scheme is matched case-insensitively because RFC 9110 §11.1 says
     /// it is: `auth-scheme` is a token, and token comparison is
@@ -171,7 +174,8 @@ impl Credential {
 
     /// [`set`](Self::set), keeping the key it replaced admitting until
     /// `grace` elapses. See [`Superseded::hold`] for what a second
-    /// rotation inside that window does, and why.
+    /// rotation inside that window does, which `grace` values hold nothing
+    /// at all, and why.
     pub(crate) fn set_with_grace(&self, token: String, grace: Duration) -> bool {
         self.install(token, Some(grace))
     }
@@ -185,10 +189,28 @@ impl Credential {
     /// rotation onto a listener that was serving open, which has no key to
     /// leave behind in the first place.
     ///
-    /// The old key is held *before* the new one is enforced, both under
-    /// the enforced write lock, so no request can fall between the two and
-    /// find neither value admitting. That is the only place these two
-    /// locks nest, and this is the order.
+    /// A refused token returns before either lock is taken, so an open
+    /// window is left exactly as it was — neither shut nor extended. That
+    /// is the right behaviour (a rotation that did not happen must not
+    /// change what admits) and it is the one the callers above have to
+    /// document, because "nothing changed" reads to an operator as "no old
+    /// key is admitting" and mid-window those are different claims.
+    ///
+    /// The old key is held *before* the new one is enforced, and both
+    /// happen under the enforced write lock, so the **stored state** is
+    /// never a gap: at every instant a reader could observe it, one of the
+    /// two values is admitting. That is the only place these two locks
+    /// nest, and this is the order.
+    ///
+    /// It does not follow — and is not claimed — that no request can be
+    /// refused during a rotation. [`admits`](Self::admits) reads the two
+    /// credentials under two separate locks, releasing the first before
+    /// taking the second, precisely so a rotation is never held up behind
+    /// an in-flight request. A rotation landing between those two reads can
+    /// refuse a value that admitted before it and admits after it. That is
+    /// fail-closed, it is the snapshot race `admits` has always run, and
+    /// the honest guarantee is about the state rather than about every
+    /// request that races it.
     fn install(&self, token: String, grace: Option<Duration>) -> bool {
         if !presentable(&token) {
             return false;

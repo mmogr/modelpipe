@@ -1,6 +1,7 @@
 //! Rotating the credential without un-pairing everything at once.
 //!
-//! The third `impl` block of [`ServeHandle`], split off for the reason
+//! A fourth `impl` block of [`ServeHandle`] — after `serve_handle.rs`,
+//! `serve_status.rs` and `network.rs` — split off for the reason
 //! `serve_status.rs` was: `serve_handle.rs` is close enough to the
 //! file-size budget that a method whose contract is longer than the method
 //! does not fit beside the others. The division is by question —
@@ -43,16 +44,23 @@ impl ServeHandle {
     /// standing key with a comment attached.
     ///
     /// Windows do not chain. A second call inside an open window retires
-    /// the key the first one was protecting, so at most two values ever
-    /// admit: what is enforced, and the one thing it directly replaced.
+    /// the key the first one was protecting, so this never accumulates:
+    /// what is enforced, plus the one thing it directly replaced. (A live
+    /// [`grant_once`](Self::grant_once) code is a third credential with
+    /// its own lifetime, untouched by any of this.)
     /// [`set_token`](Self::set_token) closes an open window outright, and
     /// is the way to end an overlap early — a rotation that says nothing
     /// about grace is a rotation that wants none.
     ///
-    /// A `grace` of [`Duration::ZERO`] is [`set_token`](Self::set_token):
-    /// the window is shut before the call returns, so the boundary falls
-    /// on the safe side rather than admitting one last request. On a
-    /// listener that was serving open there is no key to hold, and this
+    /// Two `grace` values hold nothing, and both fail closed.
+    /// [`Duration::ZERO`] is [`set_token`](Self::set_token): the replaced
+    /// key is dropped rather than parked already-expired, so the boundary
+    /// falls on the safe side rather than admitting one last request. So
+    /// is any `grace` too large for the clock to represent a deadline from
+    /// — [`Duration::MAX`] is the obvious way to write "never expire", and
+    /// **it holds no key at all** rather than holding one forever. If that
+    /// is not what you meant, name a window you can defend. On a listener
+    /// that was serving open there is no key to hold either, and this
     /// turns authentication on exactly as `set_token` does.
     ///
     /// Not a replacement for [`rotate_token`](Self::rotate_token) on a
@@ -64,8 +72,16 @@ impl ServeHandle {
     /// [`ServeError::InvalidToken`] if `token` is empty or nothing but
     /// whitespace — the value [`set_token`](Self::set_token) refuses,
     /// refused for the same reason. **Nothing changes**: what was in force
-    /// stays in force and no window opens, so a rotation that failed on a
-    /// blank config value has not quietly left an old key admitting.
+    /// stays in force, no window opens, and an already-open window is
+    /// neither shut nor extended.
+    ///
+    /// Read that last clause carefully if you are rotating on a schedule.
+    /// A refusal means this call did nothing — it does **not** mean no old
+    /// key is admitting. An operator who opened an hour-long window and
+    /// then pushed a rotation whose config value came back blank still has
+    /// the first replaced key admitting for the rest of that hour.
+    /// [`set_token`](Self::set_token) with a value you have checked is how
+    /// to end it.
     ///
     /// # Examples
     ///

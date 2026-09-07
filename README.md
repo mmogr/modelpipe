@@ -118,6 +118,14 @@ is spent when presented and dead at its deadline either way. While it is
 live it is worth as much as the token, so keep the window short and count
 attempts on your side.
 
+Rotating a key that several paired machines are already holding?
+`ServeHandle::set_token_with_grace` keeps the key it replaces admitting for
+a window you name, so the rollout is not a race between reconfiguring those
+machines and locking them out. Two caveats worth reading the doc for: the
+window widens the tunnel edge only — a backend that also rotated will refuse
+the old key a layer later — and it is the wrong tool for a *leaked* key,
+where `rotate_token` and no window at all is the point.
+
 The backend has to be local: loopback always, private ranges only behind
 `--allow-private-backend`, link-local — where cloud instance metadata
 lives — never. The check runs on resolved addresses, not URL text.

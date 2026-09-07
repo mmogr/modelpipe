@@ -349,10 +349,13 @@ fn a_dependent_can_rotate_with_an_overlap_and_still_cannot_ignore_a_refusal() {
     let _ = roll;
     let _ = cut_short;
 
-    // Zero is a legal window and means "no overlap", so a dependent
-    // computing one from config does not need a branch for the zero case.
-    let none_at_all = Duration::ZERO;
-    assert_eq!(none_at_all.as_nanos(), 0);
+    // The refusal is the same variant `set_token` produces, so a dependent
+    // whose config value came back blank needs one arm and not two — and
+    // the message names the value it means, because a rotation that failed
+    // is a rotation the operator has to be able to act on.
+    let refused = ServeError::InvalidToken;
+    assert!(!refused.is_retryable(), "a blank credential does not ripen");
+    assert!(refused.to_string().contains("empty"), "{refused}");
 }
 
 /// The accessor a language binding watches on, in the shape a binding uses
