@@ -11,9 +11,10 @@
 //! surface that has to live with it.
 
 use std::future::Future;
+use std::io::Write;
 use std::time::Duration;
 
-use modelpipe::PipeStatus;
+use modelpipe::{NetworkMetrics, PipeStatus};
 
 use crate::interrupt::Interrupt;
 
@@ -48,25 +49,89 @@ pub(crate) const FIRST_CONTACT: Duration = Duration::from_secs(40);
 /// function was first polled has nothing left to report — and that race is
 /// real: the connect side publishes its path before the first accept, and
 /// its `status:` line appeared in two runs out of three.
+///
+/// `out` is `std::io::stderr()` in `main.rs` and a buffer in the tests,
+/// which is the whole reason it is a parameter: these lines are the CLI's
+/// only output while a pipe is live, and a macro that writes straight to
+/// the process's stderr cannot be asserted on. Everything the tests below
+/// pin — that a status is printed, that the relay's throttling is printed
+/// *under* it, and that it is printed once — was unreachable before.
 pub(crate) async fn park(
     mut status: impl AsyncStatus,
     interrupt: &mut Interrupt,
+    out: &mut impl Write,
 ) -> anyhow::Result<()> {
-    eprintln!("status: {}", status.current().as_str());
+    // What the last `relay:` line already said. A counter that only climbs
+    // needs a low-water mark, or one old event is re-announced for ever.
+    let mut reported = 0;
+    report(out, status.current(), status.metrics(), &mut reported);
     loop {
-        tokio::select! {
+        // Bound out of the `select!` rather than reported inside an arm:
+        // `status.changed()` borrows `status` for as long as that arm is
+        // alive, and the reading on the next line needs it back.
+        let next = tokio::select! {
             r = interrupt.next() => {
                 r?;
                 return Ok(());
             }
-            next = status.changed() => {
-                eprintln!("status: {}", next.as_str());
-                if next == PipeStatus::Closed {
-                    return Ok(());
-                }
-            }
+            next = status.changed() => next,
+        };
+        report(out, next, status.metrics(), &mut reported);
+        if next == PipeStatus::Closed {
+            return Ok(());
         }
     }
+}
+
+/// Print one reading of the pipe: what it is doing, and — when there is
+/// news of it — what the relay is doing to it.
+///
+/// The two go out together, in that order, because the throttling is a
+/// correction to the line above it. A rate-limited pipe reads `relayed`
+/// with a peer present and nothing failing, which is indistinguishable
+/// from a healthy relayed pipe; printing the correction anywhere else
+/// would leave the misleading line standing on its own.
+///
+/// A write error is dropped rather than propagated. This is progress
+/// commentary on stderr, and a terminal that has gone away is no reason to
+/// tear down a pipe that is still carrying requests — which is more than
+/// the `eprintln!` this replaced offered, since that panicked.
+fn report(out: &mut impl Write, status: PipeStatus, metrics: NetworkMetrics, reported: &mut u64) {
+    let _ = writeln!(out, "status: {}", status.as_str());
+    if let Some(line) = throttle_line(*reported, metrics) {
+        *reported = metrics.relay_connections_ratelimited;
+        let _ = writeln!(out, "{line}");
+    }
+}
+
+/// The `relay:` line a reading earns, or `None` when it says nothing new.
+///
+/// **Nothing at zero**, which is the shape `main.rs` already uses for
+/// output that would otherwise be noise: `token_line` and `qr` both hand
+/// back an `Option<String>` and the caller prints what is there. A pipe no
+/// relay has ever throttled — nearly every pipe — must read exactly as it
+/// read before this line existed.
+///
+/// **Nothing twice.** `relay_connections_ratelimited` is a monotonic total
+/// for the life of one endpoint rather than a flag saying "throttled right
+/// now", so a line emitted on every reading would keep announcing one old
+/// event for the rest of the session. `reported` is what has already been
+/// said, and only a count above it is news — which makes the printed
+/// number a running total and the decision to print it a delta. Both
+/// halves are wanted: the total is the thing that relates to
+/// `relay_connections`, and the delta is what stops the line repeating.
+///
+/// The value column is the one `ticket:`, `token:` and `status:` use, so
+/// all four line up when they reach the same terminal.
+fn throttle_line(reported: u64, metrics: NetworkMetrics) -> Option<String> {
+    let throttled = metrics.relay_connections_ratelimited;
+    if throttled <= reported {
+        return None;
+    }
+    Some(format!(
+        "relay:  rate limiting this endpoint — {throttled} of {} relay connections throttled",
+        metrics.relay_connections
+    ))
 }
 
 /// Wait for the pipe to reach the serve side, or say that it could not.
@@ -125,19 +190,35 @@ pub(crate) async fn shut_down(handle: impl Future<Output = ()>, interrupt: &mut 
     }
 }
 
-/// The one thing `park` needs from either handle.
+/// What this module needs from either handle.
 ///
 /// A trait here rather than in the library: the two handles deliberately
 /// share none, and inventing a public one to save a few lines in a CLI
 /// would put it on a surface that has to live with it.
+///
+/// `metrics` is named for the reading and not for the call behind it. The
+/// handles' own method is `network_metrics`, and a trait method sharing
+/// that name would be shadowed by the inherent one at every call site
+/// here — including inside the impls below, where `self.network_metrics()`
+/// would resolve to the inherent method today and to unbounded recursion
+/// the day it stopped being inherent. The tests drive a fake, so nothing
+/// in the suite would ever see it.
 pub(crate) trait AsyncStatus {
     fn current(&self) -> PipeStatus;
+    /// The transport counters behind the status, read at the same moments.
+    /// A monotonic total needs two readings to mean anything, and the
+    /// status line is the only regular tick this command has.
+    fn metrics(&self) -> NetworkMetrics;
     fn changed(&mut self) -> impl Future<Output = PipeStatus>;
 }
 
 impl AsyncStatus for modelpipe::ServeHandle {
     fn current(&self) -> PipeStatus {
         self.status()
+    }
+
+    fn metrics(&self) -> NetworkMetrics {
+        self.network_metrics()
     }
 
     async fn changed(&mut self) -> PipeStatus {
@@ -150,6 +231,10 @@ impl AsyncStatus for modelpipe::ConnectHandle {
         self.status()
     }
 
+    fn metrics(&self) -> NetworkMetrics {
+        self.network_metrics()
+    }
+
     async fn changed(&mut self) -> PipeStatus {
         self.status_changed().await
     }
@@ -158,6 +243,10 @@ impl AsyncStatus for modelpipe::ConnectHandle {
 impl<T: AsyncStatus> AsyncStatus for &mut T {
     fn current(&self) -> PipeStatus {
         (**self).current()
+    }
+
+    fn metrics(&self) -> NetworkMetrics {
+        (**self).metrics()
     }
 
     async fn changed(&mut self) -> PipeStatus {

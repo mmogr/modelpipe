@@ -191,6 +191,23 @@ new path costs:
 2026-09-03T05:33:04.011927Z  INFO peer{peer=3ca82708b995 path="relayed"}: the path to the peer changed path="direct" rtt_ms=7
 ```
 
+There is one more line, and it appears only when it has to. A relay that
+is **rate limiting** this endpoint is the one problem nothing else shows:
+the status still reads `relayed`, the peer is still there, nothing fails,
+and requests just crawl. When it happens, both commands say so — under the
+status line it contradicts:
+
+```
+status: relayed
+relay:  rate limiting this endpoint — 1 of 3 relay connections throttled
+```
+
+The count is a running total for this endpoint and only ever climbs, so the
+line is printed when the number moves and not again while it holds. A pipe
+no relay has throttled prints nothing extra, which is nearly every pipe. If
+you keep seeing it, `--relay <URL>` is the answer — it is then your own
+relay's capacity in question rather than a public one's.
+
 Embedding the library? It emits [`tracing`](https://docs.rs/tracing) events
 and installs no subscriber, so they go wherever your binary already sends
 them, and nowhere if it sends them nowhere. For a status page rather than

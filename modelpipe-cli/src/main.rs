@@ -236,7 +236,7 @@ async fn main() -> anyhow::Result<()> {
             if !no_qr && let Some(code) = qr(&ticket) {
                 println!("\n{code}");
             }
-            park(&mut handle, &mut interrupt).await?;
+            park(&mut handle, &mut interrupt, &mut std::io::stderr()).await?;
             shut_down(handle.shutdown(), &mut interrupt).await;
         }
         Command::Connect {
@@ -274,7 +274,7 @@ async fn main() -> anyhow::Result<()> {
             eprintln!("reaching the serve side…");
             first_contact(&mut handle, FIRST_CONTACT).await?;
             println!("{}", handle.base_url());
-            park(&mut handle, &mut interrupt).await?;
+            park(&mut handle, &mut interrupt, &mut std::io::stderr()).await?;
             shut_down(handle.shutdown(), &mut interrupt).await;
         }
     }
