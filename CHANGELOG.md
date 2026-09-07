@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- *(api)* the accessors an embedder needs ([#51](https://github.com/mmogr/modelpipe/pull/51))
+- *(peer)* the path a live connection takes is followed, not sampled once ([#50](https://github.com/mmogr/modelpipe/pull/50))
 - *(status)* say why a pipe closed, not only that it did ([#47](https://github.com/mmogr/modelpipe/pull/47))
 - *(connect)* return with the listener up and dial behind the handle ([#46](https://github.com/mmogr/modelpipe/pull/46))
 
