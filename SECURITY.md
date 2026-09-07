@@ -86,6 +86,14 @@ resolves to nobody even though the key is intact — so this flag and the
 disclosure about what iroh contacts are the same subject, and turning the
 second off takes the first with it. `README.md` records the measurement.
 
+**A ticket also says where that machine is.** The addresses beside the key
+are this machine's **private LAN address** and — once the endpoint has
+reached a relay — the **public address that relay saw the connection come
+from**, which is the larger disclosure of the two, and anyone holding the
+ticket reads both. That is a disclosure to weigh rather than a filter to
+add: those addresses *are* the direct path, so removing them would put every
+holder on a relay, and the "relay metadata" entry below is what that costs.
+
 **A malicious connect side.** Anyone you give a ticket and token to has the
 access above. There is no per-client scoping, quota or audit.
 

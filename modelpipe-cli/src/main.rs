@@ -16,6 +16,17 @@ use cli::{Cli, Command};
 use interrupt::Interrupt;
 use park::{FIRST_CONTACT, first_contact, park, shut_down};
 
+/// How long `serve` lets the endpoint look for a relay before minting the
+/// ticket.
+///
+/// The ticket is printed once and carried to another machine by hand, so it
+/// is worth a few seconds to find the relay first. Ten of them is what iroh
+/// recommends waiting on a network report; running out is not an error, and
+/// the library says nothing when it does. Named rather than written inline
+/// because [`undialable`] quotes it, and a refusal that says how long this
+/// waited must not be able to disagree with how long it waited.
+const WAIT_ONLINE: Duration = Duration::from_secs(10);
+
 /// Which credential policy a set of flags asks for.
 ///
 /// Extracted rather than left inline so it can be tested: `conflicts_with`
@@ -76,6 +87,53 @@ fn token_line(supplied: bool, token: Option<String>) -> Option<String> {
         "token:  (supplied)".to_owned()
     } else {
         format!("token:  {token}")
+    })
+}
+
+/// Why this ticket must not be printed, or `None` when it names somewhere a
+/// holder could dial.
+///
+/// **Refused rather than printed with a warning beside it.** A ticket
+/// carrying no addresses is not a weak ticket, it is an empty one: `connect`
+/// has nothing to dial, so its holder gets `PeerUnreachable`, whose stock
+/// explanation — off, offline, or its ticket replaced — names none of the
+/// real causes. Print it and that failure surfaces on the *other* machine,
+/// after the string has been scanned or pasted, with every piece of evidence
+/// left behind on this one.
+///
+/// Being wrong costs differently in each direction, which is what settles
+/// it. Refusing a listener whose relay was merely slower than
+/// [`WAIT_ONLINE`] costs a re-run, and the re-run mints a better ticket;
+/// printing one costs somebody else an afternoon on the wrong machine.
+/// Keeping this string buys nothing either way — it never becomes dialable,
+/// because a ticket minted once the relay is up carries the relay.
+///
+/// **The ticket's own address list is the test**, not the flag that usually
+/// empties it. `--relay-only` clears every IP transport, so it is the one
+/// switch under which an unreachable relay leaves nothing at all — but a
+/// machine with no usable interface reaches the same ticket without it, and
+/// a listener nobody can dial is the same refusal either way. The network
+/// counters cannot stand in: iroh probes a relay before dialling it, so an
+/// unreachable one starts no relay actor and moves nothing, which is why
+/// `network_tests` reads zeros from an endpoint pointed at one.
+fn undialable(ticket: &Ticket, relay_only: bool) -> Option<String> {
+    if !ticket.relay_urls().is_empty() || !ticket.direct_addrs().is_empty() {
+        return None;
+    }
+    let secs = WAIT_ONLINE.as_secs();
+    Some(if relay_only {
+        format!(
+            "the ticket names nowhere, so nothing could dial it: --relay-only removed \
+             every direct address and this endpoint reached no relay in {secs}s. Check \
+             this machine's route to a relay (--relay <URL> names your own), or drop \
+             --relay-only and pair over the LAN."
+        )
+    } else {
+        format!(
+            "the ticket names nowhere, so nothing could dial it: this endpoint reached \
+             no relay in {secs}s and found no address of its own either. Check this \
+             machine's network."
+        )
     })
 }
 
@@ -140,18 +198,21 @@ async fn main() -> anyhow::Result<()> {
             opts.port_mapping = !no_portmap;
             opts.discovery = !no_discovery;
             opts.relay_only = relay_only;
-            // The ticket below is printed once and carried to another
-            // machine by hand, so it is worth a few seconds to let the
-            // endpoint find its relay first. Ten of them is what iroh
-            // recommends waiting on a network report; running out is not an
-            // error, and `serve` says nothing when it does.
-            opts.wait_online = Some(Duration::from_secs(10));
+            opts.wait_online = Some(WAIT_ONLINE);
 
             // To stderr, and before the wait rather than after it, so a
             // terminal that is about to sit still for a moment says why.
             eprintln!("finding a relay…");
             let mut handle = modelpipe::serve(&backend_url, opts).await?;
             let ticket = handle.ticket();
+            // Between minting the ticket and printing it, which is the only
+            // place the check is worth anything: a person who reads the
+            // refusal here is a person who has not yet carried an empty
+            // ticket to another machine.
+            if let Some(refusal) = undialable(&ticket, relay_only) {
+                handle.shutdown().await;
+                anyhow::bail!("{refusal}");
+            }
             println!("ticket: {ticket}");
             match token_line(supplied, handle.token()) {
                 // Two lines, two credentials: the ticket and the token

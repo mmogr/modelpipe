@@ -70,9 +70,13 @@ impl Ticket {
     /// than through any of these.
     ///
     /// Worth knowing before printing one: these include the machine's
-    /// **private LAN addresses**, and anyone holding the ticket can read
-    /// them. That is a disclosure to weigh rather than a defect to fix —
-    /// filtering them out would break the LAN fast path they exist for.
+    /// **private LAN addresses** and, once the endpoint has reached a relay,
+    /// the **public address that relay saw the connection come from** —
+    /// which is the larger disclosure of the two, and anyone holding the
+    /// ticket reads both. That is a disclosure to weigh rather than a defect
+    /// to fix: filtering either out would break the direct paths they exist
+    /// for and leave the holder on a relay. `SECURITY.md` and the README say
+    /// so too, for the reader who never looks this accessor up.
     ///
     /// `SocketAddr` rather than the crate's own type because there is
     /// nothing to add to `std`'s: an IPv6 address here carries no zone id
