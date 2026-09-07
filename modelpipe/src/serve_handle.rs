@@ -104,11 +104,14 @@ impl ServeHandle {
     /// into a running listener. When serving open, this turns auth *on*
     /// from this call forward.
     ///
-    /// Single-token by design: there is no dual-accept window where old
-    /// and new both pass, so rolling a replacement out to several clients
-    /// necessarily races their reconfiguration — plan rotations
-    /// accordingly. The credential gates request *admission*, not
-    /// delivery: a request that passed auth before the call runs to
+    /// Single-token: this call leaves no dual-accept window where old and
+    /// new both pass, so rolling a replacement out to several clients
+    /// necessarily races their reconfiguration.
+    /// [`set_token_with_grace`](Self::set_token_with_grace) is the form
+    /// that buys time for that rollout, and calling *this* one during such
+    /// a window shuts it — a rotation that says nothing about grace is a
+    /// rotation that wants none. The credential gates request *admission*,
+    /// not delivery: a request that passed auth before the call runs to
     /// completion (a streaming response is not cut mid-body).
     ///
     /// # Errors

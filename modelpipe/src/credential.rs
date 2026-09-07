@@ -18,13 +18,10 @@ use std::time::Duration;
 use subtle::ConstantTimeEq;
 
 use crate::ServeError;
-use crate::base32;
 use crate::grant::Grants;
+use crate::minting::{mint, presentable};
+use crate::superseded::Superseded;
 use crate::token_policy::TokenPolicy;
-
-/// Bytes of entropy in a generated token: 256 bits, which is not a number
-/// anyone needs to reason about again.
-const MINTED_ENTROPY_BYTES: usize = 32;
 
 /// The scheme, with its trailing space, as it appears in the header.
 const BEARER_PREFIX: &str = "Bearer ";
@@ -40,6 +37,10 @@ pub(crate) struct Credential {
     /// token has failed to match, so nothing here can widen what the
     /// primary admits — only add a single, expiring exception to it.
     grants: Grants,
+    /// The key a graced rotation replaced, until its window closes.
+    /// Consulted after the enforced token for the reason `grants` is, and
+    /// *before* `grants` because this check spends nothing.
+    superseded: Superseded,
 }
 
 /// The token a listener enforces.
@@ -75,6 +76,7 @@ impl Credential {
         let cell = Self {
             enforced: RwLock::new(token.clone().map(Enforced::new)),
             grants: Grants::new(),
+            superseded: Superseded::new(),
         };
         Ok((cell, token))
     }
@@ -85,12 +87,15 @@ impl Credential {
     /// carrying an empty value only in that neither is ever accepted while
     /// a credential is enforced.
     ///
-    /// The comparison is constant-time in the **token**, via `subtle`. Two
-    /// things deliberately are not, and both are public parameters of the
-    /// system rather than secrets: the length, so an unequal-length value is
-    /// rejected without comparing (the alternative is a padded buffer for no
-    /// gain), and the scheme, which is a fixed seven-byte string every
-    /// client sends in the clear.
+    /// The comparison is constant-time in the **token**, via `subtle`, and
+    /// so is the grace window's. What deliberately is not, in every case
+    /// because it is a public parameter of the system rather than a secret:
+    /// the length, so an unequal-length value is rejected without comparing
+    /// (the alternative is a padded buffer for no gain); the scheme, which
+    /// is a fixed seven-byte string every client sends in the clear; and
+    /// *which* of the three credentials below admitted, which follows from
+    /// the short-circuiting order and tells an attacker nothing the 200 has
+    /// not already told them.
     ///
     /// The scheme is matched case-insensitively because RFC 9110 §11.1 says
     /// it is: `auth-scheme` is a token, and token comparison is
@@ -128,9 +133,12 @@ impl Credential {
         if expected.len() == presented.len() && bool::from(expected.ct_eq(presented)) {
             return true;
         }
-        // Not the token. A grant is the one other thing it could be, and
-        // presenting it spends it.
-        self.grants.consume(presented)
+        // Not the token. Two other things it could be, and the order is
+        // load-bearing: the key a graced rotation replaced spends nothing
+        // and so is asked first; a grant, which presenting *does* spend,
+        // only after. Reversed, a value that is both would burn its one
+        // admission on a request the open window admits for free.
+        self.superseded.admits(presented) || self.grants.consume(presented)
     }
 
     /// Admit one request bearing `token` before `ttl` elapses, without
@@ -161,10 +169,58 @@ impl Credential {
     /// keeping the credential already in force — installing it would take a
     /// working listener down to one that answers nothing.
     pub(crate) fn set(&self, token: String) -> bool {
+        self.install(token, None)
+    }
+
+    /// [`set`](Self::set), keeping the key it replaced admitting until
+    /// `grace` elapses. See [`Superseded::hold`] for what a second
+    /// rotation inside that window does, which `grace` values hold nothing
+    /// at all, and why.
+    pub(crate) fn set_with_grace(&self, token: String, grace: Duration) -> bool {
+        self.install(token, Some(grace))
+    }
+
+    /// The one place the enforced cell is written.
+    ///
+    /// `grace` is `Some` only for a rotation asked to leave an overlap
+    /// behind. Everything else releases the window instead — a plain
+    /// [`set`](Self::set), which is how "the old value stops working
+    /// immediately" stays true even when one is called mid-window, and a
+    /// rotation onto a listener that was serving open, which has no key to
+    /// leave behind in the first place.
+    ///
+    /// A refused token returns before either lock is taken, so an open
+    /// window is left exactly as it was — neither shut nor extended. That
+    /// is the right behaviour (a rotation that did not happen must not
+    /// change what admits) and it is the one the callers above have to
+    /// document, because "nothing changed" reads to an operator as "no old
+    /// key is admitting" and mid-window those are different claims.
+    ///
+    /// The old key is held *before* the new one is enforced, and both
+    /// happen under the enforced write lock, so the **stored state** is
+    /// never a gap: at every instant a reader could observe it, one of the
+    /// two values is admitting. That is the only place these two locks
+    /// nest, and this is the order.
+    ///
+    /// It does not follow — and is not claimed — that no request can be
+    /// refused during a rotation. [`admits`](Self::admits) reads the two
+    /// credentials under two separate locks, releasing the first before
+    /// taking the second, precisely so a rotation is never held up behind
+    /// an in-flight request. A rotation landing between those two reads can
+    /// refuse a value that admitted before it and admits after it. That is
+    /// fail-closed, it is the snapshot race `admits` has always run, and
+    /// the honest guarantee is about the state rather than about every
+    /// request that races it.
+    fn install(&self, token: String, grace: Option<Duration>) -> bool {
         if !presentable(&token) {
             return false;
         }
-        *self.write() = Some(Enforced::new(token));
+        let mut enforced = self.write();
+        match (grace, enforced.as_ref()) {
+            (Some(grace), Some(old)) => self.superseded.hold(old.token.clone(), grace),
+            _ => self.superseded.release(),
+        }
+        *enforced = Some(Enforced::new(token));
         true
     }
 
@@ -203,7 +259,8 @@ impl Credential {
 impl fmt::Debug for Credential {
     /// Reports only whether a credential is enforced, never which one — the
     /// same rule `Debug for TokenPolicy` follows one screen up. Grants are
-    /// counted, not shown, for the same reason.
+    /// counted and a grace window is reported open or shut, for the same
+    /// reason: state, never secrets.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let state = if self.read().is_some() {
             "enforced"
@@ -216,6 +273,7 @@ impl fmt::Debug for Credential {
         f.debug_struct("Credential")
             .field("state", &state)
             .field("grants", &self.grants.count())
+            .field("grace", &self.superseded.is_open())
             .finish_non_exhaustive()
     }
 }
@@ -224,31 +282,6 @@ impl Enforced {
     fn new(token: String) -> Arc<Self> {
         Arc::new(Self { token })
     }
-}
-
-/// Whether a token is one a client could actually send.
-///
-/// The check is deliberately only "not empty after trimming". Anything more
-/// — a byte-set rule, a minimum length — is a policy this crate has no
-/// standing to impose on an embedder's existing API key. What it does have
-/// standing to refuse is a value that makes the listener unusable.
-fn presentable(token: &str) -> bool {
-    !token.trim().is_empty()
-}
-
-/// A fresh token from the operating system's CSPRNG.
-///
-/// Base32 of 256 random bits, reusing the ticket's alphabet rather than
-/// inventing a second one: it has no characters a person can confuse when
-/// reading a token off a screen, it survives a shell without quoting, and it
-/// is already a header-safe subset of ASCII.
-fn mint() -> String {
-    let mut bytes = [0u8; MINTED_ENTROPY_BYTES];
-    // A CSPRNG that cannot produce bytes is not a condition to paper over
-    // with a weaker source: serving with a guessable credential would be
-    // worse than not serving.
-    getrandom::fill(&mut bytes).expect("the OS CSPRNG must be available");
-    base32::encode(&bytes)
 }
 
 #[cfg(test)]

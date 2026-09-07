@@ -19,6 +19,7 @@
 //! export what it says it exports, in the shapes it says?
 
 use std::error::Error;
+use std::time::Duration;
 
 use modelpipe::{
     CloseReason, ConnectError, ConnectHandle, ConnectOptions, NetworkMetrics, PeerView, PipeStatus,
@@ -318,6 +319,43 @@ fn a_dependent_cannot_ignore_a_rotation_that_was_refused() {
         refused.to_string().contains("empty"),
         "and it says which value it means: {refused}"
     );
+}
+
+/// The graced rotation is reachable from outside, reports refusal the same
+/// way, and takes its window as a plain `Duration`.
+///
+/// A signature test: `set_token` is frozen, and this lands beside it rather
+/// than replacing it, so a dependent must be able to name both. The
+/// `Duration` is `std`'s and not a newtype of this crate's — an embedder
+/// reads a rollout window out of its own config as a number of seconds, and
+/// should not have to learn a type to pass it.
+#[test]
+fn a_dependent_can_rotate_with_an_overlap_and_still_cannot_ignore_a_refusal() {
+    // Declared before the first statement: an item after one is a clippy
+    // error, and both of these are items.
+    fn roll(handle: &ServeHandle, next: String, window: Duration) -> Result<(), ServeError> {
+        // The `?` is the point: this does not compile against a `()`.
+        handle.set_token_with_grace(next, window)?;
+        Ok(())
+    }
+    // Ending an overlap early is the plain rotation, unchanged — which is
+    // what makes this addition free for every existing caller.
+    fn cut_short(handle: &ServeHandle, current: String) -> Result<(), ServeError> {
+        handle.set_token(current)?;
+        Ok(())
+    }
+    // Named so they cannot be dropped as dead code, and never called:
+    // there is no live listener here, and the promise is the type.
+    let _ = roll;
+    let _ = cut_short;
+
+    // The refusal is the same variant `set_token` produces, so a dependent
+    // whose config value came back blank needs one arm and not two — and
+    // the message names the value it means, because a rotation that failed
+    // is a rotation the operator has to be able to act on.
+    let refused = ServeError::InvalidToken;
+    assert!(!refused.is_retryable(), "a blank credential does not ripen");
+    assert!(refused.to_string().contains("empty"), "{refused}");
 }
 
 /// The accessor a language binding watches on, in the shape a binding uses

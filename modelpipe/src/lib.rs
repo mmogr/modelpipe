@@ -70,6 +70,7 @@ mod identity;
 mod lifecycle;
 mod listener;
 mod locality;
+mod minting;
 mod outcome;
 mod path_watch;
 mod peer;
@@ -77,6 +78,7 @@ mod peers;
 mod refusal;
 mod request_body;
 mod status;
+mod superseded;
 mod ticket;
 mod ticket_addr;
 #[cfg(feature = "serde")]
@@ -92,6 +94,7 @@ mod connect_handle;
 mod network;
 mod serve;
 mod serve_error;
+mod serve_grace;
 mod serve_handle;
 mod serve_status;
 
