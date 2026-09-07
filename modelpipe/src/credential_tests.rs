@@ -132,9 +132,11 @@ fn set_refuses_the_old_credential_immediately() {
     assert_eq!(cell.token().as_deref(), Some("sk-zzq-the-replacement"));
 }
 
-/// Single-token by design: there is no dual-accept window where both the
-/// old and the new value pass, which is what makes rolling a replacement
-/// out to several clients race their reconfiguration.
+/// A plain `set` leaves no dual-accept window where both the old and the new
+/// value pass, which is what makes rolling a replacement out to several
+/// clients race their reconfiguration. `set_with_grace` is the form that does
+/// open one, and `superseded_tests.rs` is where that is asserted — this test
+/// is about the setter that deliberately does not.
 #[test]
 fn there_is_no_window_where_both_credentials_pass() {
     let cell = enforcing(TOKEN);
