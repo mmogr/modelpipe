@@ -7,16 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Added
-
-- *(api)* the accessors an embedder needs ([#51](https://github.com/mmogr/modelpipe/pull/51))
-- *(peer)* the path a live connection takes is followed, not sampled once ([#50](https://github.com/mmogr/modelpipe/pull/50))
-
 ## [0.3.0](https://github.com/mmogr/modelpipe/compare/v0.2.0...v0.3.0) - 2026-09-06
 
 Cut at `4cf01ee`. #50 and #51 merged after that commit and are **not** in the
-published crate — they are listed under Unreleased above, and ship in the next
-release.
+published crate — they ship in 0.4.0.
 
 ### Added
 
