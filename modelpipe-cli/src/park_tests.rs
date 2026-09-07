@@ -95,9 +95,17 @@ fn quiet() -> Interrupt {
 }
 
 /// Run [`park`] over a script and return everything it printed.
-async fn parked(status: Scripted) -> String {
+///
+/// `&mut status`, not `status`, so this drives the impl `main.rs` drives.
+/// Both call sites there are `park(&mut handle, …)`, which reaches every
+/// method through `impl<T: AsyncStatus> AsyncStatus for &mut T`; taking
+/// `Scripted` by value left that blanket impl with no coverage at all, and
+/// replacing its `metrics` body with `NetworkMetrics::default()` — which
+/// makes this whole feature print nothing in production — kept all 419
+/// tests green.
+async fn parked(mut status: Scripted) -> String {
     let mut out = Vec::new();
-    park(status, &mut quiet(), &mut out)
+    park(&mut status, &mut quiet(), &mut out)
         .await
         .expect("a script that closes must end the park cleanly");
     String::from_utf8(out).expect("the CLI writes text")
