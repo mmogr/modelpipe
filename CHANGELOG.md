@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0](https://github.com/mmogr/modelpipe/compare/v0.3.0...v0.4.0) - 2026-09-07
+
+### Added
+
+- *(serve)* a rotated key honours the one it replaced, briefly ([#56](https://github.com/mmogr/modelpipe/pull/56))
+- *(cli)* the CLI says when the relay is rate limiting this endpoint ([#55](https://github.com/mmogr/modelpipe/pull/55))
+- *(api)* the accessors an embedder needs ([#51](https://github.com/mmogr/modelpipe/pull/51))
+- *(peer)* the path a live connection takes is followed, not sampled once ([#50](https://github.com/mmogr/modelpipe/pull/50))
+
+### Fixed
+
+- *(cli)* a ticket that names nowhere is refused rather than printed ([#53](https://github.com/mmogr/modelpipe/pull/53))
+
 ## [0.3.0](https://github.com/mmogr/modelpipe/compare/v0.2.0...v0.3.0) - 2026-09-06
 
 Cut at `4cf01ee`. #50 and #51 merged after that commit and are **not** in the
