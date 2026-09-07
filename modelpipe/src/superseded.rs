@@ -53,8 +53,11 @@ impl Superseded {
     ///
     /// **Windows do not chain.** A second rotation inside an open window
     /// retires the key the first one was protecting rather than adding to
-    /// a set, so at most two values ever admit: what is enforced, and the
-    /// one thing that directly replaced. Three reasons, heaviest first.
+    /// a set, so this slot holds one key and never a growing set: what is
+    /// enforced, plus the one thing it directly replaced. (A live
+    /// [`grant`](crate::grant) is a third credential with its own
+    /// lifetime, and is not what this bounds.) Three reasons, heaviest
+    /// first.
     ///
     /// 1. Chaining would make *how many credentials does this listener
     ///    accept* a function of how often the embedder happened to rotate.
@@ -65,17 +68,35 @@ impl Superseded {
     ///    current one; a machine two rotations behind has slept through a
     ///    whole rollout, and a window wide enough to cover it hides that
     ///    rather than fixing it.
-    /// 3. Rotating twice in quick succession is the emergency path — the
-    ///    replacement itself leaked. Chaining would keep the *first*
-    ///    leaked key admitting for the whole of its original grace,
-    ///    which is precisely backwards.
+    /// 3. It bounds what a *rushed* sequence leaves behind. Rotating again
+    ///    inside an open window is what an operator does on discovering
+    ///    the last rotation was not enough, and chaining would leave every
+    ///    key in that sequence admitting at once. One slot leaves one.
+    ///    Note this is a bound and not a rescue: the key most recently
+    ///    replaced still admits for the grace just given it, so a rotation
+    ///    away from a *leaked* key wants no grace at all — see
+    ///    [`ServeHandle::set_token_with_grace`](crate::ServeHandle::set_token_with_grace).
     ///
-    /// A `grace` of zero holds a key that has already expired, which is
-    /// indistinguishable from holding nothing — the boundary falls on the
-    /// safe side rather than admitting one last request.
+    /// Two `grace` values hold nothing rather than something, and both
+    /// fail closed:
+    ///
+    /// - Zero, which would be a key that has already expired. Storing it
+    ///   would park a retired secret that nothing sweeps until the next
+    ///   request, which is what the sweep in [`admits`](Self::admits)
+    ///   exists to prevent; the boundary belongs on the safe side anyway.
+    /// - Anything so large the clock cannot represent the deadline —
+    ///   [`Duration::MAX`] is the obvious way to write "no expiry", and an
+    ///   unwrapped config parse is the accidental way. `Instant + Duration`
+    ///   **panics** on overflow, and this runs inside the enforced write
+    ///   lock, so a panic here would abandon the rotation mid-flight and
+    ///   poison that lock. Refusing to hold anything is the fail-closed
+    ///   reading of a window nobody could have meant.
     pub(crate) fn hold(&self, token: String, grace: Duration) {
-        let expires = Instant::now() + grace;
-        *self.lock() = Some(Held { token, expires });
+        let now = Instant::now();
+        *self.lock() = match now.checked_add(grace) {
+            Some(expires) if expires > now => Some(Held { token, expires }),
+            _ => None,
+        };
     }
 
     /// Stop honouring whatever was held, now.
@@ -91,9 +112,12 @@ impl Superseded {
     /// being second.
     ///
     /// An expired key is *dropped* here, not merely refused. There is no
-    /// timer — sweeping on this path is what makes a listener nobody talks
-    /// to stop holding a retired secret in memory, rather than keeping it
-    /// alive on the strength of never being asked.
+    /// timer — sweeping on this path is what makes a listener stop
+    /// referencing a retired secret rather than keeping it alive on the
+    /// strength of never being asked. Dropped, not scrubbed: the `String`
+    /// returns to the allocator with its bytes intact, and this crate does
+    /// not zeroize (see
+    /// [`ServeHandle::token`](crate::ServeHandle::token)).
     ///
     /// The comparison is constant-time in the token, the same rule the
     /// primary credential keeps. Whether a window is open at all is not,
@@ -123,9 +147,11 @@ impl Superseded {
     }
 
     // A poisoned lock cannot happen here: nothing panics while holding it —
-    // the only operations are a comparison and a store. Recovering the
-    // guard rather than propagating is the honest response to an impossible
-    // case, and matches what `credential` and `grant` do with theirs.
+    // the only operations are a comparison and a store, and `hold` computes
+    // its deadline with `checked_add` before taking the lock precisely so
+    // that stays true. Recovering the guard rather than propagating is the
+    // honest response to an impossible case, and matches what `credential`
+    // and `grant` do with theirs.
     fn lock(&self) -> MutexGuard<'_, Option<Held>> {
         self.held.lock().unwrap_or_else(PoisonError::into_inner)
     }

@@ -433,15 +433,52 @@ fn the_replaced_key_admits_every_machine_not_just_the_first() {
 
 /// The window closes on its own. Without this the method would be a way to
 /// quietly accumulate standing credentials.
+///
+/// A real deadline rather than `ZERO`, so this pins the *expiry* and not
+/// merely the refusal to hold a zero-width window.
 #[test]
 fn the_replaced_key_stops_admitting_once_the_grace_passes() {
     let cell = enforcing(TOKEN);
-    cell.set_with_grace(NEXT.to_owned(), std::time::Duration::ZERO);
+    cell.set_with_grace(NEXT.to_owned(), std::time::Duration::from_millis(1));
+    std::thread::sleep(std::time::Duration::from_millis(20));
     assert!(
         !offers(&cell, Some(&format!("Bearer {TOKEN}"))),
-        "a window of no width must not admit"
+        "the window closed and the replaced key is still admitting"
     );
     assert!(offers(&cell, Some(&format!("Bearer {NEXT}"))));
+}
+
+/// A rotation asked for no window at all leaves none, and does not park an
+/// already-expired key waiting for something to sweep it.
+#[test]
+fn a_graced_rotation_with_no_grace_is_exactly_a_plain_one() {
+    let cell = enforcing(TOKEN);
+    cell.set_with_grace(NEXT.to_owned(), std::time::Duration::ZERO);
+    assert!(!offers(&cell, Some(&format!("Bearer {TOKEN}"))));
+    assert!(offers(&cell, Some(&format!("Bearer {NEXT}"))));
+    let rendered = format!("{cell:?}");
+    assert!(
+        rendered.contains("grace: false"),
+        "a zero window must not read as open: {rendered}"
+    );
+}
+
+/// A `Duration` the clock cannot add fails closed instead of panicking
+/// inside the enforced write lock — which would abandon the rotation and
+/// poison the lock every later request reads through.
+#[test]
+fn an_absurd_grace_does_not_panic_or_leave_a_standing_second_key() {
+    let cell = enforcing(TOKEN);
+    assert!(cell.set_with_grace(NEXT.to_owned(), std::time::Duration::MAX));
+    assert!(
+        !offers(&cell, Some(&format!("Bearer {TOKEN}"))),
+        "Duration::MAX must not become a permanent second credential"
+    );
+    assert!(
+        offers(&cell, Some(&format!("Bearer {NEXT}"))),
+        "and the rotation itself must still have happened"
+    );
+    assert_eq!(cell.token().as_deref(), Some(NEXT));
 }
 
 /// `set` is untouched by any of this: it leaves no window, which is the
@@ -511,6 +548,25 @@ fn an_unpresentable_graced_rotation_changes_nothing() {
         rendered.contains("grace: false"),
         "and no window was opened: {rendered}"
     );
+}
+
+/// A refused rotation leaves an *open* window exactly as it was — neither
+/// shut nor extended. The behaviour is right (a rotation that did not
+/// happen must not change what admits) and it is why the public method's
+/// `# Errors` section has to say so: mid-window, "nothing changed" and "no
+/// old key is admitting" are different claims, and only the first is true.
+#[test]
+fn a_refused_rotation_neither_shuts_nor_extends_an_open_window() {
+    let cell = enforcing(TOKEN);
+    cell.set_with_grace(NEXT.to_owned(), LONG);
+    assert!(offers(&cell, Some(&format!("Bearer {TOKEN}"))));
+
+    assert!(!cell.set_with_grace(String::new(), LONG), "refused");
+    assert!(
+        offers(&cell, Some(&format!("Bearer {TOKEN}"))),
+        "the window a refused call did not touch must still be open"
+    );
+    assert_eq!(cell.token().as_deref(), Some(NEXT), "and nothing rotated");
 }
 
 /// Serving open has no key to leave behind, so a graced rotation onto one

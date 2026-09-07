@@ -70,15 +70,36 @@ fn every_near_miss_is_still_refused() {
 
 // ── The deadline ─────────────────────────────────────────────────────────
 
-/// A window of no width is a window that was never open. The boundary
-/// falls on the safe side: the deadline is *reached*, not passed, so no
-/// last request slips through.
+/// A window of no width is a window that was never open — and the key is
+/// not parked already-expired either, because nothing would sweep it on a
+/// listener that is never asked again.
 #[test]
-fn a_key_held_for_no_time_at_all_never_admits() {
+fn a_key_held_for_no_time_at_all_is_not_held_at_all() {
     let window = Superseded::new();
     window.hold(OLD.to_owned(), Duration::ZERO);
     assert!(!window.admits(OLD.as_bytes()));
     assert!(!window.is_open());
+    assert!(
+        window.lock().is_none(),
+        "a zero window must drop the key rather than park a dead secret"
+    );
+}
+
+/// `Instant + Duration` panics on overflow, and `grace` arrives from a
+/// public method's caller. `Duration::MAX` is how somebody writes "never
+/// expire" — it must fail closed, not take the process down, and above all
+/// not panic inside the enforced write lock and poison it.
+#[test]
+fn a_grace_the_clock_cannot_represent_holds_nothing_rather_than_panicking() {
+    for absurd in [Duration::MAX, Duration::from_secs(u64::MAX / 2)] {
+        let window = Superseded::new();
+        window.hold(OLD.to_owned(), absurd);
+        assert!(
+            !window.admits(OLD.as_bytes()),
+            "{absurd:?} must not become a permanent second credential"
+        );
+        assert!(window.lock().is_none());
+    }
 }
 
 /// The deadline is a real `Instant` comparison and not a special case for
@@ -96,15 +117,17 @@ fn a_key_outlives_its_window_by_the_clock() {
 
 /// Expired means *gone*, not merely refused. Asserted against the slot
 /// itself, because refusing is exactly what an implementation that kept
-/// the retired secret in memory forever would also do.
+/// the retired secret in memory forever would also do. A real deadline
+/// rather than `ZERO`, which is never stored in the first place.
 #[test]
 fn an_expired_key_is_dropped_rather_than_ignored() {
     let window = Superseded::new();
-    window.hold(OLD.to_owned(), Duration::ZERO);
+    window.hold(OLD.to_owned(), Duration::from_millis(1));
     assert!(
         window.lock().is_some(),
-        "the expired key is still occupying the slot before anything sweeps"
+        "the key occupies the slot while its window is open"
     );
+    std::thread::sleep(Duration::from_millis(20));
 
     assert!(!window.admits(OLD.as_bytes()));
     assert!(
@@ -118,7 +141,8 @@ fn an_expired_key_is_dropped_rather_than_ignored() {
 #[test]
 fn asking_whether_a_window_is_open_also_drops_an_expired_key() {
     let window = Superseded::new();
-    window.hold(OLD.to_owned(), Duration::ZERO);
+    window.hold(OLD.to_owned(), Duration::from_millis(1));
+    std::thread::sleep(Duration::from_millis(20));
     assert!(!window.is_open());
     assert!(window.lock().is_none());
 }
