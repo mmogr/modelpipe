@@ -103,9 +103,12 @@ fn quiet() -> Interrupt {
 /// replacing its `metrics` body with `NetworkMetrics::default()` — which
 /// makes this whole feature print nothing in production — kept all 419
 /// tests green.
+///
+/// [`park_to`] rather than [`park`] because the stream is [`park`]'s to
+/// choose and not a caller's; this is the only caller that supplies one.
 async fn parked(mut status: Scripted) -> String {
     let mut out = Vec::new();
-    park(&mut status, &mut quiet(), &mut out)
+    park_to(&mut status, &mut quiet(), &mut out)
         .await
         .expect("a script that closes must end the park cleanly");
     String::from_utf8(out).expect("the CLI writes text")

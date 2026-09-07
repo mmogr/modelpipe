@@ -50,13 +50,30 @@ pub(crate) const FIRST_CONTACT: Duration = Duration::from_secs(40);
 /// real: the connect side publishes its path before the first accept, and
 /// its `status:` line appeared in two runs out of three.
 ///
-/// `out` is `std::io::stderr()` in `main.rs` and a buffer in the tests,
-/// which is the whole reason it is a parameter: these lines are the CLI's
-/// only output while a pipe is live, and a macro that writes straight to
-/// the process's stderr cannot be asserted on. Everything the tests below
-/// pin — that a status is printed, that the relay's throttling is printed
-/// *under* it, and that it is printed once — was unreachable before.
+/// The stream is deliberately not a parameter of *this* function. README's
+/// output contract — "the first two lines are stdout, the rest is stderr",
+/// which is what makes `modelpipe serve … | head -1` a ticket — has to
+/// survive an edit by someone who has not read it, and `eprintln!` used to
+/// enforce that for free. [`park_to`] is private to this module, so the two
+/// `main.rs` call sites cannot pick a stream at all; the one place that
+/// names one is the line below, next to the paragraph saying why.
 pub(crate) async fn park(
+    status: impl AsyncStatus,
+    interrupt: &mut Interrupt,
+) -> anyhow::Result<()> {
+    park_to(status, interrupt, &mut std::io::stderr()).await
+}
+
+/// [`park`], with somewhere to write to. Only the tests supply it.
+///
+/// These lines are the CLI's only output while a pipe is live, and a macro
+/// writing straight to the process's stderr cannot be asserted on: while
+/// this was `eprintln!`, deleting a print, swapping two of them or dropping
+/// the low-water-mark update all left 419 tests green. Everything the tests
+/// below pin — that a status is printed, that the relay's throttling is
+/// printed *under* it, and that it is printed once — was unreachable
+/// before.
+async fn park_to(
     mut status: impl AsyncStatus,
     interrupt: &mut Interrupt,
     out: &mut impl Write,
