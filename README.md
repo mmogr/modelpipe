@@ -191,6 +191,26 @@ new path costs:
 2026-09-03T05:33:04.011927Z  INFO peer{peer=3ca82708b995 path="relayed"}: the path to the peer changed path="direct" rtt_ms=7
 ```
 
+There is one more line, and it appears only when it has to. A relay that
+is **rate limiting** this endpoint is the one problem nothing else shows:
+the status still reads `relayed`, the peer is still there, nothing fails,
+and requests just crawl. When it happens, both commands say so — under the
+status line it contradicts:
+
+```
+status: relayed
+relay:  rate limiting this endpoint — 1 of 3 relay connections throttled
+```
+
+The count is a running total for this endpoint and only ever climbs. The line
+is printed when the pipe is first parked and then at each status change, so a
+throttle that begins while the status holds steady is reported at the next
+transition rather than the moment it happens — the metric is read alongside the
+status, not on a clock of its own. A pipe no relay has throttled prints nothing
+extra, which is nearly every pipe. If you keep seeing it, `--relay <URL>` is the
+answer — it is then your own relay's capacity in question rather than a public
+one's.
+
 Embedding the library? It emits [`tracing`](https://docs.rs/tracing) events
 and installs no subscriber, so they go wherever your binary already sends
 them, and nowhere if it sends them nowhere. For a status page rather than
@@ -206,7 +226,7 @@ mobile client need and could not previously ask for:
 |---|---|
 | `status_changed_since(held)` | Everything after the value you last rendered — no transition coalesced away, and the sequence **ends** (`None`) once the pipe is closed, rather than repeating `Closed` for ever. `status_changed()` is unchanged and still snapshots at the call. |
 | `notify_network_change()` | Nothing — it *tells* the pipe the network moved and forces a rebind. Call it from an app's resume handler: on iOS and Android nothing else will, and a pipe bound to an interface that no longer exists cannot repair itself. |
-| `network_metrics()` | Relay connections made, failed, and **rate limited**. A throttled pipe is not a broken one — every other signal says it is fine — so this is the only place that distinction shows. |
+| `network_metrics()` | Relay connections made, failed, and **rate limited**. A throttled pipe is not a broken one — every other signal says it is fine — so this is where an embedder reads that distinction; the CLI reads it for you. |
 | `Ticket::relay_urls()` / `direct_addrs()` | What the ticket you are about to print actually carries. The relay is the half that arrives last, so a ticket read the instant `serve` returns can name direct addresses and nothing else; an empty `relay_urls()` is how you find out before somebody copies it. |
 
 ## What it contacts, and what it doesn't
