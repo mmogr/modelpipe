@@ -20,6 +20,7 @@ use subtle::ConstantTimeEq;
 use crate::ServeError;
 use crate::base32;
 use crate::grant::Grants;
+use crate::superseded::Superseded;
 use crate::token_policy::TokenPolicy;
 
 /// Bytes of entropy in a generated token: 256 bits, which is not a number
@@ -40,6 +41,10 @@ pub(crate) struct Credential {
     /// token has failed to match, so nothing here can widen what the
     /// primary admits — only add a single, expiring exception to it.
     grants: Grants,
+    /// The key a graced rotation replaced, until its window closes.
+    /// Consulted after the enforced token for the reason `grants` is, and
+    /// *before* `grants` because this check spends nothing.
+    superseded: Superseded,
 }
 
 /// The token a listener enforces.
@@ -75,6 +80,7 @@ impl Credential {
         let cell = Self {
             enforced: RwLock::new(token.clone().map(Enforced::new)),
             grants: Grants::new(),
+            superseded: Superseded::new(),
         };
         Ok((cell, token))
     }
@@ -128,9 +134,12 @@ impl Credential {
         if expected.len() == presented.len() && bool::from(expected.ct_eq(presented)) {
             return true;
         }
-        // Not the token. A grant is the one other thing it could be, and
-        // presenting it spends it.
-        self.grants.consume(presented)
+        // Not the token. Two other things it could be, and the order is
+        // load-bearing: the key a graced rotation replaced spends nothing
+        // and so is asked first; a grant, which presenting *does* spend,
+        // only after. Reversed, a value that is both would burn its one
+        // admission on a request the open window admits for free.
+        self.superseded.admits(presented) || self.grants.consume(presented)
     }
 
     /// Admit one request bearing `token` before `ttl` elapses, without
@@ -161,10 +170,39 @@ impl Credential {
     /// keeping the credential already in force — installing it would take a
     /// working listener down to one that answers nothing.
     pub(crate) fn set(&self, token: String) -> bool {
+        self.install(token, None)
+    }
+
+    /// [`set`](Self::set), keeping the key it replaced admitting until
+    /// `grace` elapses. See [`Superseded::hold`] for what a second
+    /// rotation inside that window does, and why.
+    pub(crate) fn set_with_grace(&self, token: String, grace: Duration) -> bool {
+        self.install(token, Some(grace))
+    }
+
+    /// The one place the enforced cell is written.
+    ///
+    /// `grace` is `Some` only for a rotation asked to leave an overlap
+    /// behind. Everything else releases the window instead — a plain
+    /// [`set`](Self::set), which is how "the old value stops working
+    /// immediately" stays true even when one is called mid-window, and a
+    /// rotation onto a listener that was serving open, which has no key to
+    /// leave behind in the first place.
+    ///
+    /// The old key is held *before* the new one is enforced, both under
+    /// the enforced write lock, so no request can fall between the two and
+    /// find neither value admitting. That is the only place these two
+    /// locks nest, and this is the order.
+    fn install(&self, token: String, grace: Option<Duration>) -> bool {
         if !presentable(&token) {
             return false;
         }
-        *self.write() = Some(Enforced::new(token));
+        let mut enforced = self.write();
+        match (grace, enforced.as_ref()) {
+            (Some(grace), Some(old)) => self.superseded.hold(old.token.clone(), grace),
+            _ => self.superseded.release(),
+        }
+        *enforced = Some(Enforced::new(token));
         true
     }
 
@@ -203,7 +241,8 @@ impl Credential {
 impl fmt::Debug for Credential {
     /// Reports only whether a credential is enforced, never which one — the
     /// same rule `Debug for TokenPolicy` follows one screen up. Grants are
-    /// counted, not shown, for the same reason.
+    /// counted and a grace window is reported open or shut, for the same
+    /// reason: state, never secrets.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let state = if self.read().is_some() {
             "enforced"
@@ -216,6 +255,7 @@ impl fmt::Debug for Credential {
         f.debug_struct("Credential")
             .field("state", &state)
             .field("grants", &self.grants.count())
+            .field("grace", &self.superseded.is_open())
             .finish_non_exhaustive()
     }
 }

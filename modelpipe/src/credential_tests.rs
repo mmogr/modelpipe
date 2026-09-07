@@ -405,3 +405,205 @@ fn the_token_is_still_matched_exactly() {
     assert!(!offers(&cell, Some(&format!("bearer{TOKEN}"))));
     assert!(!offers(&cell, Some(&format!("bearer\t{TOKEN}"))));
 }
+
+// ── The grace window ─────────────────────────────────────────────────────
+//
+// `Superseded` is exercised on its own in `superseded_tests.rs`; what these
+// assert is the *wiring* — that the key a graced rotation replaces reaches
+// the comparison, that a plain rotation still leaves no window at all, and
+// that the two new credentials do not interfere with the two that were
+// already here.
+
+const NEXT: &str = "sk-zzq-the-replacement";
+
+/// The whole point: after a graced rotation the key it replaced still
+/// admits, so a machine that has not been reconfigured yet is not refused
+/// at the edge.
+#[test]
+fn the_key_a_graced_rotation_replaced_keeps_admitting() {
+    let cell = enforcing(TOKEN);
+    assert!(cell.set_with_grace(NEXT.to_owned(), LONG));
+
+    assert!(
+        offers(&cell, Some(&format!("Bearer {TOKEN}"))),
+        "the replaced key must go on admitting inside the window"
+    );
+    assert!(
+        offers(&cell, Some(&format!("Bearer {NEXT}"))),
+        "and so must the new one"
+    );
+    assert_eq!(
+        cell.token().as_deref(),
+        Some(NEXT),
+        "while the enforced token is unambiguously the new one"
+    );
+}
+
+/// Not a grant. Several machines are holding the replaced key, so the
+/// second one to reconnect must not be refused for being second.
+#[test]
+fn the_replaced_key_admits_every_machine_not_just_the_first() {
+    let cell = enforcing(TOKEN);
+    cell.set_with_grace(NEXT.to_owned(), LONG);
+    let as_bearer = format!("Bearer {TOKEN}");
+    for machine in 1..=4 {
+        assert!(
+            offers(&cell, Some(&as_bearer)),
+            "machine {machine} was refused; the window is being spent like a grant"
+        );
+    }
+}
+
+/// The window closes on its own. Without this the method would be a way to
+/// quietly accumulate standing credentials.
+#[test]
+fn the_replaced_key_stops_admitting_once_the_grace_passes() {
+    let cell = enforcing(TOKEN);
+    cell.set_with_grace(NEXT.to_owned(), std::time::Duration::ZERO);
+    assert!(
+        !offers(&cell, Some(&format!("Bearer {TOKEN}"))),
+        "a window of no width must not admit"
+    );
+    assert!(offers(&cell, Some(&format!("Bearer {NEXT}"))));
+}
+
+/// `set` is untouched by any of this: it leaves no window, which is the
+/// contract every existing caller was written against.
+#[test]
+fn a_plain_rotation_still_leaves_no_window() {
+    let cell = enforcing(TOKEN);
+    cell.set(NEXT.to_owned());
+    assert!(!offers(&cell, Some(&format!("Bearer {TOKEN}"))));
+}
+
+/// And `set` *shuts* an open one, which is how an embedder ends an overlap
+/// early — and why calling it mid-window cannot leave a key admitting that
+/// its own doc promises is dead.
+#[test]
+fn a_plain_rotation_shuts_an_open_window() {
+    let cell = enforcing(TOKEN);
+    cell.set_with_grace(NEXT.to_owned(), LONG);
+    assert!(offers(&cell, Some(&format!("Bearer {TOKEN}"))));
+
+    cell.set("sk-zzq-the-third".to_owned());
+    assert!(
+        !offers(&cell, Some(&format!("Bearer {TOKEN}"))),
+        "the window was open and a plain rotation must close it"
+    );
+    assert!(
+        !offers(&cell, Some(&format!("Bearer {NEXT}"))),
+        "and the key it just replaced gets no window either"
+    );
+    assert!(offers(&cell, Some("Bearer sk-zzq-the-third")));
+}
+
+/// Windows do not chain: at most two values admit, ever.
+#[test]
+fn a_second_graced_rotation_retires_the_first_replaced_key() {
+    let cell = enforcing(TOKEN);
+    cell.set_with_grace(NEXT.to_owned(), LONG);
+    cell.set_with_grace("sk-zzq-the-third".to_owned(), LONG);
+
+    assert!(
+        !offers(&cell, Some(&format!("Bearer {TOKEN}"))),
+        "a key two rotations behind must not survive on the strength of the first window"
+    );
+    assert!(
+        offers(&cell, Some(&format!("Bearer {NEXT}"))),
+        "the key the newest rotation replaced is the one that is held"
+    );
+    assert!(offers(&cell, Some("Bearer sk-zzq-the-third")));
+}
+
+/// A refused rotation must not open a window either — an embedder told its
+/// rotation failed would otherwise still be running an overlap it never
+/// asked for.
+#[test]
+fn an_unpresentable_graced_rotation_changes_nothing() {
+    let cell = enforcing(TOKEN);
+    for blank in ["", " ", "\t\n"] {
+        assert!(
+            !cell.set_with_grace(blank.to_owned(), LONG),
+            "{blank:?} must not become the enforced token"
+        );
+    }
+    assert_eq!(cell.token().as_deref(), Some(TOKEN), "nothing was replaced");
+    assert!(offers(&cell, Some(&format!("Bearer {TOKEN}"))));
+    let rendered = format!("{cell:?}");
+    assert!(
+        rendered.contains("grace: false"),
+        "and no window was opened: {rendered}"
+    );
+}
+
+/// Serving open has no key to leave behind, so a graced rotation onto one
+/// is exactly `set`: auth turns on, and nothing is grandfathered.
+#[test]
+fn a_graced_rotation_onto_an_open_listener_holds_nothing() {
+    let (cell, _) = Credential::new(&TokenPolicy::InsecureNoAuth).expect("a usable policy");
+    assert!(offers(&cell, None), "open to begin with");
+
+    assert!(cell.set_with_grace(TOKEN.to_owned(), LONG));
+    assert!(!offers(&cell, None), "and closed afterwards");
+    assert!(!offers(&cell, Some("Bearer anything")));
+    assert!(offers(&cell, Some(&format!("Bearer {TOKEN}"))));
+}
+
+/// The window is consulted before grants, and that order is the whole
+/// reason this test exists: a value that is *both* an open window's key and
+/// a live grant must be admitted by the window, which spends nothing,
+/// leaving the grant's one admission still there to spend afterwards.
+#[test]
+fn a_key_the_window_already_admits_does_not_spend_a_grant() {
+    let cell = enforcing(TOKEN);
+    assert!(
+        cell.grant(TOKEN.to_owned(), LONG),
+        "the same value, granted"
+    );
+    cell.set_with_grace(NEXT.to_owned(), LONG);
+
+    let as_bearer = format!("Bearer {TOKEN}");
+    assert!(offers(&cell, Some(&as_bearer)), "admitted by the window");
+
+    // Shut the window. If the presentation above had been answered by the
+    // grant instead, there is nothing left here.
+    cell.set("sk-zzq-the-third".to_owned());
+    assert!(
+        offers(&cell, Some(&as_bearer)),
+        "the grant was spent by a request the window should have answered"
+    );
+    assert!(
+        !offers(&cell, Some(&as_bearer)),
+        "and now it really is spent"
+    );
+}
+
+/// A graced rotation neither spends nor extends a grant, the promise a
+/// plain rotation already makes.
+#[test]
+fn a_graced_rotation_does_not_disturb_a_live_grant() {
+    let cell = enforcing(TOKEN);
+    cell.grant(CODE.to_owned(), LONG);
+    cell.set_with_grace(NEXT.to_owned(), LONG);
+    assert!(offers(&cell, Some(&format!("Bearer {CODE}"))));
+}
+
+/// An open window is reported as open and never as the key it holds — the
+/// rule the token and the grants already follow.
+#[test]
+fn debug_says_a_window_is_open_and_never_which_key() {
+    let cell = enforcing(TOKEN);
+    let shut = format!("{cell:?}");
+    assert!(shut.contains("grace: false"), "shut to begin with: {shut}");
+
+    cell.set_with_grace(NEXT.to_owned(), LONG);
+    let open = format!("{cell:?}");
+    assert!(
+        !open.contains(TOKEN),
+        "the superseded key leaked into Debug: {open}"
+    );
+    assert!(
+        open.contains("grace: true"),
+        "but the state is legible: {open}"
+    );
+}

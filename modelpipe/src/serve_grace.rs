@@ -1,0 +1,99 @@
+//! Rotating the credential without un-pairing everything at once.
+//!
+//! The third `impl` block of [`ServeHandle`], split off for the reason
+//! `serve_status.rs` was: `serve_handle.rs` is close enough to the
+//! file-size budget that a method whose contract is longer than the method
+//! does not fit beside the others. The division is by question —
+//! `serve_handle.rs` answers *who may use this listener*, and this file
+//! answers *what becomes of the machines that were already using it* when
+//! that answer changes.
+
+use std::time::Duration;
+
+use crate::serve_error::ServeError;
+use crate::serve_handle::ServeHandle;
+
+impl ServeHandle {
+    /// [`set_token`](Self::set_token), except the key it replaces goes on
+    /// admitting until `grace` elapses.
+    ///
+    /// The rollout problem this exists for has no solution with one
+    /// credential. Several machines are paired and holding the current
+    /// key; the key has to change. Push the replacement in first and every
+    /// one of them is refused — `invalid or missing bearer token` at the
+    /// edge — until it is reconfigured. Reconfigure them first and they
+    /// present a value this listener does not yet enforce. There is no
+    /// third ordering, and the outage lasts as long as the slowest machine
+    /// takes to notice. `grace` is a window in which both values admit, so
+    /// the rollout has somewhere to happen.
+    ///
+    /// **This widens what the tunnel edge admits, and nothing beyond it.**
+    /// A request bearing the old key gets through this listener and then
+    /// meets whatever the backend behind it checks. If that backend reads
+    /// the same rotated key from the same store, it now expects the *new*
+    /// value and refuses the request a layer later — the window bought
+    /// nothing, and the failure just moved. A dual-accept rollout needs
+    /// both ends to hold two values at once; this is the end that belongs
+    /// to the tunnel.
+    ///
+    /// While the window is open **two values are the credential** for the
+    /// whole tunnel, exactly as [`grant_once`](Self::grant_once) says of a
+    /// live grant. Size `grace` by how long the rollout actually takes and
+    /// not by what is convenient — a window measured in hours is a second
+    /// standing key with a comment attached.
+    ///
+    /// Windows do not chain. A second call inside an open window retires
+    /// the key the first one was protecting, so at most two values ever
+    /// admit: what is enforced, and the one thing it directly replaced.
+    /// [`set_token`](Self::set_token) closes an open window outright, and
+    /// is the way to end an overlap early — a rotation that says nothing
+    /// about grace is a rotation that wants none.
+    ///
+    /// A `grace` of [`Duration::ZERO`] is [`set_token`](Self::set_token):
+    /// the window is shut before the call returns, so the boundary falls
+    /// on the safe side rather than admitting one last request. On a
+    /// listener that was serving open there is no key to hold, and this
+    /// turns authentication on exactly as `set_token` does.
+    ///
+    /// Not a replacement for [`rotate_token`](Self::rotate_token) on a
+    /// *leaked* key. There the whole point is that the old value dies now,
+    /// and any window is time an attacker still has.
+    ///
+    /// # Errors
+    ///
+    /// [`ServeError::InvalidToken`] if `token` is empty or nothing but
+    /// whitespace — the value [`set_token`](Self::set_token) refuses,
+    /// refused for the same reason. **Nothing changes**: what was in force
+    /// stays in force and no window opens, so a rotation that failed on a
+    /// blank config value has not quietly left an old key admitting.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn example(serving: &modelpipe::ServeHandle) -> Result<(), Box<dyn std::error::Error>> {
+    /// // Paired laptops keep working on the old key while they pick the
+    /// // new one up; after five minutes, only the new one admits.
+    /// serving.set_token_with_grace(
+    ///     std::env::var("MODELPIPE_TOKEN")?,
+    ///     std::time::Duration::from_mins(5),
+    /// )?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// Cutting a window short, because the rollout finished early:
+    ///
+    /// ```no_run
+    /// # fn example(serving: &modelpipe::ServeHandle, current: String) -> Result<(), modelpipe::ServeError> {
+    /// serving.set_token(current)?; // the previous key stops admitting here
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn set_token_with_grace(&self, token: String, grace: Duration) -> Result<(), ServeError> {
+        if self.state.credential.set_with_grace(token, grace) {
+            Ok(())
+        } else {
+            Err(ServeError::InvalidToken)
+        }
+    }
+}
