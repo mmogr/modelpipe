@@ -1,0 +1,256 @@
+{
+  "format": "modelpipe-ticket",
+  "version": 0,
+  "provenance": {
+    "repository": "https://github.com/mmogr/modelpipe",
+    "spec": "docs/ticket-format-v0.md",
+    "generator": "scripts/ticket_vectors.py",
+    "regenerate": "scripts/ticket_vectors.py --json > docs/ticket-vectors-v0.json",
+    "note": "Normative. There is deliberately no --update: a v0 vector that changes is a broken client in another language, not a stale fixture."
+  },
+  "verdicts": {
+    "decoder": [
+      "accepted",
+      "malformed",
+      "unsupported-version"
+    ],
+    "prefilter": [
+      "accept",
+      "reject"
+    ],
+    "prefilter_means": "the subset of refusals decidable from the input string alone, before any base32 decoding",
+    "soundness": "a conforming prefilter must never reject a string a conforming decoder accepts; no vector is decoder=accepted with prefilter=reject"
+  },
+  "string_form": {
+    "kind_prefix": "pipe",
+    "alphabet": "abcdefghijklmnopqrstuvwxyz234567",
+    "case_insensitive": true,
+    "ascii_only": true,
+    "padding": false,
+    "max_decoded_bytes": 1024,
+    "min_decoded_bytes": 39,
+    "max_chars": 1643,
+    "max_body_chars": 1639,
+    "min_chars": 67,
+    "min_body_chars": 63,
+    "legal_body_length_mod_8": [
+      0,
+      2,
+      4,
+      5,
+      7
+    ]
+  },
+  "vectors": [
+    {
+      "id": "accept/minimal-no-transport-addrs",
+      "name": "minimal: no transport addrs",
+      "ticket": "pipeadlvvgabqkyqvn6vjp7nhslea45a5yls6pnkmizfv4bbu2hxa5iruaaauhlp2na",
+      "bytes": "00d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a0000a1d6fd34",
+      "verdicts": {
+        "decoder": "accepted",
+        "prefilter": "accept"
+      },
+      "decoded": {
+        "endpoint_id": "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a",
+        "backend": 0,
+        "addrs": []
+      }
+    },
+    {
+      "id": "accept/one-relay-one-ipv4",
+      "name": "one relay + one IPv4",
+      "ticket": "pipeadlvvgabqkyqvn6vjp7nhslea45a5yls6pnkmizfv4bbu2hxa5iruaqaaangq5duobztulzpojswyylzfzsxqylnobwgkltdn5ws6aiaa3akqaihcfiqbrp5xr4q",
+      "bytes": "00d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a0200001a68747470733a2f2f72656c61792e6578616d706c652e636f6d2f010006c0a80107115100c5fdbc79",
+      "verdicts": {
+        "decoder": "accepted",
+        "prefilter": "accept"
+      },
+      "decoded": {
+        "endpoint_id": "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a",
+        "backend": 0,
+        "addrs": [
+          "relay:https://relay.example.com/",
+          "ip:('192.168.1.7', 4433)"
+        ]
+      }
+    },
+    {
+      "id": "accept/one-ipv6",
+      "name": "one IPv6",
+      "ticket": "pipeadlvvgabqkyqvn6vjp7nhslea45a5yls6pnkmizfv4bbu2hxa5iruaicaajcaainxaaaaaaaaaaaaaaaaaaach4qaabstehw",
+      "bytes": "00d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a0102001220010db80000000000000000000000011f9000032990f6",
+      "verdicts": {
+        "decoder": "accepted",
+        "prefilter": "accept"
+      },
+      "decoded": {
+        "endpoint_id": "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a",
+        "backend": 0,
+        "addrs": [
+          "ip:('2001:db8::1', 8080)"
+        ]
+      }
+    },
+    {
+      "id": "accept/an-unknown-address-tag-skipped",
+      "name": "an unknown address tag, skipped",
+      "ticket": "pipeadlvvgabqkyqvn6vjp7nhslea45a5yls6pnkmizfv4bbu2hxa5iruaqbaadmbkaba4ivc7yaatpk3pxpaacgvrnq",
+      "bytes": "00d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a02010006c0a8010711517f0004deadbeef00046ac5b0",
+      "verdicts": {
+        "decoder": "accepted",
+        "prefilter": "accept"
+      },
+      "decoded": {
+        "endpoint_id": "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a",
+        "backend": 0,
+        "addrs": [
+          "ip:('192.168.1.7', 4433)"
+        ]
+      }
+    },
+    {
+      "id": "accept/a-relay-url-no-parser-may-normalize",
+      "name": "a relay URL no parser may normalize",
+      "ticket": "pipeadlvvgabqkyqvn6vjp7nhslea45a5yls6pnkmizfv4bbu2hxa5iruaiaaaswq5duobztulzpkjswyylzfzcxqylnobwgklsdj5gs4orugqzs6jjxivtg63ya25wypry",
+      "bytes": "00d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a0100002568747470733a2f2f52656c61792e4578616d706c652e434f4d2e3a3434332f253745666f6f00d76d87c7",
+      "verdicts": {
+        "decoder": "accepted",
+        "prefilter": "accept"
+      },
+      "decoded": {
+        "endpoint_id": "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a",
+        "backend": 0,
+        "addrs": [
+          "relay:https://Relay.Example.COM.:443/%7Efoo"
+        ]
+      }
+    },
+    {
+      "id": "refuse/the-wrong-kind-prefix",
+      "name": "the wrong kind prefix",
+      "ticket": "noteadlvvgabqkyqvn6vjp7nhslea45a5yls6pnkmizfv4bbu2hxa5iruaaauhlp2na",
+      "verdicts": {
+        "decoder": "malformed",
+        "prefilter": "reject"
+      }
+    },
+    {
+      "id": "refuse/an-empty-payload",
+      "name": "an empty payload",
+      "ticket": "pipe",
+      "verdicts": {
+        "decoder": "malformed",
+        "prefilter": "reject"
+      }
+    },
+    {
+      "id": "refuse/a-character-outside-the-alphabet",
+      "name": "a character outside the alphabet",
+      "ticket": "pipeadlvvgabqkyqvn6vjp7nhslea45a5yls6pnkmizfv4bbu2hxa5iruaaauhlp2n1",
+      "verdicts": {
+        "decoder": "malformed",
+        "prefilter": "reject"
+      }
+    },
+    {
+      "id": "refuse/an-impossible-length-class",
+      "name": "an impossible length class",
+      "ticket": "pipeadlvvgabqkyqvn6vjp7nhslea45a5yls6pnkmizfv4bbu2hxa5iruaaauhlp2naaa",
+      "verdicts": {
+        "decoder": "malformed",
+        "prefilter": "reject"
+      }
+    },
+    {
+      "id": "refuse/non-zero-bits-in-the-final-group",
+      "name": "non-zero bits in the final group",
+      "ticket": "pipeab",
+      "verdicts": {
+        "decoder": "malformed",
+        "prefilter": "reject"
+      }
+    },
+    {
+      "id": "refuse/a-corrupted-checksum",
+      "name": "a corrupted checksum",
+      "ticket": "pipeadlvvgabqkyqvn6vjp7nhslea45a5yls6pnkmizfv4bbu2hxa5iruaaaaaaaaaa",
+      "verdicts": {
+        "decoder": "malformed",
+        "prefilter": "accept"
+      }
+    },
+    {
+      "id": "refuse/truncation",
+      "name": "truncation",
+      "ticket": "pipeadlvvgabqkyqvn6vjp7nhslea45a5",
+      "verdicts": {
+        "decoder": "malformed",
+        "prefilter": "reject"
+      }
+    },
+    {
+      "id": "refuse/a-non-ascii-lookalike",
+      "name": "a non-ASCII lookalike",
+      "ticket": "pipeadlvvgabq\u212ayqvn6vjp7nhslea45a5yls6pnkmizfv4bbu2hxa5iruaaauhlp2na",
+      "verdicts": {
+        "decoder": "malformed",
+        "prefilter": "reject"
+      }
+    },
+    {
+      "id": "refuse/a-string-longer-than-any-ticket",
+      "name": "a string longer than any ticket",
+      "ticket": "pipeaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "verdicts": {
+        "decoder": "malformed",
+        "prefilter": "reject"
+      }
+    },
+    {
+      "id": "refuse/a-format-version-this-build-does-not-speak",
+      "name": "a format version this build does not speak",
+      "ticket": "pipeahlvvgabqkyqvn6vjp7nhslea45a5yls6pnkmizfv4bbu2hxa5iruaaauhlp2na",
+      "verdicts": {
+        "decoder": "unsupported-version",
+        "prefilter": "accept"
+      }
+    },
+    {
+      "id": "refuse/non-zero-bits-in-the-final-group-of-a-full-length-ticket",
+      "name": "non-zero bits in the final group of a full-length ticket",
+      "ticket": "pipeadlvvgabqkyqvn6vjp7nhslea45a5yls6pnkmizfv4bbu2hxa5iruaaauhlp2nb",
+      "verdicts": {
+        "decoder": "malformed",
+        "prefilter": "accept"
+      }
+    },
+    {
+      "id": "refuse/a-truncation-that-lands-on-a-legal-length-class",
+      "name": "a truncation that lands on a legal length class",
+      "ticket": "pipeadlvvgabqkyqvn6vjp7nhslea45a5yls6pnkmizfv4bbu2hxa5iruaqaaangq5duobztulzpojswyylzfzsxqylnobwgkltdn5ws6aiaa3akqaihcfiqbrp5xr",
+      "verdicts": {
+        "decoder": "malformed",
+        "prefilter": "accept"
+      }
+    },
+    {
+      "id": "refuse/bytes-past-the-end-of-the-structure",
+      "name": "bytes past the end of the structure",
+      "ticket": "pipeadlvvgabqkyqvn6vjp7nhslea45a5yls6pnkmizfv4bbu2hxa5iruaaaacs2kwyc",
+      "verdicts": {
+        "decoder": "malformed",
+        "prefilter": "accept"
+      }
+    },
+    {
+      "id": "refuse/a-relay-body-that-is-not-utf-8",
+      "name": "a relay body that is not UTF-8",
+      "ticket": "pipeadlvvgabqkyqvn6vjp7nhslea45a5yls6pnkmizfv4bbu2hxa5iruaiaaabp77qafjblexa",
+      "verdicts": {
+        "decoder": "malformed",
+        "prefilter": "accept"
+      }
+    }
+  ]
+}

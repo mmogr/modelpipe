@@ -341,7 +341,23 @@ fn the_re_copy_it_failures_are_all_malformed() {
             "a character outside the alphabet",
             format!("{}1", &good[..good.len() - 1]),
         ),
-        ("an impossible length class", format!("{good}a")),
+        // Two characters, not one. `{good}a` is 64 body characters and
+        // 64 % 8 == 0 is a class a padding-free base32 encoding produces
+        // constantly — it was reaching the checksum and failing there, so
+        // this row was named for a rule it never exercised. 65 % 8 == 1,
+        // which no encoding can produce, is the one that does.
+        ("an impossible length class", format!("{good}aa")),
+        // Six characters, so this dies on the v0 length floor long before
+        // the canonicality rule it is named for. Kept, because refusing it
+        // is still correct.
+        //
+        // A full-length ticket with spare bits set is the case that would
+        // exercise the rule, and it deliberately is not here: this taxonomy
+        // is coarse on purpose, so `Malformed` cannot distinguish a
+        // canonicality failure from the checksum failure that follows it,
+        // and a test naming one while possibly asserting the other is the
+        // defect the row above just had. The reference implementation can
+        // tell them apart and does; see `docs/ticket-vectors-v0.json`.
         ("non-zero bits in the final group", "pipeab".to_owned()),
         ("truncation", good[..good.len() / 2].to_owned()),
         ("a corrupted checksum", flip_last_byte(good)),

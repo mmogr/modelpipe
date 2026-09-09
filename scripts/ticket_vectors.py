@@ -9,6 +9,8 @@ decoder follows the spec's decoding order exactly.
 Usage:
     scripts/ticket_vectors.py            print the vectors, spec-formatted
     scripts/ticket_vectors.py --check    assert the spec's vectors match
+    scripts/ticket_vectors.py --json     print the vectors as data, for a
+                                         client in another language
 
 There is deliberately no --update. A v0 vector that changes is not a stale
 fixture, it is a broken client in some other language: the vectors are the
@@ -19,6 +21,7 @@ this one. A missing flag reads as an oversight; a refused one reads as a
 decision, which is why --check says so out loud when asked to rewrite.
 """
 
+import json
 import re
 import sys
 from pathlib import Path
@@ -42,7 +45,22 @@ MIN_V0_TICKET_BYTES = 39  # version + id + addr_count + backend + crc
 # fires. ceil(1024 * 8 / 5) = 1639 base32 characters, plus the prefix.
 MAX_TICKET_CHARS = len(KIND) + (MAX_TICKET_BYTES * 8 + 4) // 5
 
+# The same arithmetic at the other end, and it is published for the same
+# reason the maximum is: a shape-only client cannot derive it from the byte
+# minimum without redoing this sum, and one of them already did it by hand.
+# ceil(39 * 8 / 5) = 63 base32 characters, plus the prefix.
+MIN_V0_TICKET_CHARS = len(KIND) + (MIN_V0_TICKET_BYTES * 8 + 4) // 5
+
+# Body lengths a padding-free base32 encoding can produce. n bytes encode to
+# ceil(8n/5) characters, so the remainder mod 8 is one of these and never 1,
+# 3 or 6 — which is a whole class of corruption catchable without decoding.
+LEGAL_BODY_LENGTH_MOD_8 = (0, 2, 4, 5, 7)
+
+# RFC 4648 base32, lowercase as producers emit it.
+B32_ALPHABET = "abcdefghijklmnopqrstuvwxyz234567"
+
 SPEC = Path(__file__).resolve().parent.parent / "docs" / "ticket-format-v0.md"
+VECTORS_JSON = Path(__file__).resolve().parent.parent / "docs" / "ticket-vectors-v0.json"
 
 
 class TicketError(ValueError):
@@ -277,24 +295,146 @@ def _negative_cases():
         ("the wrong kind prefix", "note" + good[4:], "malformed"),
         ("an empty payload", KIND, "malformed"),
         ("a character outside the alphabet", good[:-1] + "1", "malformed"),
-        ("an impossible length class", good + "a", "malformed"),
+        # `good + "a"` was here, and it is not one: 63 + 1 = 64 characters, and
+        # 64 % 8 == 0 is a class a padding-free base32 encoding produces all
+        # the time. It was reaching the checksum and failing there, so the row
+        # was named for a rule it never exercised. Two characters lands on
+        # 65 % 8 == 1, which no encoding can produce. Found by giving every
+        # case a prefilter verdict: an impossible length class that a
+        # shape-only check accepts is a contradiction in terms.
+        ("an impossible length class", good + "aa", "malformed"),
         ("non-zero bits in the final group", "pipeab", "malformed"),
         ("a corrupted checksum", bad_crc, "malformed"),
         ("truncation", good[: len(good) // 2], "malformed"),
         ("a non-ASCII lookalike", good.replace("k", "K", 1), "malformed"),
         ("a string longer than any ticket", KIND + "a" * MAX_TICKET_CHARS, "malformed"),
         ("a format version this build does not speak", encode_string(v1), "unsupported-version"),
+    ] + _prefilter_accepting_refusals()
+
+
+def _prefilter_accepting_refusals():
+    """Refusals a shape-only client cannot make, and must not pretend to.
+
+    Each is a well-formed *string* carrying bytes that are not a ticket, so
+    the prefilter accepts and only a decoder refuses. They are the honest half
+    of the two-verdict contract: without them the artefact would read as
+    though the two classes agree everywhere, and the one place a shape-only
+    implementation is allowed to be looser would go unstated.
+    """
+    good = encode_string(encode_ticket(RFC8032_TEST1_PK, []))
+    long_good = encode_string(
+        encode_ticket(
+            RFC8032_TEST1_PK,
+            [("relay", "https://relay.example.com/"), ("ip", ("192.168.1.7", 4433))],
+        )
+    )
+
+    # Non-zero bits in the final group, at full length. The existing "pipeab"
+    # row names this failure but is six characters long, so it is caught by
+    # the length floor and never reaches the canonicality rule it is named
+    # for. This one does.
+    noncanonical = next(
+        (
+            c
+            for c in (good[:-1] + ch for ch in B32_ALPHABET)
+            if c != good
+            and prefilter_verdict(c) == "accept"
+            and _raises_non_canonical(c)
+        ),
+        None,
+    )
+    assert noncanonical, "no non-canonical tail could be built"
+
+    # A truncation that lands on a legal length class and stays above the
+    # minimum, so nothing about its shape gives it away.
+    truncated = next(
+        (
+            long_good[:n]
+            for n in range(len(long_good) - 1, MIN_V0_TICKET_CHARS - 1, -1)
+            if prefilter_verdict(long_good[:n]) == "accept"
+        ),
+        None,
+    )
+    assert truncated, "no length-legal truncation could be built"
+
+    # Bytes past the end of the structure. A v0 ticket has none between the
+    # structure's end and the CRC, and the CRC here is correct — so nothing
+    # short of parsing the structure finds it.
+    trailing_body = encode_ticket(RFC8032_TEST1_PK, [])[:-4] + b"\x00"
+    trailing = encode_string(trailing_body + crc32c(trailing_body).to_bytes(4, "big"))
+
+    # A relay body that is not UTF-8, carried under the relay tag.
+    not_utf8 = encode_string(
+        encode_ticket(RFC8032_TEST1_PK, [("raw", (TAG_RELAY, b"\xff\xfe"))])
+    )
+
+    return [
+        ("non-zero bits in the final group of a full-length ticket", noncanonical, "malformed"),
+        ("a truncation that lands on a legal length class", truncated, "malformed"),
+        ("bytes past the end of the structure", trailing, "malformed"),
+        ("a relay body that is not UTF-8", not_utf8, "malformed"),
     ]
 
 
-def _verdict(s: str) -> str:
+def _raises_non_canonical(s: str) -> bool:
     try:
         decode_string(s)
+    except Malformed as e:
+        return "non-canonical" in str(e)
+    except TicketError:
+        return False
+    return False
+
+
+def _verdict(s: str) -> str:
+    """The decoder's verdict: the whole contract, not just the string form.
+
+    `decode_ticket` is run as well as `decode_string`, because "accepted" has
+    to mean the ticket parses — a payload whose CRC is right and whose
+    structure is not is still not a ticket, and calling it accepted here would
+    put a lie in the vectors."""
+    try:
+        decode_ticket(decode_string(s))
     except UnsupportedVersion:
         return "unsupported-version"
     except Malformed:
         return "malformed"
     return "accepted"
+
+
+# The pre-decode stage of the string form, on its own.
+#
+# This is a property of the format, not of any one implementation: everything
+# decidable from the input characters before a single byte is decoded. The
+# spec already argues that this stage exists — a parser "may, and should,
+# reject an over-long input string before decoding it" — so naming it is
+# describing what is here, not importing some consumer's shape.
+#
+# It is published because a client may have only this. A shape-only validator
+# that hands the real decode to another language can make exactly these
+# refusals and no others, and the vectors have to say which refusals it is
+# entitled to make so that its looseness is a stated property rather than an
+# accident.
+#
+# The soundness rule this exists to make checkable: a conforming prefilter
+# must never reject a string a conforming decoder accepts. Lenient in one
+# direction only.
+def prefilter_verdict(s: str) -> str:
+    """"accept" or "reject", decided from the string alone."""
+    if not s or not s.isascii():
+        return "reject"
+    if s[: len(KIND)].lower() != KIND:
+        return "reject"
+    body = s[len(KIND) :]
+    if not body or "=" in body:
+        return "reject"
+    if len(s) > MAX_TICKET_CHARS or len(s) < MIN_V0_TICKET_CHARS:
+        return "reject"
+    if any(c not in B32_ALPHABET for c in body.lower()):
+        return "reject"
+    if len(body) % 8 not in LEGAL_BODY_LENGTH_MOD_8:
+        return "reject"
+    return "accept"
 
 
 def _render():
@@ -312,6 +452,134 @@ def _render():
         assert sorted(map(str, got_addrs)) == sorted(map(str, known))
         out.append((name, f"bytes ({len(ticket)}): {ticket.hex()}", f"ticket: {s}"))
     return out
+
+
+def _slug(name: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
+
+
+def _vectors_json() -> str:
+    """The same vectors as data, for an implementation in another language.
+
+    Two verdicts per case, never one. `decoder` is this format's own taxonomy;
+    `prefilter` is `accept` or `reject` and nothing else, because a client
+    that can only look at the string has only those two answers available.
+
+    The prefilter column is defined by the format — what is decidable before a
+    byte is decoded — and not by whatever some consumer happens to implement.
+    That distinction is the whole reason this file can be published without
+    the format learning anything about who reads it.
+
+    No commit and no timestamp in `provenance`, deliberately. A consumer that
+    vendors this file wants to diff it against upstream; a field that changes
+    on every commit would make that diff fail for a reason nobody cares about,
+    and a check that cries wolf is a check that gets ignored. When a copy was
+    taken, and from what commit, is the copier's business to record.
+    """
+    vectors = []
+    for name, endpoint_id, addrs in VECTORS:
+        raw = encode_ticket(endpoint_id, addrs)
+        ticket = encode_string(raw)
+        got_id, got_addrs, got_backend = decode_ticket(raw)
+        vectors.append(
+            {
+                "id": f"accept/{_slug(name)}",
+                "name": name,
+                "ticket": ticket,
+                "bytes": raw.hex(),
+                "verdicts": {"decoder": "accepted", "prefilter": prefilter_verdict(ticket)},
+                "decoded": {
+                    "endpoint_id": got_id.hex(),
+                    "backend": got_backend,
+                    "addrs": [f"{kind}:{value}" for kind, value in got_addrs],
+                },
+            }
+        )
+    for name, value, verdict in _negative_cases():
+        vectors.append(
+            {
+                "id": f"refuse/{_slug(name)}",
+                "name": name,
+                "ticket": value,
+                "verdicts": {"decoder": verdict, "prefilter": prefilter_verdict(value)},
+            }
+        )
+
+    doc = {
+        "format": "modelpipe-ticket",
+        "version": 0,
+        "provenance": {
+            "repository": "https://github.com/mmogr/modelpipe",
+            "spec": "docs/ticket-format-v0.md",
+            "generator": "scripts/ticket_vectors.py",
+            "regenerate": "scripts/ticket_vectors.py --json > docs/ticket-vectors-v0.json",
+            "note": (
+                "Normative. There is deliberately no --update: a v0 vector that "
+                "changes is a broken client in another language, not a stale fixture."
+            ),
+        },
+        "verdicts": {
+            "decoder": ["accepted", "malformed", "unsupported-version"],
+            "prefilter": ["accept", "reject"],
+            "prefilter_means": (
+                "the subset of refusals decidable from the input string alone, "
+                "before any base32 decoding"
+            ),
+            "soundness": (
+                "a conforming prefilter must never reject a string a conforming "
+                "decoder accepts; no vector is decoder=accepted with prefilter=reject"
+            ),
+        },
+        "string_form": {
+            "kind_prefix": KIND,
+            "alphabet": B32_ALPHABET,
+            "case_insensitive": True,
+            "ascii_only": True,
+            "padding": False,
+            "max_decoded_bytes": MAX_TICKET_BYTES,
+            "min_decoded_bytes": MIN_V0_TICKET_BYTES,
+            "max_chars": MAX_TICKET_CHARS,
+            "max_body_chars": MAX_TICKET_CHARS - len(KIND),
+            "min_chars": MIN_V0_TICKET_CHARS,
+            "min_body_chars": MIN_V0_TICKET_CHARS - len(KIND),
+            "legal_body_length_mod_8": list(LEGAL_BODY_LENGTH_MOD_8),
+        },
+        "vectors": vectors,
+    }
+    return json.dumps(doc, indent=2) + "\n"
+
+
+def _check_json(failed: bool) -> bool:
+    """The JSON is checked the same way the spec is: by comparing text, not by
+    regenerating it. Byte-identity is what lets a consumer's freshness check be
+    a plain file comparison with no JSON parser in it."""
+    want = _vectors_json()
+
+    # The two verdict columns are asserted rather than trusted. Without this
+    # the prefilter column would be an unasserted claim, which is the exact
+    # thing this file exists to stop being true of the numbers in the spec.
+    for entry in json.loads(want)["vectors"]:
+        got = prefilter_verdict(entry["ticket"])
+        if got != entry["verdicts"]["prefilter"]:
+            print(f"✗ {entry['id']}: prefilter says {got}, JSON says "
+                  f"{entry['verdicts']['prefilter']}", file=sys.stderr)
+            failed = True
+        if entry["verdicts"]["decoder"] == "accepted" and got == "reject":
+            print(f"✗ {entry['id']}: a prefilter rejects a ticket the decoder "
+                  "accepts, which no conforming prefilter may do", file=sys.stderr)
+            failed = True
+
+    if not VECTORS_JSON.exists():
+        print(f"✗ {VECTORS_JSON.name} is missing; regenerate it with "
+              "scripts/ticket_vectors.py --json > docs/ticket-vectors-v0.json",
+              file=sys.stderr)
+        return True
+    if VECTORS_JSON.read_text() != want:
+        print(f"✗ {VECTORS_JSON.name} disagrees with this script; regenerate it "
+              "with scripts/ticket_vectors.py --json > docs/ticket-vectors-v0.json",
+              file=sys.stderr)
+        failed = True
+    return failed
 
 
 def _check() -> int:
@@ -371,6 +639,8 @@ def _check() -> int:
         print(f"✗ refusal table names a case this script does not run: {row[0]}", file=sys.stderr)
         failed = True
 
+    failed = _check_json(failed)
+
     if failed:
         print(
             "\nThe spec and this script disagree. Fix whichever is wrong — there is\n"
@@ -383,7 +653,7 @@ def _check() -> int:
 
     print(
         f"✓ {len(rendered)} vectors and {len(_negative_cases())} negative cases "
-        "agree with the spec"
+        f"agree with the spec and with {VECTORS_JSON.name}"
     )
     return 0
 
@@ -392,6 +662,12 @@ if __name__ == "__main__":
     args = sys.argv[1:]
     if args == ["--check"]:
         raise SystemExit(_check())
+    if args == ["--json"]:
+        # Prints; never writes. The file is made by a person typing a redirect,
+        # which is what keeps the refusal of --update honest — this script
+        # still rewrites nothing in place.
+        sys.stdout.write(_vectors_json())
+        raise SystemExit(0)
     if args == ["--update"]:
         # Answered explicitly rather than by "unknown flag", because someone
         # reaching for it has a failing --check in front of them and needs
@@ -407,7 +683,9 @@ if __name__ == "__main__":
             "  * the script changed and the change is right — then the format\n"
             "    changed, which means a new version byte and a new vector\n"
             "    section beneath the v0 one, not an edit to it;\n"
-            "  * the spec was hand-edited — restore it from this script's output.",
+            "  * the spec was hand-edited — restore it from this script's output;\n"
+            "  * docs/ticket-vectors-v0.json is stale — regenerate it with\n"
+            "    scripts/ticket_vectors.py --json > docs/ticket-vectors-v0.json.",
             file=sys.stderr,
         )
         raise SystemExit(2)
