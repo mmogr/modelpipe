@@ -8,6 +8,14 @@ CI run — as does the Rust codec, which hard-codes the same vectors rather
 than generating them, so three independent implementations have to agree
 before anything is released.
 
+The same vectors are published as data in
+[`ticket-vectors-v0.json`](ticket-vectors-v0.json), so a client in another
+language can iterate them rather than transcribe them, and can be told which
+of the refusals below it is entitled to make. `--check` holds that file to
+this document byte for byte; a consumer that vendors a copy can therefore
+compare files rather than parse them. It carries no commit and no timestamp,
+so a copy stays identical to its source until the vectors themselves change.
+
 A v0 ticket will always parse as a v0 ticket. Changing any of what follows
 means a new version byte and a new section beneath this one, never an edit
 to this one — which is why the reference implementation refuses to have an
@@ -290,8 +298,58 @@ same set.
 | a non-ASCII lookalike | `Malformed` |
 | a string longer than any ticket | `Malformed` |
 | a format version this build does not speak | `UnsupportedVersion` |
+| non-zero bits in the final group of a full-length ticket | `Malformed` |
+| a truncation that lands on a legal length class | `Malformed` |
+| bytes past the end of the structure | `Malformed` |
+| a relay body that is not UTF-8 | `Malformed` |
 
 The verdicts are deliberately coarse. A ticket is pasted or scanned, so
 the advice a user can act on is one line — re-copy it, or upgrade — and
 the two rows above are exactly those two lines. This table pins the
 *classification*, not any message text.
+
+The last four rows are the ones a **prefilter** cannot make, and they are
+listed for that reason rather than for completeness — see the section
+below. The `non-zero bits in the final group` row above them is a six
+character string that dies on the length floor long before the rule it is
+named for is reached; the full-length row is the one that actually
+exercises it.
+
+## What a prefilter is, and what it may get away with (normative)
+
+Some clients cannot decode. A ticket may be shape-checked in one language
+and handed to another to parse — that is the shape of an app with an ffi
+underneath it — and the half that cannot decode still has to decide
+whether to refuse.
+
+A **prefilter** is the pre-decode stage of the string form: everything
+decidable from the input characters before a single byte is decoded. That
+is the ASCII rule, the kind prefix, the alphabet, the absence of padding,
+both character bounds, and the length class. Nothing else. This section
+names a stage the document already assumed — the character bound above is
+explicitly there to be checked before decoding — rather than describing
+any particular implementation.
+
+Every entry in `docs/ticket-vectors-v0.json` therefore carries **two**
+verdicts: `decoder`, from the taxonomy above, and `prefilter`, which is
+`accept` or `reject` and nothing else.
+
+> **A conforming prefilter must never reject a string a conforming decoder
+> accepts.**
+
+Lenient in one direction only. A prefilter that accepts a corrupted
+checksum is conforming, because a checksum lives inside the decoded bytes
+and no amount of looking at the string will find it; a prefilter that
+rejects a valid ticket is a client that cannot connect. `--check` asserts
+this over every vector, so a future case that violates it fails the build
+rather than becoming somebody's outage.
+
+The character bounds a prefilter needs are stated as characters, not only
+as bytes, because deriving one from the other is a sum that has already
+been done by hand once in another repository and is not worth doing twice:
+
+- **Minimum: 67 characters**, being the four of the prefix plus
+  `ceil(39 × 8 / 5) = 63`.
+- **Maximum: 1643 characters**, being the four of the prefix plus
+  `ceil(1024 × 8 / 5) = 1639`.
+- A body length modulo 8 is one of **0, 2, 4, 5, 7**, and never 1, 3 or 6.
