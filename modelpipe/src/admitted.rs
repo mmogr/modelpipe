@@ -39,3 +39,18 @@ impl Admitted {
         }
     }
 }
+
+/// What the backend is told about an admitted request, beyond the bytes
+/// the client sent: which named token admitted it, and what to present as
+/// the bearer in the client's place.
+///
+/// Built by [`Credential::forward`](crate::credential::Credential::forward)
+/// so the exchange hands the rewrite one value rather than reaching into
+/// the credential twice, and so the decision about what the backend sees
+/// is made in one place.
+pub(crate) struct Forward {
+    /// The name of the token that admitted, when one added by name did.
+    pub(crate) device: Option<Arc<str>>,
+    /// The bearer to present upstream, or `None` to forward the client's.
+    pub(crate) upstream: Option<Arc<str>>,
+}

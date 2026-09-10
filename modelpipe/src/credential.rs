@@ -13,10 +13,11 @@
 //! the difference between open and closed is whether the cell holds a
 //! credential, never whether the check runs.
 //!
-//! Everything that *writes* the primary is in `credential_rotate.rs`, a
-//! child module, and the answer to *which credential admitted* is the
-//! [`Admitted`] type in `admitted.rs`; both were split off when named
-//! tokens brought this file to the file-size budget.
+//! The primary itself — its type, and everything that writes it or the
+//! upstream bearer — is in `credential_rotate.rs`, a child module, and
+//! the answer to *which credential admitted* is the [`Admitted`] type in
+//! `admitted.rs`; both were split off when named tokens brought this file
+//! to the file-size budget.
 
 use std::fmt;
 use std::num::NonZeroU8;
@@ -26,7 +27,7 @@ use std::time::Duration;
 use subtle::ConstantTimeEq;
 
 use crate::ServeError;
-pub(crate) use crate::admitted::Admitted;
+pub(crate) use crate::admitted::{Admitted, Forward};
 use crate::grant::Grants;
 use crate::minting::{mint, presentable};
 use crate::named::{AddRefused, Named};
@@ -35,6 +36,7 @@ use crate::token_policy::TokenPolicy;
 
 #[path = "credential_rotate.rs"]
 mod rotate;
+use rotate::{Enforced, Primary};
 
 /// The scheme, with its trailing space, as it appears in the header.
 const BEARER_PREFIX: &str = "Bearer ";
@@ -60,33 +62,12 @@ pub(crate) struct Credential {
     /// Consulted after the primary and the named tokens, and *before*
     /// `grants` because this check spends nothing.
     superseded: Superseded,
-}
-
-/// What the listener enforces of its own, apart from anything added by
-/// name.
-#[derive(Clone)]
-enum Primary {
-    /// Serving open: everything admits, and nothing else is consulted.
-    Open,
-    /// No token of its own — [`TokenPolicy::Named`]. Only named tokens, a
-    /// graced key and grants admit. This is *closed*, and the difference
-    /// from [`Open`](Self::Open) is the whole reason the cell is an enum
-    /// rather than an `Option`: before named tokens, "no primary" and
-    /// "serving open" were the same state.
-    Absent,
-    /// The enforced token.
-    Token(Arc<Enforced>),
-}
-
-/// The token a listener enforces.
-///
-/// One field, since the scheme stopped being part of what is compared: the
-/// `Authorization` value is split at its single space and only the
-/// credential after it is matched, so the pre-built `"Bearer <token>"`
-/// string this used to carry beside the token had no reader left.
-struct Enforced {
-    /// What [`ServeHandle::token`](crate::ServeHandle::token) reports.
-    token: String,
+    /// What the backend is told in `Authorization`, in place of whatever
+    /// the client sent — or `None` to forward the client's own. The
+    /// outbound half of the concern the rest of this type is the inbound
+    /// half of, kept here so one type owns everything the edge does about
+    /// that header.
+    upstream: RwLock<Option<Arc<str>>>,
 }
 
 impl Credential {
@@ -117,6 +98,7 @@ impl Credential {
             named: Named::new(),
             grants: Grants::new(),
             superseded: Superseded::new(),
+            upstream: RwLock::new(None),
         };
         Ok((cell, token))
     }
@@ -231,6 +213,17 @@ impl Credential {
         self.named.names()
     }
 
+    /// What the backend is told about a request `admitted` let through.
+    pub(crate) fn forward(&self, admitted: &Admitted) -> Forward {
+        Forward {
+            device: match admitted {
+                Admitted::Named(name) => Some(Arc::clone(name)),
+                Admitted::Open | Admitted::Token | Admitted::Superseded | Admitted::Grant => None,
+            },
+            upstream: self.upstream(),
+        }
+    }
+
     /// What the listener enforces of its own, or `None` when it has no
     /// primary — serving open, or admitting by name only.
     pub(crate) fn token(&self) -> Option<String> {
@@ -282,12 +275,6 @@ impl fmt::Debug for Credential {
             .field("grants", &self.grants.count())
             .field("grace", &self.superseded.is_open())
             .finish_non_exhaustive()
-    }
-}
-
-impl Enforced {
-    fn new(token: String) -> Arc<Self> {
-        Arc::new(Self { token })
     }
 }
 

@@ -130,7 +130,11 @@ request such a token admits reaches your backend with
 `X-Modelpipe-Device: <name>`, and `remove_token(name)` refuses exactly that
 device from then on. The name is an identifier — letters, digits, `.`, `_`,
 `-` — because it is a header value and a log field; keep "Matt's iPhone" on
-your side, keyed by it.
+your side, keyed by it. Set `ServeOptions::backend_auth` beside it and the
+edge presents *that* bearer to your backend in the device's place: the
+backend keeps exactly one key, every device keeps a different one, a
+device's key never leaves the edge, and rotating the backend's is
+`ServeHandle::set_backend_auth`, which no device notices.
 
 Rotating a key that several paired machines are already holding?
 `ServeHandle::set_token_with_grace` keeps the key it replaces admitting for

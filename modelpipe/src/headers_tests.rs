@@ -344,3 +344,19 @@ fn the_device_marker_is_forbidden_in_trailers_like_the_others() {
     assert!(is_stripped("X-Modelpipe-Device"));
     assert!(is_forbidden_in_trailer("x-modelpipe-device"));
 }
+
+// ── The upstream bearer ──────────────────────────────────────────────────
+
+/// Every inbound copy goes, whatever its case, and exactly one — the
+/// edge's — is in its place.
+#[test]
+fn set_authorization_replaces_every_inbound_copy_with_the_edges() {
+    let mut h = headers(&[
+        ("Authorization", "Bearer device-key"),
+        ("Accept", "*/*"),
+        ("AUTHORIZATION", "Bearer another"),
+    ]);
+    set_authorization(&mut h, "backend-key");
+    assert_eq!(names(&h), ["accept", "authorization"]);
+    assert_eq!(h[1].1, "Bearer backend-key");
+}

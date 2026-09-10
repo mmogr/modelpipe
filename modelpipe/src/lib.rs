@@ -100,6 +100,7 @@ mod serve_grace;
 mod serve_grant;
 mod serve_handle;
 mod serve_named;
+mod serve_options;
 mod serve_status;
 
 // This block is the public API. Everything above is a private module,
@@ -108,9 +109,10 @@ mod serve_status;
 pub use connect::{ConnectError, ConnectOptions, connect};
 pub use connect_handle::ConnectHandle;
 pub use network::NetworkMetrics;
-pub use serve::{ServeOptions, serve};
+pub use serve::serve;
 pub use serve_error::{NamedTokenRefusal, ServeError};
 pub use serve_handle::ServeHandle;
+pub use serve_options::ServeOptions;
 pub use status::{CloseReason, PeerView, PipeStatus};
 pub use ticket::{Ticket, TicketParseError};
 pub use token_policy::TokenPolicy;

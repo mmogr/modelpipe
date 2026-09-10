@@ -1948,3 +1948,47 @@ async fn the_backend_is_told_which_named_token_admitted_and_nothing_when_none_di
         }
     }
 }
+
+/// With an upstream bearer set, the backend is handed the edge's
+/// credential and never the device's — the property that lets every
+/// device hold a different key while the backend keeps exactly one.
+#[tokio::test]
+async fn the_backend_is_handed_the_upstream_bearer_and_never_the_devices() {
+    const LAPTOP: &str = "sk-zzq-laptop-sentinel";
+    const UPSTREAM: &str = "sk-zzq-backend-sentinel";
+    let (credential, _) = Credential::new(&TokenPolicy::Named).expect("a usable policy");
+    credential
+        .add_named("laptop", LAPTOP.to_owned())
+        .expect("a valid name and token");
+    assert!(credential.set_upstream(Some(UPSTREAM.to_owned())));
+
+    let backend = CountingBackend::new(OK_RESPONSE);
+    let mut req = b"GET /v1/models HTTP/1.1\r\nHost: 127.0.0.1:8080\r\n".to_vec();
+    req.extend_from_slice(format!("Authorization: Bearer {LAPTOP}\r\n\r\n").as_bytes());
+
+    let (mut client, mut edge) = duplex(64 * 1024);
+    client.write_all(&req).await.unwrap();
+    client.shutdown().await.unwrap();
+    let outcome = serve_exchange(&mut edge, &credential, &backend, TEST_PEER)
+        .await
+        .expect("no transport failure");
+    drop(edge);
+    assert_eq!(outcome, Outcome::Forwarded);
+
+    let sent = String::from_utf8(backend.received().await).expect("ascii");
+    assert!(
+        sent.contains(&format!("Authorization: Bearer {UPSTREAM}")),
+        "the edge's bearer: {sent}"
+    );
+    assert!(
+        !sent.contains(LAPTOP),
+        "the device's key must never reach the backend: {sent}"
+    );
+    assert_eq!(
+        sent.to_ascii_lowercase()
+            .matches("\r\nauthorization:")
+            .count(),
+        1,
+        "exactly one: {sent}"
+    );
+}

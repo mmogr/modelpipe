@@ -803,3 +803,47 @@ fn debug_counts_named_tokens_and_never_shows_one() {
         "but the state and the count are legible: {rendered}"
     );
 }
+
+// ── The upstream bearer ──────────────────────────────────────────────────
+
+/// What the backend is told is a separate decision from what admits, and
+/// it starts as "the client's own".
+#[test]
+fn forward_carries_the_device_and_the_upstream_bearer() {
+    let cell = enforcing(TOKEN);
+    cell.add_named("laptop", LAPTOP.to_owned()).expect("held");
+    let named = cell
+        .admits(Some(format!("Bearer {LAPTOP}").as_bytes()))
+        .expect("admits");
+    let primary = cell
+        .admits(Some(format!("Bearer {TOKEN}").as_bytes()))
+        .expect("admits");
+
+    let f = cell.forward(&named);
+    assert_eq!(f.device.as_deref(), Some("laptop"));
+    assert_eq!(f.upstream, None, "pass-through until told otherwise");
+
+    assert!(cell.set_upstream(Some("backend-key".to_owned())));
+    let f = cell.forward(&primary);
+    assert_eq!(f.device, None, "the primary names no device");
+    assert_eq!(f.upstream.as_deref(), Some("backend-key"));
+
+    assert!(cell.set_upstream(None));
+    assert_eq!(
+        cell.forward(&named).upstream,
+        None,
+        "back to the client's own"
+    );
+}
+
+/// A blank upstream is refused and changes nothing — the rule every other
+/// way of installing a credential keeps.
+#[test]
+fn a_blank_upstream_bearer_is_refused_and_leaves_the_current_one() {
+    let cell = enforcing(TOKEN);
+    assert!(cell.set_upstream(Some("backend-key".to_owned())));
+    for blank in ["", "  ", "\t"] {
+        assert!(!cell.set_upstream(Some(blank.to_owned())), "{blank:?}");
+    }
+    assert_eq!(cell.upstream().as_deref(), Some("backend-key"));
+}
