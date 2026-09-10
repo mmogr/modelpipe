@@ -158,6 +158,31 @@ impl ServeHandle {
         }
     }
 
+    /// What the backend is told in `Authorization` from this call forward:
+    /// `Some(token)` presents that bearer in place of whatever the client
+    /// sent, `None` forwards the client's own — the two states
+    /// [`ServeOptions::backend_auth`](crate::ServeOptions::backend_auth)
+    /// describes, changed on a running listener.
+    ///
+    /// This is how the backend's own key rotates when devices hold their
+    /// own: the edge's admission is untouched, so no device notices, and
+    /// a request admitted before the call runs to completion with what it
+    /// was going to be given — the same rule [`set_token`](Self::set_token)
+    /// keeps about admission and delivery.
+    ///
+    /// # Errors
+    ///
+    /// [`ServeError::InvalidToken`] if `token` is `Some` of an empty or
+    /// whitespace-only value, in which case **nothing changes** — for the
+    /// reason [`set_token`](Self::set_token) gives for refusing loudly.
+    pub fn set_backend_auth(&self, token: Option<String>) -> Result<(), ServeError> {
+        if self.state.credential.set_upstream(token) {
+            Ok(())
+        } else {
+            Err(ServeError::InvalidToken)
+        }
+    }
+
     /// [`set_token`](Self::set_token) with a freshly minted random
     /// token, returned so the caller can redistribute it. The recovery
     /// move for a leaked generated token.

@@ -12,6 +12,7 @@
 //! disagreement to desynchronize, which is the property that makes an
 //! opaque body safe here and would not make it safe on a shared socket.
 
+use crate::admitted::Forward;
 use crate::framing::Framing;
 use crate::headers;
 
@@ -201,18 +202,22 @@ pub(crate) fn expects_continue(fields: &[(String, String)]) -> bool {
 ///
 /// `peer` is the connecting endpoint's fingerprint, which the backend is
 /// told alongside the fact that the request came through the tunnel at
-/// all; `device` is the name of the token that admitted, when one added
-/// by name did — see [`headers::set_tunnel_markers`].
+/// all; `forward` is what else it is told — the name of the token that
+/// admitted, and the bearer to present in the client's place — see
+/// [`headers::set_tunnel_markers`] and [`headers::set_authorization`].
 pub(crate) fn rewrite_for_backend(
     head: &mut RequestHead,
     authority: &str,
     peer: &str,
-    device: Option<&str>,
+    forward: &Forward,
 ) {
     headers::strip_hop_by_hop(&mut head.headers);
     headers::strip_inbound_forwarded(&mut head.headers);
+    if let Some(upstream) = &forward.upstream {
+        headers::set_authorization(&mut head.headers, upstream);
+    }
     headers::set_host(&mut head.headers, authority);
-    headers::set_tunnel_markers(&mut head.headers, peer, device);
+    headers::set_tunnel_markers(&mut head.headers, peer, forward.device.as_deref());
     // The same sentence the response carries to the client, said to the
     // other side for the same reason: this connection carries one exchange.
     // The edge opens a fresh one per exchange and drops it afterwards, so

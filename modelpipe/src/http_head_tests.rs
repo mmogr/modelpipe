@@ -12,6 +12,15 @@
 use super::*;
 use crate::framing::{Framing, framing};
 
+/// A forward that changes nothing about who the request is from or what it
+/// presents — the shape every version before `backend_auth` produced.
+fn passthrough() -> Forward {
+    Forward {
+        device: None,
+        upstream: None,
+    }
+}
+
 fn fields(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
     pairs
         .iter()
@@ -301,7 +310,7 @@ fn rewriting_for_the_backend_replaces_the_connection_and_keeps_the_message() {
             ("Content-Type", "application/json"),
         ]),
     };
-    rewrite_for_backend(&mut head, "127.0.0.1:11434", "3ca82708b995", None);
+    rewrite_for_backend(&mut head, "127.0.0.1:11434", "3ca82708b995", &passthrough());
 
     let names: Vec<String> = head
         .headers
@@ -434,4 +443,37 @@ fn a_content_length_is_trimmed_of_http_whitespace_and_no_more() {
             "{value:?} is not a length this edge and the next hop agree on"
         );
     }
+}
+
+/// With an upstream bearer, the client's `Authorization` — every copy of
+/// it, whatever its case — is gone and the edge's is in its place, and the
+/// device marker rides alongside.
+#[test]
+fn rewrite_presents_the_upstream_bearer_and_drops_the_clients() {
+    let raw = b"GET /v1/models HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer device-key\r\nauthorization: Bearer twice\r\n\r\n";
+    let (mut head, _) = parse_request(raw).expect("valid").expect("complete");
+    let forward = Forward {
+        device: Some("laptop".into()),
+        upstream: Some("backend-key".into()),
+    };
+    rewrite_for_backend(&mut head, "127.0.0.1:11434", "3ca82708b995", &forward);
+    let auth: Vec<&str> = head
+        .headers
+        .iter()
+        .filter(|(n, _)| n.eq_ignore_ascii_case("authorization"))
+        .map(|(_, v)| v.as_str())
+        .collect();
+    assert_eq!(auth, ["Bearer backend-key"], "{:?}", head.headers);
+    assert!(
+        head.headers
+            .iter()
+            .any(|(n, v)| n == "X-Modelpipe-Device" && v == "laptop"),
+        "{:?}",
+        head.headers
+    );
+    assert!(
+        !head.headers.iter().any(|(_, v)| v.contains("device-key")),
+        "the device's own key must not reach the backend: {:?}",
+        head.headers
+    );
 }

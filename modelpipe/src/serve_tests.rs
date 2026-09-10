@@ -3,11 +3,15 @@
 //! Split out via `#[path]` so `serve.rs` stays inside the file-size
 //! budget, the same way every other module in the crate does it.
 
+use std::time::Duration;
+
 use super::*;
+use crate::token_policy::TokenPolicy;
 
 /// Distinct from the sentinel `credential.rs` uses, so a leak names
 /// the type it escaped through.
 const SUPPLIED: &str = "sk-zzq-serve-options-sentinel";
+const UPSTREAM: &str = "sk-zzq-serve-options-upstream-sentinel";
 
 /// `ServeOptions` is the type an embedder is most likely to hold in a
 /// struct of their own and derive `Debug` on, which is how a supplied
@@ -21,6 +25,7 @@ fn debug_for_serve_options_never_renders_the_supplied_token() {
     // how the value was built.
     let opts = ServeOptions {
         auth: TokenPolicy::Supplied(SUPPLIED.to_owned()),
+        backend_auth: Some(UPSTREAM.to_owned()),
         relay: Some("https://relay.example.com/".to_owned()),
         ..Default::default()
     };
@@ -28,6 +33,14 @@ fn debug_for_serve_options_never_renders_the_supplied_token() {
     assert!(
         !rendered.contains(SUPPLIED),
         "the token leaked through ServeOptions: {rendered}"
+    );
+    assert!(
+        !rendered.contains(UPSTREAM),
+        "the upstream bearer leaked through ServeOptions: {rendered}"
+    );
+    assert!(
+        rendered.contains("backend_auth: Some(\"<redacted>\")"),
+        "but its presence is legible: {rendered}"
     );
     assert!(
         rendered.contains("relay.example.com"),

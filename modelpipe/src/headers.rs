@@ -181,6 +181,19 @@ pub(crate) fn set_host(headers: &mut Vec<(String, String)>, authority: &str) {
     headers.insert(0, ("Host".to_owned(), authority.to_owned()));
 }
 
+/// Present `token` to the backend as the bearer, in place of whatever the
+/// client sent.
+///
+/// Every inbound `Authorization` is removed first, for the reason
+/// [`set_host`] removes every `Host`: what the backend reads must be what
+/// this edge wrote. Here that is the point rather than a tidiness — the
+/// value removed is a device's own credential, and the backend is the one
+/// party that must never see it.
+pub(crate) fn set_authorization(headers: &mut Vec<(String, String)>, token: &str) {
+    headers.retain(|(name, _)| !name.eq_ignore_ascii_case("authorization"));
+    headers.push(("Authorization".to_owned(), format!("Bearer {token}")));
+}
+
 /// Mark the request as tunnelled, from `peer`.
 ///
 /// Every inbound copy of either marker is removed first, for the reason

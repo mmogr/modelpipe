@@ -1,17 +1,52 @@
-//! Everything that writes the primary credential.
+//! The primary credential — its type, and everything that writes it or
+//! what is presented upstream in its place.
 //!
 //! A child of [`super`] via `#[path]`, the way the test files are, rather
 //! than a sibling module: these methods touch the cell and the grace
 //! window directly, and keeping them a child keeps both fields private.
 //! Split off when named tokens brought `credential.rs` to the file-size
 //! budget. The division is by question — `credential.rs` answers *what
-//! admits*, and this file *what becomes of what is enforced* when the
-//! operator changes it.
+//! admits*, and this file *what the listener holds of its own* and what
+//! becomes of it when the operator changes it.
 
+use std::sync::Arc;
 use std::time::Duration;
 
-use super::{Credential, Enforced, Primary};
+use super::Credential;
 use crate::minting::{mint, presentable};
+
+/// What the listener enforces of its own, apart from anything added by
+/// name.
+#[derive(Clone)]
+pub(super) enum Primary {
+    /// Serving open: everything admits, and nothing else is consulted.
+    Open,
+    /// No token of its own — [`TokenPolicy::Named`](crate::TokenPolicy::Named). Only named tokens, a
+    /// graced key and grants admit. This is *closed*, and the difference
+    /// from [`Open`](Self::Open) is the whole reason the cell is an enum
+    /// rather than an `Option`: before named tokens, "no primary" and
+    /// "serving open" were the same state.
+    Absent,
+    /// The enforced token.
+    Token(Arc<Enforced>),
+}
+
+/// The token a listener enforces.
+///
+/// One field, since the scheme stopped being part of what is compared: the
+/// `Authorization` value is split at its single space and only the
+/// credential after it is matched, so the pre-built `"Bearer <token>"`
+/// string this used to carry beside the token had no reader left.
+pub(super) struct Enforced {
+    /// What [`ServeHandle::token`](crate::ServeHandle::token) reports.
+    pub(super) token: String,
+}
+
+impl Enforced {
+    pub(super) fn new(token: String) -> Arc<Self> {
+        Arc::new(Self { token })
+    }
+}
 
 impl Credential {
     /// Install `token`, replacing whatever is enforced. Turns
@@ -77,6 +112,29 @@ impl Credential {
         }
         *primary = Primary::Token(Enforced::new(token));
         true
+    }
+
+    /// What the backend is told in `Authorization` from now on: `Some` to
+    /// present that bearer in the client's place, `None` to forward the
+    /// client's own. Returns whether it took — `Some` of a value nothing
+    /// could present is refused, and what was in force stays in force.
+    pub(crate) fn set_upstream(&self, token: Option<String>) -> bool {
+        if token.as_deref().is_some_and(|t| !presentable(t)) {
+            return false;
+        }
+        *self
+            .upstream
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = token.map(Arc::from);
+        true
+    }
+
+    /// The bearer presented upstream, if one replaces the client's.
+    pub(crate) fn upstream(&self) -> Option<Arc<str>> {
+        self.upstream
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
     }
 
     /// Install a freshly minted token and return it.

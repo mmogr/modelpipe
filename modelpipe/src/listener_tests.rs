@@ -18,8 +18,9 @@ use std::time::Duration;
 use iroh::Endpoint;
 use iroh::endpoint::presets;
 
-use crate::serve::{ServeOptions, serve};
+use crate::serve::serve;
 use crate::serve_handle::ServeHandle;
+use crate::serve_options::ServeOptions;
 use crate::status::PipeStatus;
 use crate::transport;
 

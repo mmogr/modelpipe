@@ -557,6 +557,72 @@ async fn each_named_token_admits_and_removing_one_refuses_only_that_device() {
     serving.shutdown().await;
 }
 
+/// The backend keeps one key and every device keeps a different one: what
+/// arrives at the backend through a live pipe is the edge's bearer, and
+/// the device's own never leaves the edge.
+#[tokio::test]
+async fn the_backend_is_handed_the_edges_bearer_through_a_live_pipe() {
+    let backend = MockBackend::json(200, OK_BODY).await;
+    let mut opts = ServeOptions::default();
+    opts.auth = TokenPolicy::Named;
+    opts.backend_auth = Some("the-backends-own-key".to_owned());
+    opts.port_mapping = false;
+    let serving = within("serve", Box::pin(modelpipe::serve(&backend.url, opts)))
+        .await
+        .expect("serve");
+    serving
+        .add_token("laptop", "sk-laptop".to_owned())
+        .expect("a valid name and token");
+    let ticket = serving.ticket();
+    let mut copts = ConnectOptions::default();
+    copts.port_mapping = false;
+    let connected = within("connect", Box::pin(modelpipe::connect(&ticket, copts)))
+        .await
+        .expect("connect");
+    within("the pairing must form", carrying(&connected)).await;
+    let url = connected.base_url();
+
+    let admitted = within(
+        "the device admits",
+        request(&url, "/v1/models", Some("Bearer sk-laptop")),
+    )
+    .await
+    .expect("request");
+    assert!(admitted.starts_with("HTTP/1.1 200"), "got: {admitted}");
+
+    let seen = backend.received().await;
+    assert!(
+        seen.contains("Authorization: Bearer the-backends-own-key"),
+        "the edge's bearer reached the backend: {seen}"
+    );
+    assert!(
+        !seen.contains("sk-laptop"),
+        "the device's key never did: {seen}"
+    );
+    assert!(seen.contains("X-Modelpipe-Device: laptop"), "{seen}");
+
+    serving
+        .set_backend_auth(Some("rotated-backend-key".to_owned()))
+        .expect("presentable");
+    let again = within(
+        "the device never noticed the rotation",
+        request(&url, "/v1/models", Some("Bearer sk-laptop")),
+    )
+    .await
+    .expect("request");
+    assert!(again.starts_with("HTTP/1.1 200"), "got: {again}");
+    assert!(
+        backend
+            .received()
+            .await
+            .contains("Authorization: Bearer rotated-backend-key"),
+        "and the backend was handed the new one"
+    );
+
+    connected.shutdown().await;
+    serving.shutdown().await;
+}
+
 /// The other half: **restarting the listener rotates the ticket**, and the
 /// old one does not merely fail authentication — it reaches nobody, because
 /// the endpoint key is ephemeral and the restarted process is a different

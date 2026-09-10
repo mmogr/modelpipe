@@ -183,7 +183,8 @@ where
     // Read before the rewrite, which is where the head stops being the
     // client's.
     let expects_continue = http_head::expects_continue(&head.headers);
-    http_head::rewrite_for_backend(&mut head, backend.authority(), peer, admitted.device());
+    let forward = credential.forward(&admitted);
+    http_head::rewrite_for_backend(&mut head, backend.authority(), peer, &forward);
     // A backend that will not take the connection is a gateway failure with
     // an answer, not a stream that dies silently. Without this the client
     // received nothing at all — not a status, not a malformed response, no

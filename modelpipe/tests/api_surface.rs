@@ -223,6 +223,7 @@ fn a_dependents_debug_output_cannot_contain_the_supplied_token() {
 
     let mut opts = ServeOptions::default();
     opts.auth = TokenPolicy::Supplied(SECRET.to_owned());
+    opts.backend_auth = Some(SECRET.to_owned());
     let cfg = EmbedderConfig {
         name: "daemon",
         opts,
