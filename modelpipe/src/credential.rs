@@ -3,13 +3,20 @@
 //! Owns the policy a listener is configured with, the cell that holds the
 //! credential it currently enforces, and the comparison itself. It does not
 //! know what an HTTP request looks like: it is handed the bytes of an
-//! `Authorization` header, or nothing, and answers whether they admit.
+//! `Authorization` header, or nothing, and answers whether they admit —
+//! and, because a listener may hold one token per paired machine, *which*
+//! of its credentials did.
 //!
 //! The cell is always present, even when serving open. `set_token` takes
 //! `&self` and turns authentication *on* at runtime, so a listener that had
 //! decided at startup not to install a check could not honour that later —
 //! the difference between open and closed is whether the cell holds a
 //! credential, never whether the check runs.
+//!
+//! Everything that *writes* the primary is in `credential_rotate.rs`, a
+//! child module, and the answer to *which credential admitted* is the
+//! [`Admitted`] type in `admitted.rs`; both were split off when named
+//! tokens brought this file to the file-size budget.
 
 use std::fmt;
 use std::num::NonZeroU8;
@@ -19,10 +26,15 @@ use std::time::Duration;
 use subtle::ConstantTimeEq;
 
 use crate::ServeError;
+pub(crate) use crate::admitted::Admitted;
 use crate::grant::Grants;
 use crate::minting::{mint, presentable};
+use crate::named::{AddRefused, Named};
 use crate::superseded::Superseded;
 use crate::token_policy::TokenPolicy;
+
+#[path = "credential_rotate.rs"]
+mod rotate;
 
 /// The scheme, with its trailing space, as it appears in the header.
 const BEARER_PREFIX: &str = "Bearer ";
@@ -30,18 +42,40 @@ const BEARER_PREFIX: &str = "Bearer ";
 /// The credential a listener currently enforces, and the comparison
 /// against it.
 pub(crate) struct Credential {
-    /// `None` means serving open. Wrapped in an `Arc` so a rotation swaps a
-    /// pointer rather than mutating a buffer some request may be part way
-    /// through comparing against.
-    enforced: RwLock<Option<Arc<Enforced>>>,
-    /// Credentials that admit once. Consulted only after the enforced
-    /// token has failed to match, so nothing here can widen what the
-    /// primary admits — only add a single, expiring exception to it.
+    /// The listener's own credential. Behind a lock so a rotation swaps
+    /// the value rather than mutating a buffer some request may be part
+    /// way through comparing against; the token inside is an `Arc` for the
+    /// same reason.
+    primary: RwLock<Primary>,
+    /// Standing credentials added by name, one per paired machine.
+    /// Consulted after the primary and before the two below: presenting
+    /// one spends nothing, and it is the answer to "which device" that the
+    /// backend is told.
+    named: Named,
+    /// Credentials that admit once. Consulted only after everything that
+    /// spends nothing has failed to match, so nothing here can widen what
+    /// the others admit — only add a single, expiring exception to them.
     grants: Grants,
     /// The key a graced rotation replaced, until its window closes.
-    /// Consulted after the enforced token for the reason `grants` is, and
-    /// *before* `grants` because this check spends nothing.
+    /// Consulted after the primary and the named tokens, and *before*
+    /// `grants` because this check spends nothing.
     superseded: Superseded,
+}
+
+/// What the listener enforces of its own, apart from anything added by
+/// name.
+#[derive(Clone)]
+enum Primary {
+    /// Serving open: everything admits, and nothing else is consulted.
+    Open,
+    /// No token of its own — [`TokenPolicy::Named`]. Only named tokens, a
+    /// graced key and grants admit. This is *closed*, and the difference
+    /// from [`Open`](Self::Open) is the whole reason the cell is an enum
+    /// rather than an `Option`: before named tokens, "no primary" and
+    /// "serving open" were the same state.
+    Absent,
+    /// The enforced token.
+    Token(Arc<Enforced>),
 }
 
 /// The token a listener enforces.
@@ -57,45 +91,51 @@ struct Enforced {
 
 impl Credential {
     /// Build the cell a policy asks for, returning the token to show the
-    /// operator — `None` when serving open.
+    /// operator — `None` when there is no primary to show.
     pub(crate) fn new(policy: &TokenPolicy) -> Result<(Self, Option<String>), ServeError> {
-        let token = match policy {
-            TokenPolicy::Generate => Some(mint()),
+        let (primary, token) = match policy {
+            TokenPolicy::Generate => {
+                let token = mint();
+                (Primary::Token(Enforced::new(token.clone())), Some(token))
+            }
             // Refused rather than enforced. `"Bearer "` with a trailing
             // space is a header no conforming client can present, because
             // HTTP parsers trim trailing whitespace from values — so the
             // listener would come up and refuse everything, silently, for
             // the life of the process.
             TokenPolicy::Supplied(t) if !presentable(t) => return Err(ServeError::InvalidToken),
-            TokenPolicy::Supplied(t) => Some(t.clone()),
-            TokenPolicy::InsecureNoAuth => None,
+            TokenPolicy::Supplied(t) => (Primary::Token(Enforced::new(t.clone())), Some(t.clone())),
+            TokenPolicy::InsecureNoAuth => (Primary::Open, None),
+            TokenPolicy::Named => (Primary::Absent, None),
             // `TokenPolicy` is `#[non_exhaustive]` within its own crate only
             // for downstream matches; here the match is total and a new
             // variant must be a compile error rather than silently serving
             // open, which is the one wrong default this type could have.
         };
         let cell = Self {
-            enforced: RwLock::new(token.clone().map(Enforced::new)),
+            primary: RwLock::new(primary),
+            named: Named::new(),
             grants: Grants::new(),
             superseded: Superseded::new(),
         };
         Ok((cell, token))
     }
 
-    /// Whether an `Authorization` header value admits.
+    /// Which credential an `Authorization` header value admits under, or
+    /// `None` when it admits under none.
     ///
-    /// `None` is a request with no such header, which is distinct from one
-    /// carrying an empty value only in that neither is ever accepted while
-    /// a credential is enforced.
+    /// `None` offered is a request with no such header, which is distinct
+    /// from one carrying an empty value only in that neither is ever
+    /// accepted while anything is enforced.
     ///
-    /// The comparison is constant-time in the **token**, via `subtle`, and
-    /// so is the grace window's. What deliberately is not, in every case
-    /// because it is a public parameter of the system rather than a secret:
-    /// the length, so an unequal-length value is rejected without comparing
-    /// (the alternative is a padded buffer for no gain); the scheme, which
-    /// is a fixed seven-byte string every client sends in the clear; and
-    /// *which* of the three credentials below admitted, which follows from
-    /// the short-circuiting order and tells an attacker nothing the 200 has
+    /// The comparison is constant-time in every **token**, via `subtle`.
+    /// What deliberately is not, in every case because it is a public
+    /// parameter of the system rather than a secret: the length, so an
+    /// unequal-length value is rejected without comparing (the alternative
+    /// is a padded buffer for no gain); the scheme, which is a fixed
+    /// seven-byte string every client sends in the clear; and *which* of
+    /// the credentials below admitted, which follows from the
+    /// short-circuiting order and tells an attacker nothing the 200 has
     /// not already told them.
     ///
     /// The scheme is matched case-insensitively because RFC 9110 §11.1 says
@@ -110,16 +150,14 @@ impl Credential {
     /// one: the whitespace refusals this type has always made are still
     /// made, and a token that begins with a space is still a different
     /// token.
-    pub(crate) fn admits(&self, offered: Option<&[u8]>) -> bool {
-        // The Arc is cloned and the lock released before comparing, so a
-        // rotation is never blocked behind an in-flight request.
-        let enforced = self.snapshot();
-        let Some(enforced) = enforced else {
-            return true; // serving open
-        };
-        let Some(offered) = offered else {
-            return false;
-        };
+    pub(crate) fn admits(&self, offered: Option<&[u8]>) -> Option<Admitted> {
+        // Cloned and the lock released before comparing, so a rotation is
+        // never blocked behind an in-flight request.
+        let primary = self.snapshot();
+        if matches!(primary, Primary::Open) {
+            return Some(Admitted::Open);
+        }
+        let offered = offered?;
         // `BEARER_PREFIX` carries the space, so this splits scheme from
         // credential in one step and a value shorter than the scheme cannot
         // index past its end.
@@ -127,19 +165,32 @@ impl Credential {
         if offered.len() <= scheme
             || !offered[..scheme].eq_ignore_ascii_case(BEARER_PREFIX.as_bytes())
         {
-            return false;
+            return None;
         }
-        let expected = enforced.token.as_bytes();
         let presented = &offered[scheme..];
-        if expected.len() == presented.len() && bool::from(expected.ct_eq(presented)) {
-            return true;
+        if let Primary::Token(enforced) = &primary {
+            let expected = enforced.token.as_bytes();
+            if expected.len() == presented.len() && bool::from(expected.ct_eq(presented)) {
+                return Some(Admitted::Token);
+            }
         }
-        // Not the token. Two other things it could be, and the order is
-        // load-bearing: the key a graced rotation replaced spends nothing
-        // and so is asked first; a grant, which presenting *does* spend,
-        // only after. Reversed, a value that is both would burn its one
-        // admission on a request the open window admits for free.
-        self.superseded.admits(presented) || self.grants.consume(presented)
+        // Not the primary. Three other things it could be, and the order
+        // is load-bearing: everything that spends nothing is asked before
+        // the one thing that does. A named token and the key a graced
+        // rotation replaced both admit repeatedly; a grant, which
+        // presenting *does* spend, only after them. Reversed, a value that
+        // is both would burn its one admission on a request that would
+        // have been admitted for free.
+        if let Some(name) = self.named.admits(presented) {
+            return Some(Admitted::Named(name));
+        }
+        if self.superseded.admits(presented) {
+            return Some(Admitted::Superseded);
+        }
+        if self.grants.consume(presented) {
+            return Some(Admitted::Grant);
+        }
+        None
     }
 
     /// Admit one request bearing `token` before `ttl` elapses, without
@@ -164,85 +215,32 @@ impl Credential {
         true
     }
 
-    /// What the listener currently enforces, or `None` when serving open.
+    /// Hold `token` under `name` as a standing credential. See
+    /// [`Named::add`] for what is refused and why.
+    pub(crate) fn add_named(&self, name: &str, token: String) -> Result<(), AddRefused> {
+        self.named.add(name, token)
+    }
+
+    /// Stop admitting the token held under `name`; whether there was one.
+    pub(crate) fn remove_named(&self, name: &str) -> bool {
+        self.named.remove(name)
+    }
+
+    /// Every name a token is held under.
+    pub(crate) fn named(&self) -> Vec<String> {
+        self.named.names()
+    }
+
+    /// What the listener enforces of its own, or `None` when it has no
+    /// primary — serving open, or admitting by name only.
     pub(crate) fn token(&self) -> Option<String> {
-        self.snapshot().map(|e| e.token.clone())
-    }
-
-    /// Install `token`, replacing whatever is enforced. Turns
-    /// authentication on if it was off.
-    ///
-    /// Returns whether it did. A token nothing can present is refused here
-    /// for the reason [`Credential::new`] refuses it, and refusing means
-    /// keeping the credential already in force — installing it would take a
-    /// working listener down to one that answers nothing.
-    pub(crate) fn set(&self, token: String) -> bool {
-        self.install(token, None)
-    }
-
-    /// [`set`](Self::set), keeping the key it replaced admitting until
-    /// `grace` elapses. See [`Superseded::hold`] for what a second
-    /// rotation inside that window does, which `grace` values hold nothing
-    /// at all, and why.
-    pub(crate) fn set_with_grace(&self, token: String, grace: Duration) -> bool {
-        self.install(token, Some(grace))
-    }
-
-    /// The one place the enforced cell is written.
-    ///
-    /// `grace` is `Some` only for a rotation asked to leave an overlap
-    /// behind. Everything else releases the window instead — a plain
-    /// [`set`](Self::set), which is how "the old value stops working
-    /// immediately" stays true even when one is called mid-window, and a
-    /// rotation onto a listener that was serving open, which has no key to
-    /// leave behind in the first place.
-    ///
-    /// A refused token returns before either lock is taken, so an open
-    /// window is left exactly as it was — neither shut nor extended. That
-    /// is the right behaviour (a rotation that did not happen must not
-    /// change what admits) and it is the one the callers above have to
-    /// document, because "nothing changed" reads to an operator as "no old
-    /// key is admitting" and mid-window those are different claims.
-    ///
-    /// The old key is held *before* the new one is enforced, and both
-    /// happen under the enforced write lock, so the **stored state** is
-    /// never a gap: at every instant a reader could observe it, one of the
-    /// two values is admitting. That is the only place these two locks
-    /// nest, and this is the order.
-    ///
-    /// It does not follow — and is not claimed — that no request can be
-    /// refused during a rotation. [`admits`](Self::admits) reads the two
-    /// credentials under two separate locks, releasing the first before
-    /// taking the second, precisely so a rotation is never held up behind
-    /// an in-flight request. A rotation landing between those two reads can
-    /// refuse a value that admitted before it and admits after it. That is
-    /// fail-closed, it is the snapshot race `admits` has always run, and
-    /// the honest guarantee is about the state rather than about every
-    /// request that races it.
-    fn install(&self, token: String, grace: Option<Duration>) -> bool {
-        if !presentable(&token) {
-            return false;
+        match self.snapshot() {
+            Primary::Token(enforced) => Some(enforced.token.clone()),
+            Primary::Open | Primary::Absent => None,
         }
-        let mut enforced = self.write();
-        match (grace, enforced.as_ref()) {
-            (Some(grace), Some(old)) => self.superseded.hold(old.token.clone(), grace),
-            _ => self.superseded.release(),
-        }
-        *enforced = Some(Enforced::new(token));
-        true
     }
 
-    /// Install a freshly minted token and return it.
-    pub(crate) fn rotate(&self) -> String {
-        let token = mint();
-        // Always presentable: 256 bits of base32 is never empty. Asserted
-        // rather than ignored, so that a change to `mint` that broke it
-        // fails here instead of producing a listener nobody can reach.
-        assert!(self.set(token.clone()), "a minted token is always usable");
-        token
-    }
-
-    fn snapshot(&self) -> Option<Arc<Enforced>> {
+    fn snapshot(&self) -> Primary {
         self.read().clone()
     }
 
@@ -251,35 +249,36 @@ impl Credential {
     // rather than propagating is the honest response to an impossible case,
     // and turns a hypothetical panic in one request into no effect on the
     // rest.
-    fn read(&self) -> std::sync::RwLockReadGuard<'_, Option<Arc<Enforced>>> {
-        self.enforced
+    fn read(&self) -> std::sync::RwLockReadGuard<'_, Primary> {
+        self.primary
             .read()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
-    fn write(&self) -> std::sync::RwLockWriteGuard<'_, Option<Arc<Enforced>>> {
-        self.enforced
+    fn write(&self) -> std::sync::RwLockWriteGuard<'_, Primary> {
+        self.primary
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 }
 
 impl fmt::Debug for Credential {
-    /// Reports only whether a credential is enforced, never which one — the
-    /// same rule `Debug for TokenPolicy` follows one screen up. Grants are
-    /// counted and a grace window is reported open or shut, for the same
-    /// reason: state, never secrets.
+    /// Reports only what kind of credential is enforced, never which — the
+    /// same rule `Debug for TokenPolicy` follows one screen up. Named
+    /// tokens and grants are counted and a grace window is reported open or
+    /// shut, for the same reason: state, never secrets.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let state = if self.read().is_some() {
-            "enforced"
-        } else {
-            "open"
+        let state = match self.snapshot() {
+            Primary::Open => "open",
+            Primary::Absent => "named",
+            Primary::Token(_) => "enforced",
         };
         // `finish_non_exhaustive` rather than `finish`: the token field is
         // deliberately absent, and the lint that asks for every field is
         // right to ask — the answer is that this one is withheld on purpose.
         f.debug_struct("Credential")
             .field("state", &state)
+            .field("named", &self.named.count())
             .field("grants", &self.grants.count())
             .field("grace", &self.superseded.is_open())
             .finish_non_exhaustive()

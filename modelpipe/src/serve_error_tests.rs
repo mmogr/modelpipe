@@ -25,6 +25,10 @@ fn a_user_fixable_serve_error_is_not_retryable() {
         ServeError::InvalidRelay {
             url: "not a url".to_owned(),
         },
+        ServeError::NamedToken {
+            name: "Matt's iPhone".to_owned(),
+            reason: NamedTokenRefusal::InvalidName,
+        },
     ] {
         assert!(!e.is_retryable(), "{e} should not be retryable");
     }

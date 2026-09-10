@@ -52,6 +52,7 @@ use std::time::Duration;
 // "added a type, forgot to export it" into a compile error.
 
 // Pure: no I/O, no async.
+mod admitted;
 mod backend;
 mod base32;
 mod body;
@@ -71,6 +72,7 @@ mod lifecycle;
 mod listener;
 mod locality;
 mod minting;
+mod named;
 mod outcome;
 mod path_watch;
 mod peer;
@@ -97,6 +99,7 @@ mod serve_error;
 mod serve_grace;
 mod serve_grant;
 mod serve_handle;
+mod serve_named;
 mod serve_status;
 
 // This block is the public API. Everything above is a private module,
@@ -106,7 +109,7 @@ pub use connect::{ConnectError, ConnectOptions, connect};
 pub use connect_handle::ConnectHandle;
 pub use network::NetworkMetrics;
 pub use serve::{ServeOptions, serve};
-pub use serve_error::ServeError;
+pub use serve_error::{NamedTokenRefusal, ServeError};
 pub use serve_handle::ServeHandle;
 pub use status::{CloseReason, PeerView, PipeStatus};
 pub use ticket::{Ticket, TicketParseError};

@@ -87,7 +87,13 @@ where
     // discovering at the call site that the whole edge cannot be spawned.
     B: Backend + Sync,
 {
-    let span = tracing::info_span!("exchange", method = Empty, path = Empty, status = Empty);
+    let span = tracing::info_span!(
+        "exchange",
+        method = Empty,
+        path = Empty,
+        status = Empty,
+        device = Empty
+    );
     async {
         let started = std::time::Instant::now();
         let result = run(stream, credential, backend, peer).await;
@@ -142,7 +148,7 @@ where
         return Ok(Outcome::TimedOut);
     };
     let Ok((mut head, leftover)) = asked? else {
-        return refuse(stream, refusal::bad_request(), Outcome::BadRequest).await;
+        return refusal::send(stream, refusal::bad_request(), Outcome::BadRequest).await;
     };
     // Recorded here rather than after the checks below, so a request
     // refused on its framing or its credential is still named on the line
@@ -159,12 +165,17 @@ where
     // Every framing refusal is a 400; the variants exist so a test can say
     // which rule fired, not so the edge answers them differently.
     let Ok(request_framing) = framing::framing(&head.headers, false) else {
-        return refuse(stream, refusal::bad_request(), Outcome::BadRequest).await;
+        return refusal::send(stream, refusal::bad_request(), Outcome::BadRequest).await;
     };
 
     // 3. The credential. Still nothing has been sent anywhere.
-    if !credential.admits(http_head::authorization(&head.headers)) {
-        return refuse(stream, refusal::unauthorized(), Outcome::Unauthorized).await;
+    let Some(admitted) = credential.admits(http_head::authorization(&head.headers)) else {
+        return refusal::send(stream, refusal::unauthorized(), Outcome::Unauthorized).await;
+    };
+    // The name is the operator's and the backend is about to be told it;
+    // on the line it names the device the way `peer` names the endpoint.
+    if let Some(device) = admitted.device() {
+        span.record("device", device);
     }
 
     // 4. Admitted. Only now does a backend connection exist.
@@ -172,7 +183,7 @@ where
     // Read before the rewrite, which is where the head stops being the
     // client's.
     let expects_continue = http_head::expects_continue(&head.headers);
-    http_head::rewrite_for_backend(&mut head, backend.authority(), peer);
+    http_head::rewrite_for_backend(&mut head, backend.authority(), peer, admitted.device());
     // A backend that will not take the connection is a gateway failure with
     // an answer, not a stream that dies silently. Without this the client
     // received nothing at all — not a status, not a malformed response, no
@@ -181,7 +192,7 @@ where
         // Never reached, so nothing was sent and nothing came back. The
         // other two 502s in `refusal` describe events that did happen; this
         // one is the absence of any.
-        return refuse(stream, refusal::backend_unreachable(), Outcome::BadGateway).await;
+        return refusal::send(stream, refusal::backend_unreachable(), Outcome::BadGateway).await;
     };
 
     // Split so the request body and the response can be in flight at once.
@@ -237,10 +248,10 @@ where
     let (mut response, response_leftover) = match carried {
         Carried::Answered(response, rest) => (response, rest),
         Carried::Unreadable => {
-            return refuse(stream, refusal::bad_gateway(), Outcome::BadGateway).await;
+            return refusal::send(stream, refusal::bad_gateway(), Outcome::BadGateway).await;
         }
         Carried::Unfinished => {
-            return refuse(stream, refusal::incomplete_request(), Outcome::Unfinished).await;
+            return refusal::send(stream, refusal::incomplete_request(), Outcome::Unfinished).await;
         }
     };
     // Recorded before the framing check below, deliberately: a backend that
@@ -254,7 +265,7 @@ where
     let Ok(response_framing) =
         framing::response_framing(response.status, &method, &response.headers)
     else {
-        return refuse(stream, refusal::bad_gateway(), Outcome::BadGateway).await;
+        return refusal::send(stream, refusal::bad_gateway(), Outcome::BadGateway).await;
     };
     headers::strip_hop_by_hop(&mut response.headers);
     // One bi-stream carries one exchange, so the client must not put a
@@ -280,18 +291,6 @@ where
     body::forward(&mut from_backend, stream, response_framing).await?;
 
     Ok(Outcome::Forwarded)
-}
-
-/// Write a locally synthesized response and return without touching the
-/// backend.
-async fn refuse<S: AsyncWrite + Unpin>(
-    stream: &mut S,
-    response: Vec<u8>,
-    outcome: Outcome,
-) -> std::io::Result<Outcome> {
-    stream.write_all(&response).await?;
-    stream.flush().await?;
-    Ok(outcome)
 }
 
 #[cfg(test)]

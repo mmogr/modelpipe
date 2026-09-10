@@ -42,6 +42,15 @@ pub enum TokenPolicy {
     /// which is exactly the failure mode this crate exists to close —
     /// hence the name. Loudly discouraged.
     InsecureNoAuth,
+    /// Enforce no token of the listener's own: only tokens added by name
+    /// through [`ServeHandle::add_token`](crate::ServeHandle::add_token),
+    /// and one-time grants, admit. For an embedder that issues every
+    /// device its own credential and revokes them one at a time — the
+    /// shape [`remove_token`](crate::ServeHandle::remove_token) exists for.
+    /// Until the first `add_token`, nothing admits: the listener is
+    /// closed, not open, and [`ServeHandle::token`](crate::ServeHandle::token)
+    /// reports `None` because there is nothing to report.
+    Named,
 }
 
 impl fmt::Debug for TokenPolicy {
@@ -57,6 +66,7 @@ impl fmt::Debug for TokenPolicy {
             Self::Generate => f.write_str("Generate"),
             Self::Supplied(_) => f.write_str("Supplied(<redacted>)"),
             Self::InsecureNoAuth => f.write_str("InsecureNoAuth"),
+            Self::Named => f.write_str("Named"),
         }
     }
 }
@@ -98,5 +108,6 @@ mod tests {
             format!("{:?}", TokenPolicy::InsecureNoAuth),
             "InsecureNoAuth"
         );
+        assert_eq!(format!("{:?}", TokenPolicy::Named), "Named");
     }
 }

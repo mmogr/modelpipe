@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - *(credential)* a grant can burn at the edge after a number of wrong bearers, where the guesses arrive
+- *(credential)* a token per paired device, added and removed by name, and the backend told which one
 
 ## [0.4.0](https://github.com/mmogr/modelpipe/compare/v0.3.0...v0.4.0) - 2026-09-07
 

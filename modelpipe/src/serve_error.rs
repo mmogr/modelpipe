@@ -116,6 +116,46 @@ pub enum ServeError {
         /// What went wrong with it.
         source: std::io::Error,
     },
+    /// [`ServeHandle::add_token`](crate::ServeHandle::add_token) refused
+    /// to hold a token under `name`, and `reason` says which rule did.
+    ///
+    /// One variant for the three, the way [`Identity`](Self::Identity) is
+    /// one for its five: they are one verdict — nothing was held — and a
+    /// caller reaches for `name` in every case. A blank *token* is not
+    /// among them; that is [`InvalidToken`](Self::InvalidToken), the same
+    /// refusal every other way of installing one makes.
+    NamedToken {
+        /// The name that was offered.
+        name: String,
+        /// Which rule refused it.
+        reason: NamedTokenRefusal,
+    },
+}
+
+/// Why a token could not be held under a name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum NamedTokenRefusal {
+    /// Empty, longer than 64 bytes, or carrying a character a header
+    /// value and a log line cannot both carry unescaped. ASCII letters,
+    /// digits, `.`, `_` and `-` are the whole alphabet.
+    InvalidName,
+    /// A token is already held under this name. Remove it first; replacing
+    /// it silently would be a rotation nobody asked for.
+    NameTaken,
+    /// This exact token is already held under another name, and the
+    /// backend is told exactly one.
+    TokenTaken,
+}
+
+impl fmt::Display for NamedTokenRefusal {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::InvalidName => "the name must be 1–64 of ASCII letters, digits, '.', '_' or '-'",
+            Self::NameTaken => "a token is already held under that name — remove it first",
+            Self::TokenTaken => "that token is already held under another name",
+        })
+    }
 }
 
 impl ServeError {
@@ -139,7 +179,8 @@ impl ServeError {
             | Self::BackendNotLocal { .. }
             | Self::InvalidToken
             | Self::InvalidRelay { .. }
-            | Self::Identity { .. } => false,
+            | Self::Identity { .. }
+            | Self::NamedToken { .. } => false,
             // Everything about the machine underneath. `serve` takes no
             // bind option, so no address here was caller-chosen, and both
             // transient resource exhaustion and a resolver that is briefly
@@ -183,6 +224,9 @@ impl fmt::Display for ServeError {
             Self::Identity { path, .. } => {
                 write!(f, "the identity file at {path} cannot be used")
             }
+            Self::NamedToken { name, reason } => {
+                write!(f, "could not hold a token under {name:?}: {reason}")
+            }
         }
     }
 }
@@ -194,7 +238,8 @@ impl std::error::Error for ServeError {
             | Self::BackendUnresolvable { .. }
             | Self::BackendNotLocal { .. }
             | Self::InvalidToken
-            | Self::InvalidRelay { .. } => None,
+            | Self::InvalidRelay { .. }
+            | Self::NamedToken { .. } => None,
             Self::Bind(e) | Self::Identity { source: e, .. } => Some(e),
         }
     }

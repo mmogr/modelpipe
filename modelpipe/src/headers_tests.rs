@@ -263,7 +263,7 @@ fn tunnel_markers_are_set_by_the_edge_and_never_inherited_from_the_client() {
         ("x-modelpipe-peer", "000000000000"),
         ("Accept", "*/*"),
     ]);
-    set_tunnel_markers(&mut h, "3ca82708b995");
+    set_tunnel_markers(&mut h, "3ca82708b995", None);
 
     assert_eq!(names(&h), ["accept", "via", "x-modelpipe-peer"]);
     assert_eq!(h[1].1, VIA);
@@ -273,7 +273,7 @@ fn tunnel_markers_are_set_by_the_edge_and_never_inherited_from_the_client() {
 #[test]
 fn a_request_with_no_markers_gains_both() {
     let mut h = headers(&[("Accept", "*/*")]);
-    set_tunnel_markers(&mut h, "3ca82708b995");
+    set_tunnel_markers(&mut h, "3ca82708b995", None);
     assert_eq!(names(&h), ["accept", "via", "x-modelpipe-peer"]);
 }
 
@@ -311,4 +311,36 @@ fn the_edge_transform_keeps_the_message_and_drops_the_connection() {
 
     assert_eq!(names(&h), ["host", "authorization", "content-type"]);
     assert_eq!(h[0].1, "127.0.0.1:11434");
+}
+
+// ── The device marker ────────────────────────────────────────────────────
+
+/// A request admitted by a named token tells the backend the name, after
+/// the peer, and a copy a client sent is gone first — the rule the other
+/// two markers already follow.
+#[test]
+fn a_named_admission_adds_the_device_marker_and_strips_a_forged_one() {
+    let mut h = headers(&[("Accept", "*/*"), ("X-Modelpipe-Device", "forged")]);
+    set_tunnel_markers(&mut h, "3ca82708b995", Some("laptop"));
+    assert_eq!(
+        names(&h),
+        ["accept", "via", "x-modelpipe-peer", "x-modelpipe-device"]
+    );
+    assert_eq!(h[3].1, "laptop");
+}
+
+/// A request the primary admitted carries no device marker — a backend
+/// with one client never learns that names exist — and a forged one is
+/// still stripped, so its absence means what it says.
+#[test]
+fn a_primary_admission_carries_no_device_marker_and_still_strips_a_forged_one() {
+    let mut h = headers(&[("x-modelpipe-device", "forged"), ("Accept", "*/*")]);
+    set_tunnel_markers(&mut h, "3ca82708b995", None);
+    assert_eq!(names(&h), ["accept", "via", "x-modelpipe-peer"]);
+}
+
+#[test]
+fn the_device_marker_is_forbidden_in_trailers_like_the_others() {
+    assert!(is_stripped("X-Modelpipe-Device"));
+    assert!(is_forbidden_in_trailer("x-modelpipe-device"));
 }
