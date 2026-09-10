@@ -1895,3 +1895,56 @@ async fn an_expectation_list_containing_continue_is_still_answered() {
         assert!(!text.contains("100 Continue"), "{value:?}: {text:?}");
     }
 }
+
+/// A request admitted by a named token tells the backend the name, in the
+/// edge's words; one the primary admitted carries no such header, so a
+/// backend with one client never learns that names exist. The client's own
+/// claim, in either case, is gone.
+#[tokio::test]
+async fn the_backend_is_told_which_named_token_admitted_and_nothing_when_none_did() {
+    const LAPTOP: &str = "sk-zzq-laptop-sentinel";
+    let (credential, _) = Credential::new(&supplied()).expect("a usable policy");
+    credential
+        .add_named("laptop", LAPTOP.to_owned())
+        .expect("a valid name and token");
+
+    for (bearer, expected) in [(LAPTOP, Some("laptop")), (TOKEN, None)] {
+        let backend = CountingBackend::new(OK_RESPONSE);
+        let mut req = b"GET /v1/models HTTP/1.1\r\nHost: 127.0.0.1:8080\r\n".to_vec();
+        req.extend_from_slice(format!("Authorization: Bearer {bearer}\r\n").as_bytes());
+        req.extend_from_slice(b"X-Modelpipe-Device: forged\r\n\r\n");
+
+        let (mut client, mut edge) = duplex(64 * 1024);
+        client.write_all(&req).await.unwrap();
+        client.shutdown().await.unwrap();
+        let outcome = serve_exchange(&mut edge, &credential, &backend, TEST_PEER)
+            .await
+            .expect("no transport failure");
+        drop(edge);
+        assert_eq!(outcome, Outcome::Forwarded);
+
+        let sent = String::from_utf8(backend.received().await).expect("ascii");
+        let lower = sent.to_ascii_lowercase();
+        assert!(
+            !lower.contains("forged"),
+            "the client's claim is gone: {sent}"
+        );
+        match expected {
+            Some(name) => {
+                assert_eq!(
+                    lower.matches("\r\nx-modelpipe-device:").count(),
+                    1,
+                    "exactly one device marker: {sent}"
+                );
+                assert!(
+                    sent.contains(&format!("X-Modelpipe-Device: {name}")),
+                    "and it names the token: {sent}"
+                );
+            }
+            None => assert!(
+                !lower.contains("x-modelpipe-device"),
+                "the primary admits with no device marker: {sent}"
+            ),
+        }
+    }
+}

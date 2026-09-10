@@ -301,7 +301,7 @@ fn rewriting_for_the_backend_replaces_the_connection_and_keeps_the_message() {
             ("Content-Type", "application/json"),
         ]),
     };
-    rewrite_for_backend(&mut head, "127.0.0.1:11434", "3ca82708b995");
+    rewrite_for_backend(&mut head, "127.0.0.1:11434", "3ca82708b995", None);
 
     let names: Vec<String> = head
         .headers

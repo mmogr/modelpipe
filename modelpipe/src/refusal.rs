@@ -1,4 +1,4 @@
-//! What the edge says when it will not forward.
+//! What the edge says when it will not forward — and [`send`], which says it.
 //!
 //! Pure: each of these is a complete HTTP/1.1 response as bytes, built here
 //! and never obtained from anywhere else. That is the property worth having
@@ -30,10 +30,14 @@
 //! so anyway, which sends the reader to the wrong machine: to the model
 //! server, when the model server is fine and the far laptop is asleep.
 //!
-//! The status stays 502 for all three and [`Outcome`](crate::outcome::Outcome) stays
+//! The status stays 502 for all three and [`Outcome`] stays
 //! one variant, because the client's *recovery* is the same in each case
 //! and that is what a status code is for. What differs is the sentence a
 //! person reads, and the `code` a program matches on.
+
+use tokio::io::{AsyncWrite, AsyncWriteExt as _};
+
+use crate::outcome::Outcome;
 
 /// One refusal, in the shape they all share.
 ///
@@ -167,6 +171,19 @@ pub(crate) fn incomplete_request() -> Vec<u8> {
         "incomplete_request",
         "the request body did not arrive complete",
     )
+}
+
+/// Write a locally synthesized response and return without touching the
+/// backend. Lives with the refusals it sends rather than in `exchange.rs`,
+/// which sits on the file-size budget and is two functions long already.
+pub(crate) async fn send<S: AsyncWrite + Unpin>(
+    stream: &mut S,
+    response: Vec<u8>,
+    outcome: Outcome,
+) -> std::io::Result<Outcome> {
+    stream.write_all(&response).await?;
+    stream.flush().await?;
+    Ok(outcome)
 }
 
 #[cfg(test)]

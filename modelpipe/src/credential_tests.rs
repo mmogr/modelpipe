@@ -27,7 +27,12 @@ fn enforcing(token: &str) -> Credential {
 /// header at all, which differs from one carrying an empty value — and
 /// neither is ever accepted while a credential is enforced.
 fn offers(cell: &Credential, value: Option<&str>) -> bool {
-    cell.admits(value.map(str::as_bytes))
+    cell.admits(value.map(str::as_bytes)).is_some()
+}
+
+/// Which credential admitted, for the tests that are about that.
+fn admitted_by(cell: &Credential, value: &str) -> Option<Admitted> {
+    cell.admits(Some(value.as_bytes()))
 }
 
 // ── What is admitted ─────────────────────────────────────────────────────
@@ -684,4 +689,117 @@ fn only_a_wrong_bearer_counts_as_a_wrong_presentation() {
     }
     assert_eq!(cell.grants.count(), 1, "still waiting for the device");
     assert!(offers(&cell, Some(&format!("Bearer {CODE}"))));
+}
+
+// ── Named tokens ─────────────────────────────────────────────────────────
+
+const LAPTOP: &str = "sk-zzq-the-laptops-key";
+const PHONE: &str = "sk-zzq-the-phones-key";
+
+fn by_name(name: &str) -> Admitted {
+    Admitted::Named(Arc::from(name))
+}
+
+/// The listener with no token of its own is closed until a name is added,
+/// and never open — the state that used to be indistinguishable from
+/// `InsecureNoAuth`.
+#[test]
+fn a_named_only_listener_is_closed_not_open() {
+    let (cell, token) = Credential::new(&TokenPolicy::Named).expect("a usable policy");
+    assert_eq!(token, None, "there is no primary to report");
+    assert!(!offers(&cell, None));
+    assert!(!offers(&cell, Some("Bearer anything")));
+    assert!(!offers(&cell, Some("")));
+    cell.add_named("laptop", LAPTOP.to_owned()).expect("held");
+    assert_eq!(
+        admitted_by(&cell, &format!("Bearer {LAPTOP}")),
+        Some(by_name("laptop"))
+    );
+    assert_eq!(cell.token(), None, "still nothing of its own");
+}
+
+#[test]
+fn a_named_token_admits_beside_the_primary_and_says_which() {
+    let cell = enforcing(TOKEN);
+    cell.add_named("laptop", LAPTOP.to_owned()).expect("held");
+    assert_eq!(
+        admitted_by(&cell, &format!("Bearer {TOKEN}")),
+        Some(Admitted::Token)
+    );
+    assert_eq!(
+        admitted_by(&cell, &format!("Bearer {LAPTOP}")),
+        Some(by_name("laptop"))
+    );
+    assert_eq!(admitted_by(&cell, "Bearer neither"), None);
+}
+
+/// The whole reason names exist: one device goes and nothing else notices.
+#[test]
+fn removing_a_name_refuses_that_token_and_nothing_else() {
+    let cell = enforcing(TOKEN);
+    cell.add_named("laptop", LAPTOP.to_owned()).expect("held");
+    cell.add_named("phone", PHONE.to_owned()).expect("held");
+    cell.grant(CODE.to_owned(), LONG, None);
+    assert!(cell.remove_named("phone"));
+    assert!(!offers(&cell, Some(&format!("Bearer {PHONE}"))));
+    assert!(offers(&cell, Some(&format!("Bearer {LAPTOP}"))));
+    assert!(offers(&cell, Some(&format!("Bearer {TOKEN}"))));
+    assert_eq!(cell.grants.count(), 1, "the grant is still waiting");
+    assert_eq!(cell.named(), ["laptop"]);
+}
+
+/// A named token spends nothing, so it is asked before a grant: a value
+/// that is both admits by name and leaves the grant live.
+#[test]
+fn a_value_that_is_both_a_named_token_and_a_grant_admits_by_name_and_spends_nothing() {
+    let cell = enforcing(TOKEN);
+    cell.add_named("laptop", LAPTOP.to_owned()).expect("held");
+    cell.grant(LAPTOP.to_owned(), LONG, None);
+    assert_eq!(
+        admitted_by(&cell, &format!("Bearer {LAPTOP}")),
+        Some(by_name("laptop"))
+    );
+    assert_eq!(cell.grants.count(), 1, "the grant was not spent");
+}
+
+#[test]
+fn rotating_the_primary_does_not_disturb_a_named_token() {
+    let cell = enforcing(TOKEN);
+    cell.add_named("laptop", LAPTOP.to_owned()).expect("held");
+    let fresh = cell.rotate();
+    assert!(!offers(&cell, Some(&format!("Bearer {TOKEN}"))));
+    assert!(offers(&cell, Some(&format!("Bearer {fresh}"))));
+    assert_eq!(
+        admitted_by(&cell, &format!("Bearer {LAPTOP}")),
+        Some(by_name("laptop"))
+    );
+}
+
+/// `set_token` on a named-only listener gives it a primary; the names stay.
+#[test]
+fn a_named_only_listener_can_be_given_a_primary_later() {
+    let (cell, _) = Credential::new(&TokenPolicy::Named).expect("a usable policy");
+    cell.add_named("laptop", LAPTOP.to_owned()).expect("held");
+    assert!(cell.set(TOKEN.to_owned()));
+    assert_eq!(cell.token().as_deref(), Some(TOKEN));
+    assert_eq!(
+        admitted_by(&cell, &format!("Bearer {TOKEN}")),
+        Some(Admitted::Token)
+    );
+    assert_eq!(
+        admitted_by(&cell, &format!("Bearer {LAPTOP}")),
+        Some(by_name("laptop"))
+    );
+}
+
+#[test]
+fn debug_counts_named_tokens_and_never_shows_one() {
+    let (cell, _) = Credential::new(&TokenPolicy::Named).expect("a usable policy");
+    cell.add_named("laptop", LAPTOP.to_owned()).expect("held");
+    let rendered = format!("{cell:?}");
+    assert!(!rendered.contains(LAPTOP), "the token leaked: {rendered}");
+    assert!(
+        rendered.contains("state: \"named\"") && rendered.contains("named: 1"),
+        "but the state and the count are legible: {rendered}"
+    );
 }

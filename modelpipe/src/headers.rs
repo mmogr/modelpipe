@@ -59,7 +59,7 @@ const FORWARDING: &[&str] = &[
 /// what lets a backend *restrict* on these (refuse a route to tunnelled
 /// requests, count them) but never *trust* them for more than that: a
 /// local client forging them only denies itself.
-const TUNNEL_MARKERS: &[&str] = &["via", "x-modelpipe-peer"];
+const TUNNEL_MARKERS: &[&str] = &["via", "x-modelpipe-peer", "x-modelpipe-device"];
 
 /// The `Via` this edge sets. The protocol version is the one the backend
 /// hop speaks, as the RFC asks; the pseudonym is the product.
@@ -69,6 +69,13 @@ pub(crate) const VIA: &str = "1.1 modelpipe";
 /// hex characters the `peer` log field shows, so a backend can name a
 /// device the way the operator's log does.
 pub(crate) const PEER_HEADER: &str = "X-Modelpipe-Peer";
+
+/// The header carrying the name of the token that admitted the request,
+/// when one added by name did — so a backend can tell one paired machine
+/// from another without holding their tokens itself. Absent when the
+/// primary admitted, which is what a backend with one client sees and is
+/// how it stays unaware that names exist.
+pub(crate) const DEVICE_HEADER: &str = "X-Modelpipe-Device";
 
 /// Fields a `Connection` header may not nominate, whatever it says.
 ///
@@ -180,13 +187,20 @@ pub(crate) fn set_host(headers: &mut Vec<(String, String)>, authority: &str) {
 /// [`set_host`] removes every `Host`: what the backend reads must be what
 /// this edge wrote. Appended rather than inserted at the front, so `Host`
 /// keeps the first position the tests pin it to.
-pub(crate) fn set_tunnel_markers(headers: &mut Vec<(String, String)>, peer: &str) {
+pub(crate) fn set_tunnel_markers(
+    headers: &mut Vec<(String, String)>,
+    peer: &str,
+    device: Option<&str>,
+) {
     headers.retain(|(name, _)| {
         let lower = name.to_ascii_lowercase();
         !TUNNEL_MARKERS.contains(&lower.as_str())
     });
     headers.push(("Via".to_owned(), VIA.to_owned()));
     headers.push((PEER_HEADER.to_owned(), peer.to_owned()));
+    if let Some(device) = device {
+        headers.push((DEVICE_HEADER.to_owned(), device.to_owned()));
+    }
 }
 
 #[cfg(test)]

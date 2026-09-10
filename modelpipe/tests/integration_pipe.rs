@@ -497,6 +497,66 @@ async fn three_wrong_bearers_through_the_pipe_burn_a_bounded_grant() {
     serving.shutdown().await;
 }
 
+/// Named tokens are the pairing shape for more than one device: the
+/// listener has no token of its own, each device admits under its own
+/// name, and removing one refuses only that one.
+#[tokio::test]
+async fn each_named_token_admits_and_removing_one_refuses_only_that_device() {
+    let backend = MockBackend::json(200, OK_BODY).await;
+    let (serving, connected, url) = paired(&backend, TokenPolicy::Named).await;
+    assert_eq!(serving.token(), None, "nothing of its own to report");
+
+    let nobody = within(
+        "nothing admits before a name is added",
+        request(&url, "/v1/models", Some("Bearer sk-laptop")),
+    )
+    .await
+    .expect("request");
+    assert!(nobody.starts_with("HTTP/1.1 401"), "got: {nobody}");
+
+    serving
+        .add_token("laptop", "sk-laptop".to_owned())
+        .expect("a valid name and token");
+    serving
+        .add_token("phone", "sk-phone".to_owned())
+        .expect("a valid name and token");
+    assert_eq!(serving.token_names(), ["laptop", "phone"]);
+
+    for key in ["sk-laptop", "sk-phone"] {
+        let admitted = within(
+            "each device admits under its own token",
+            request(&url, "/v1/models", Some(&format!("Bearer {key}"))),
+        )
+        .await
+        .expect("request");
+        assert!(admitted.starts_with("HTTP/1.1 200"), "{key}: {admitted}");
+    }
+
+    assert!(serving.remove_token("phone"));
+    let phone = within(
+        "the removed device is refused",
+        request(&url, "/v1/models", Some("Bearer sk-phone")),
+    )
+    .await
+    .expect("request");
+    assert!(phone.starts_with("HTTP/1.1 401"), "got: {phone}");
+    let laptop = within(
+        "the other device never noticed",
+        request(&url, "/v1/models", Some("Bearer sk-laptop")),
+    )
+    .await
+    .expect("request");
+    assert!(laptop.starts_with("HTTP/1.1 200"), "got: {laptop}");
+    assert_eq!(
+        backend.accepts(),
+        3,
+        "three admitted requests reached the backend"
+    );
+
+    connected.shutdown().await;
+    serving.shutdown().await;
+}
+
 /// The other half: **restarting the listener rotates the ticket**, and the
 /// old one does not merely fail authentication — it reaches nobody, because
 /// the endpoint key is ephemeral and the restarted process is a different

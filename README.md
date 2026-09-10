@@ -82,10 +82,11 @@ middle who can read a byte.
 Two headers reach your backend on every tunnelled request, set by the
 serve side and never inherited from the client: `Via: 1.1 modelpipe`, and
 `X-Modelpipe-Peer` carrying the same twelve-character fingerprint the log
-uses for that device. They let a backend *restrict* — refuse a route to
-remote requests, count them, name the device — and are not for trusting
-beyond that: a local client can forge them, and gains nothing by it but a
-refusal.
+uses for that device. A third, `X-Modelpipe-Device`, arrives only on a
+request admitted by a token that was added by name, and carries the name.
+They let a backend *restrict* — refuse a route to remote requests, count
+them, name the device — and are not for trusting beyond that: a local
+client can forge them, and gains nothing by it but a refusal.
 
 ## Auth is not optional
 
@@ -121,6 +122,15 @@ listener's ticket outlives a restart (`--identity`), use
 wrong bearers at the edge — three, say — because a ticket that lasts gives
 a guesser every pairing window you ever open, and the edge is the only
 place that sees every guess.
+
+More than one paired device, and the wish to drop one without touching
+the rest? `TokenPolicy::Named` starts a listener with no token of its own,
+and `ServeHandle::add_token(name, token)` holds one per device; every
+request such a token admits reaches your backend with
+`X-Modelpipe-Device: <name>`, and `remove_token(name)` refuses exactly that
+device from then on. The name is an identifier — letters, digits, `.`, `_`,
+`-` — because it is a header value and a log field; keep "Matt's iPhone" on
+your side, keyed by it.
 
 Rotating a key that several paired machines are already holding?
 `ServeHandle::set_token_with_grace` keeps the key it replaces admitting for
