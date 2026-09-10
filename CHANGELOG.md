@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0](https://github.com/mmogr/modelpipe/compare/v0.4.0...v0.5.0) - 2026-09-10
+
+### Added
+
+- *(serve)* the edge presents the backend's own bearer in the device's place ([#64](https://github.com/mmogr/modelpipe/pull/64))
+- *(credential)* a token per paired device, added and removed by name
+- *(credential)* a grant burns where the guesses arrive ([#62](https://github.com/mmogr/modelpipe/pull/62))
+- *(ticket)* the vectors a client builds against are machine-readable ([#60](https://github.com/mmogr/modelpipe/pull/60))
+
 ### Added
 
 - *(credential)* a grant can burn at the edge after a number of wrong bearers, where the guesses arrive
