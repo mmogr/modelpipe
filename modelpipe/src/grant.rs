@@ -13,6 +13,7 @@
 //! rotation contract that this module must not be able to disturb, and the
 //! file-size gate says the same thing from the other direction.
 
+use std::num::NonZeroU8;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -22,6 +23,13 @@ use subtle::ConstantTimeEq;
 struct Grant {
     token: String,
     expires: Instant,
+    /// Wrong presentations this grant survives before it is gone, or
+    /// `None` for one that only its deadline or its own presentation ends.
+    ///
+    /// Kept as a plain count rather than the `NonZeroU8` the API takes,
+    /// because it is decremented: the moment it would reach zero the grant
+    /// is removed, so zero is never stored and never needs representing.
+    wrong_left: Option<u8>,
 }
 
 /// Every grant currently live on a listener.
@@ -37,13 +45,18 @@ impl Grants {
     }
 
     /// Add a grant that admits one request bearing `token` before `ttl`
-    /// elapses.
+    /// elapses — and, with `burn_after`, dies at that many wrong
+    /// presentations first.
     ///
     /// The same token granted twice is two grants and two admissions, which
     /// is what the caller asked for and is not corrected here.
-    pub(crate) fn add(&self, token: String, ttl: Duration) {
+    pub(crate) fn add(&self, token: String, ttl: Duration, burn_after: Option<NonZeroU8>) {
         let expires = Instant::now() + ttl;
-        self.lock().push(Grant { token, expires });
+        self.lock().push(Grant {
+            token,
+            expires,
+            wrong_left: burn_after.map(NonZeroU8::get),
+        });
     }
 
     /// Whether `presented` is a live grant — and if so, consume it.
@@ -53,6 +66,14 @@ impl Grants {
     /// given. The comparison is constant-time in the token, the same rule
     /// the primary credential keeps; which *position* in the list matched
     /// is not hidden, and is not a secret either.
+    ///
+    /// A value that matches nothing is a wrong presentation, and it counts
+    /// against **every** live grant that keeps a count — the edge cannot
+    /// tell which grant a guess was aimed at, and a guesser does not get to
+    /// choose. A grant whose count runs out is removed here, before its
+    /// deadline. The primary credential and a graced key are checked before
+    /// this is reached, so presenting either is never a wrong presentation:
+    /// only a well-formed bearer that admits nowhere is.
     pub(crate) fn consume(&self, presented: &[u8]) -> bool {
         let now = Instant::now();
         let mut live = self.lock();
@@ -61,8 +82,16 @@ impl Grants {
             let expected = grant.token.as_bytes();
             expected.len() == presented.len() && bool::from(expected.ct_eq(presented))
         });
-        if let Some(index) = matched {
-            live.swap_remove(index);
+        match matched {
+            Some(index) => {
+                live.swap_remove(index);
+            }
+            None => live.retain_mut(|grant| {
+                grant.wrong_left.as_mut().is_none_or(|left| {
+                    *left -= 1;
+                    *left > 0
+                })
+            }),
         }
         drop(live);
         matched.is_some()

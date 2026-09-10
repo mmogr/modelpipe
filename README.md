@@ -115,8 +115,12 @@ encrypted hop instead of a person carrying it? `ServeHandle::grant_once`
 admits exactly one request bearing a short-lived code you mint, so your
 backend can serve a pairing route that answers with the real key. The code
 is spent when presented and dead at its deadline either way. While it is
-live it is worth as much as the token, so keep the window short and count
-attempts on your side.
+live it is worth as much as the token, so keep the window short. If the
+listener's ticket outlives a restart (`--identity`), use
+`grant_once_bounded` instead: it also burns the code after a number of
+wrong bearers at the edge — three, say — because a ticket that lasts gives
+a guesser every pairing window you ever open, and the edge is the only
+place that sees every guess.
 
 Rotating a key that several paired machines are already holding?
 `ServeHandle::set_token_with_grace` keeps the key it replaces admitting for

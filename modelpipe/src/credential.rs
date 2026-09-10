@@ -12,6 +12,7 @@
 //! credential, never whether the check runs.
 
 use std::fmt;
+use std::num::NonZeroU8;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
@@ -142,17 +143,24 @@ impl Credential {
     }
 
     /// Admit one request bearing `token` before `ttl` elapses, without
-    /// touching what is enforced.
+    /// touching what is enforced. With `burn_after`, the grant also dies at
+    /// that many wrong presentations — see [`Grants::consume`] for what
+    /// counts as one.
     ///
     /// Returns whether it took: a token nothing can present is refused for
     /// the reason [`Credential::new`] refuses it. Has no effect while
     /// serving open, where everything is admitted already — the grant is
     /// stored, and is simply never the reason a request got in.
-    pub(crate) fn grant(&self, token: String, ttl: Duration) -> bool {
+    pub(crate) fn grant(
+        &self,
+        token: String,
+        ttl: Duration,
+        burn_after: Option<NonZeroU8>,
+    ) -> bool {
         if !presentable(&token) {
             return false;
         }
-        self.grants.add(token, ttl);
+        self.grants.add(token, ttl, burn_after);
         true
     }
 

@@ -1447,7 +1447,7 @@ async fn a_grant_that_admits_is_logged_without_the_grant() {
 
     let backend = CountingBackend::new(OK_RESPONSE);
     let (credential, _) = Credential::new(&supplied()).expect("a usable policy");
-    assert!(credential.grant(GRANT.to_owned(), std::time::Duration::from_mins(1)));
+    assert!(credential.grant(GRANT.to_owned(), std::time::Duration::from_mins(1), None));
 
     capturing();
     CAPTURED.with(|slot| *slot.borrow_mut() = Some(Vec::new()));
