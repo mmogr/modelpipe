@@ -182,7 +182,7 @@ const LONG: std::time::Duration = std::time::Duration::from_mins(1);
 fn a_grant_admits_one_request_and_then_is_a_wrong_token() {
     let cell = enforcing(TOKEN);
     assert!(
-        cell.grant(CODE.to_owned(), LONG),
+        cell.grant(CODE.to_owned(), LONG, None),
         "a presentable code takes"
     );
     let as_bearer = format!("Bearer {CODE}");
@@ -201,7 +201,7 @@ fn a_grant_admits_one_request_and_then_is_a_wrong_token() {
 #[test]
 fn a_grant_leaves_the_enforced_token_untouched() {
     let cell = enforcing(TOKEN);
-    cell.grant(CODE.to_owned(), LONG);
+    cell.grant(CODE.to_owned(), LONG, None);
     assert!(offers(&cell, Some(&format!("Bearer {TOKEN}"))));
     assert_eq!(cell.token().as_deref(), Some(TOKEN));
     assert!(
@@ -215,7 +215,7 @@ fn a_grant_leaves_the_enforced_token_untouched() {
 #[test]
 fn a_grant_is_presented_as_a_bearer_or_not_at_all() {
     let cell = enforcing(TOKEN);
-    cell.grant(CODE.to_owned(), LONG);
+    cell.grant(CODE.to_owned(), LONG, None);
     assert!(!offers(&cell, Some(CODE)), "no scheme");
     assert!(
         !offers(&cell, Some(&format!("Basic {CODE}"))),
@@ -232,7 +232,7 @@ fn a_grant_is_presented_as_a_bearer_or_not_at_all() {
 #[test]
 fn an_unused_grant_expires() {
     let cell = enforcing(TOKEN);
-    cell.grant(CODE.to_owned(), std::time::Duration::ZERO);
+    cell.grant(CODE.to_owned(), std::time::Duration::ZERO, None);
     assert!(!offers(&cell, Some(&format!("Bearer {CODE}"))));
 }
 
@@ -241,7 +241,7 @@ fn an_unused_grant_expires() {
 #[test]
 fn rotating_the_token_does_not_disturb_a_live_grant() {
     let cell = enforcing(TOKEN);
-    cell.grant(CODE.to_owned(), LONG);
+    cell.grant(CODE.to_owned(), LONG, None);
     cell.set("sk-zzq-the-replacement".to_owned());
     assert!(offers(&cell, Some(&format!("Bearer {CODE}"))));
 }
@@ -252,7 +252,7 @@ fn an_unpresentable_grant_is_refused() {
     let cell = enforcing(TOKEN);
     for blank in ["", " ", "\t\n"] {
         assert!(
-            !cell.grant(blank.to_owned(), LONG),
+            !cell.grant(blank.to_owned(), LONG, None),
             "{blank:?} must not become a grant"
         );
     }
@@ -262,7 +262,7 @@ fn an_unpresentable_grant_is_refused() {
 #[test]
 fn debug_counts_grants_and_never_shows_one() {
     let cell = enforcing(TOKEN);
-    cell.grant(CODE.to_owned(), LONG);
+    cell.grant(CODE.to_owned(), LONG, None);
     let rendered = format!("{cell:?}");
     assert!(!rendered.contains(CODE), "the grant leaked: {rendered}");
     assert!(
@@ -592,7 +592,7 @@ fn a_graced_rotation_onto_an_open_listener_holds_nothing() {
 fn a_key_the_window_already_admits_does_not_spend_a_grant() {
     let cell = enforcing(TOKEN);
     assert!(
-        cell.grant(TOKEN.to_owned(), LONG),
+        cell.grant(TOKEN.to_owned(), LONG, None),
         "the same value, granted"
     );
     cell.set_with_grace(NEXT.to_owned(), LONG);
@@ -618,7 +618,7 @@ fn a_key_the_window_already_admits_does_not_spend_a_grant() {
 #[test]
 fn a_graced_rotation_does_not_disturb_a_live_grant() {
     let cell = enforcing(TOKEN);
-    cell.grant(CODE.to_owned(), LONG);
+    cell.grant(CODE.to_owned(), LONG, None);
     cell.set_with_grace(NEXT.to_owned(), LONG);
     assert!(offers(&cell, Some(&format!("Bearer {CODE}"))));
 }
@@ -641,4 +641,47 @@ fn debug_says_a_window_is_open_and_never_which_key() {
         open.contains("grace: true"),
         "but the state is legible: {open}"
     );
+}
+
+// ── A grant that burns ───────────────────────────────────────────────────
+
+const THREE: NonZeroU8 = NonZeroU8::new(3).expect("three is not zero");
+
+/// The whole point of the bounded form: three wrong bearers through the
+/// edge and the code is dead, without a byte reaching the handshake route
+/// that used to be the only thing counting.
+#[test]
+fn three_wrong_bearers_burn_a_bounded_grant_at_the_edge() {
+    let cell = enforcing(TOKEN);
+    assert!(cell.grant(CODE.to_owned(), LONG, Some(THREE)));
+    for wrong in ["000000", "000001", "000002"] {
+        assert!(!offers(&cell, Some(&format!("Bearer {wrong}"))));
+    }
+    assert_eq!(cell.grants.count(), 0, "burned");
+    assert!(
+        !offers(&cell, Some(&format!("Bearer {CODE}"))),
+        "the code itself is now a wrong token"
+    );
+    assert!(
+        offers(&cell, Some(&format!("Bearer {TOKEN}"))),
+        "and the enforced token was never in question"
+    );
+}
+
+/// What does not count: the enforced token, presented as often as anyone
+/// likes, and anything that is not a bearer at all. Neither is a guess at
+/// the code, and a paired machine making requests during a pairing window
+/// must not be the thing that closes it.
+#[test]
+fn only_a_wrong_bearer_counts_as_a_wrong_presentation() {
+    let cell = enforcing(TOKEN);
+    assert!(cell.grant(CODE.to_owned(), LONG, Some(THREE)));
+    for _ in 0..5 {
+        assert!(offers(&cell, Some(&format!("Bearer {TOKEN}"))));
+    }
+    for not_a_guess in [None, Some(""), Some("Basic dXNlcjpwYXNz"), Some("Bearer")] {
+        assert!(!offers(&cell, not_a_guess));
+    }
+    assert_eq!(cell.grants.count(), 1, "still waiting for the device");
+    assert!(offers(&cell, Some(&format!("Bearer {CODE}"))));
 }

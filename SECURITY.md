@@ -27,10 +27,13 @@ bearing a code of its choosing, so a pairing handshake can run through the
 tunnel and hand a new device the real key without the key ever being shown.
 The grant is consumed on first use and expires unused; the enforced token is
 not affected. What the edge cannot do is scope it — the one request it
-admits may name any path — so the embedder's pairing route must count
-attempts, keep the window short, and choose a code that survives that
-window. modelpipe checks it in constant time and never logs it, like the
-token.
+admits may name any path — so the embedder must keep the window short and
+choose a code that survives it. Counting guesses is the edge's job, not the
+route's: a wrong bearer is refused before any route sees it, so a count kept
+behind the edge counts nothing. `ServeHandle::grant_once_bounded` keeps it
+where the guesses arrive and burns the grant at the number the embedder
+names. modelpipe checks the code in constant time and never logs it, like
+the token.
 
 **A superseded token is a third credential, and it is the loosest one.**
 `ServeHandle::set_token_with_grace` keeps the replaced token admitting requests

@@ -95,6 +95,7 @@ mod network;
 mod serve;
 mod serve_error;
 mod serve_grace;
+mod serve_grant;
 mod serve_handle;
 mod serve_status;
 
