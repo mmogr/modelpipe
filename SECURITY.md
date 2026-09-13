@@ -151,11 +151,19 @@ the one hop with no encryption in front of it. It binds to loopback by
 default; binding it elsewhere exposes the pipe to anyone who can reach it,
 and the CLI warns when you do.
 
-**Denial of service.** There are bounds on what an unauthenticated
-ticket-holder can cost — a maximum head size, a per-peer concurrent stream
-cap, and a timeout on sending a request head — but no rate limiting, no
-per-client quota, and deliberately no request body limit, because a
-legitimate vision payload is megabytes.
+**Denial of service.** Four bounds hold on what an unauthenticated
+ticket-holder can cost. A request head may be at most 64 KiB, and it must
+arrive within thirty seconds. One peer may have 64 exchanges in flight
+across every connection it holds, and further streams wait. The listener
+carries at most 32 distinct peers and 256 connections at once, and refuses
+the next of either rather than queueing it. Three things are not bounded:
+request bodies, deliberately, because a legitimate vision payload is
+megabytes; the request rate, since there is no rate limiting and no
+per-client quota; and endpoint identities, which cost nothing to mint, so a
+peer can leave and come back as another as often as it likes. The caps
+bound what the listener spends, not who gets in: a ticket-holder that holds
+thirty-two identities open fills the peer set, and a device not already
+connected is refused until it lets go.
 
 ## Cryptography
 

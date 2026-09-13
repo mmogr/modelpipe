@@ -41,8 +41,8 @@ fn an_empty_registry_is_idle_and_reports_nobody() {
 fn each_peer_is_reported_by_name_and_path_in_arrival_order() {
     let registry = PeerRegistry::new();
     let lifecycle = Lifecycle::new();
-    registry.add(name("3ca82708b995"), hole_punched(), &lifecycle);
-    registry.add(name("7f0e11a2c3d4"), via_relay(), &lifecycle);
+    registry.add(&name("3ca82708b995"), hole_punched(), &lifecycle);
+    registry.add(&name("7f0e11a2c3d4"), via_relay(), &lifecycle);
 
     let views = registry.views();
     assert_eq!(views.len(), 2);
@@ -58,8 +58,8 @@ fn each_peer_is_reported_by_name_and_path_in_arrival_order() {
 fn each_peer_is_reported_with_what_its_path_costs() {
     let registry = PeerRegistry::new();
     let lifecycle = Lifecycle::new();
-    registry.add(name("3ca82708b995"), hole_punched(), &lifecycle);
-    registry.add(name("7f0e11a2c3d4"), via_relay(), &lifecycle);
+    registry.add(&name("3ca82708b995"), hole_punched(), &lifecycle);
+    registry.add(&name("7f0e11a2c3d4"), via_relay(), &lifecycle);
 
     let views = registry.views();
     assert_eq!(views[0].rtt_ms, Some(4));
@@ -73,7 +73,9 @@ fn each_peer_is_reported_with_what_its_path_costs() {
 fn a_peer_that_changes_path_is_reported_on_the_one_it_moved_to() {
     let registry = PeerRegistry::new();
     let lifecycle = Lifecycle::new();
-    let peer = registry.add(name("3ca82708b995"), via_relay(), &lifecycle);
+    let peer = registry
+        .add(&name("3ca82708b995"), via_relay(), &lifecycle)
+        .expect("under the cap");
     assert_eq!(lifecycle.status(), PipeStatus::Relayed, "as it arrived");
 
     registry.set_path(peer, hole_punched(), &lifecycle);
@@ -94,7 +96,9 @@ fn a_peer_that_changes_path_is_reported_on_the_one_it_moved_to() {
 fn a_reading_that_lands_after_a_peer_left_does_not_bring_it_back() {
     let registry = PeerRegistry::new();
     let lifecycle = Lifecycle::new();
-    let peer = registry.add(name("3ca82708b995"), via_relay(), &lifecycle);
+    let peer = registry
+        .add(&name("3ca82708b995"), via_relay(), &lifecycle)
+        .expect("under the cap");
     registry.remove(peer, &lifecycle);
 
     registry.set_path(peer, hole_punched(), &lifecycle);
@@ -109,10 +113,14 @@ fn a_reading_that_lands_after_a_peer_left_does_not_bring_it_back() {
 fn the_aggregate_is_the_worst_path_and_the_view_says_whose() {
     let registry = PeerRegistry::new();
     let lifecycle = Lifecycle::new();
-    let direct = registry.add(name("aaaaaaaaaaaa"), hole_punched(), &lifecycle);
+    let direct = registry
+        .add(&name("aaaaaaaaaaaa"), hole_punched(), &lifecycle)
+        .expect("under the cap");
     assert_eq!(lifecycle.status(), PipeStatus::Direct);
 
-    let relayed = registry.add(name("bbbbbbbbbbbb"), via_relay(), &lifecycle);
+    let relayed = registry
+        .add(&name("bbbbbbbbbbbb"), via_relay(), &lifecycle)
+        .expect("under the cap");
     assert_eq!(lifecycle.status(), PipeStatus::Relayed, "one relayed peer");
     let slow: Vec<_> = registry
         .views()
@@ -133,8 +141,10 @@ fn the_aggregate_is_the_worst_path_and_the_view_says_whose() {
 fn removing_one_peer_leaves_the_others_alone() {
     let registry = PeerRegistry::new();
     let lifecycle = Lifecycle::new();
-    let first = registry.add(name("aaaaaaaaaaaa"), hole_punched(), &lifecycle);
-    registry.add(name("bbbbbbbbbbbb"), hole_punched(), &lifecycle);
+    let first = registry
+        .add(&name("aaaaaaaaaaaa"), hole_punched(), &lifecycle)
+        .expect("under the cap");
+    registry.add(&name("bbbbbbbbbbbb"), hole_punched(), &lifecycle);
     registry.remove(first, &lifecycle);
     let left: Vec<_> = registry
         .views()
@@ -154,9 +164,9 @@ fn connections_from_one_peer_share_a_budget_and_peers_do_not() {
     let lifecycle = Lifecycle::new();
     let alice = name("aaaaaaaaaaaa");
     let bob = name("bbbbbbbbbbbb");
-    registry.add(alice.clone(), hole_punched(), &lifecycle);
-    registry.add(alice.clone(), hole_punched(), &lifecycle);
-    registry.add(bob.clone(), hole_punched(), &lifecycle);
+    registry.add(&alice, hole_punched(), &lifecycle);
+    registry.add(&alice, hole_punched(), &lifecycle);
+    registry.add(&bob, hole_punched(), &lifecycle);
 
     let first = registry.slots(&alice);
     let second = registry.slots(&alice);
@@ -173,8 +183,8 @@ fn a_stream_on_one_connection_counts_against_the_peers_other_connections() {
     let registry = PeerRegistry::new();
     let lifecycle = Lifecycle::new();
     let alice = name("aaaaaaaaaaaa");
-    registry.add(alice.clone(), hole_punched(), &lifecycle);
-    registry.add(alice.clone(), hole_punched(), &lifecycle);
+    registry.add(&alice, hole_punched(), &lifecycle);
+    registry.add(&alice, hole_punched(), &lifecycle);
     let via_first = registry.slots(&alice);
     let via_second = registry.slots(&alice);
 
@@ -205,8 +215,12 @@ fn a_budget_survives_one_connection_leaving_and_dies_with_the_last() {
     let registry = PeerRegistry::new();
     let lifecycle = Lifecycle::new();
     let alice = name("aaaaaaaaaaaa");
-    let first = registry.add(alice.clone(), hole_punched(), &lifecycle);
-    let second = registry.add(alice.clone(), hole_punched(), &lifecycle);
+    let first = registry
+        .add(&alice, hole_punched(), &lifecycle)
+        .expect("under the cap");
+    let second = registry
+        .add(&alice, hole_punched(), &lifecycle)
+        .expect("under the cap");
     let budget = registry.slots(&alice);
     let _also = registry.slots(&alice);
 
@@ -222,4 +236,101 @@ fn a_budget_survives_one_connection_leaving_and_dies_with_the_last() {
         !Arc::ptr_eq(&budget, &registry.slots(&alice)),
         "a peer that comes back after leaving entirely starts a fresh budget"
     );
+}
+
+// ── How many the listener carries ────────────────────────────────────────
+
+/// The registry filled to the peer cap with distinct fingerprints, and
+/// each one's name and id.
+fn fill(registry: &PeerRegistry, lifecycle: &Lifecycle) -> Vec<(Arc<str>, u64)> {
+    (0..MAX_PEERS)
+        .map(|n| {
+            let peer = name(&format!("{n:012x}"));
+            let id = registry
+                .add(&peer, hole_punched(), lifecycle)
+                .expect("under the cap");
+            (peer, id)
+        })
+        .collect()
+}
+
+/// The cap counts peers, refuses the one past it, and has room again as
+/// soon as one leaves.
+#[test]
+fn a_thirty_third_peer_is_refused_while_thirty_two_are_carried() {
+    assert_eq!(MAX_PEERS, 32, "the number this test is named for");
+    let registry = PeerRegistry::new();
+    let lifecycle = Lifecycle::new();
+    let carried = fill(&registry, &lifecycle);
+
+    let late = name("ffffffffffff");
+    assert_eq!(
+        registry.add(&late, via_relay(), &lifecycle),
+        None,
+        "the thirty-third is refused"
+    );
+    let views: Vec<_> = registry
+        .views()
+        .into_iter()
+        .map(|v| v.fingerprint)
+        .collect();
+    let names: Vec<_> = carried.iter().map(|(peer, _)| peer.to_string()).collect();
+    assert_eq!(views, names, "and the thirty-two are carried as they were");
+    assert_eq!(
+        lifecycle.status(),
+        PipeStatus::Direct,
+        "the refused relayed peer is not counted"
+    );
+
+    registry.remove(carried[0].1, &lifecycle);
+    assert!(
+        registry.add(&late, via_relay(), &lifecycle).is_some(),
+        "a place opens when one leaves"
+    );
+}
+
+/// A device at the cap may still open another connection: it is already one
+/// of the thirty-two, and refusing it would cost a peer that is carried its
+/// second connection for nothing.
+#[test]
+fn a_second_connection_from_a_peer_already_here_is_not_a_new_peer() {
+    let registry = PeerRegistry::new();
+    let lifecycle = Lifecycle::new();
+    let carried = fill(&registry, &lifecycle);
+
+    let (again, _) = &carried[7];
+    assert!(
+        registry.add(again, via_relay(), &lifecycle).is_some(),
+        "a peer already here is carried at the cap"
+    );
+    let views = registry.views();
+    let peers: HashSet<&str> = views.iter().map(|v| v.fingerprint.as_str()).collect();
+    assert_eq!(views.len(), MAX_PEERS + 1, "one more connection");
+    assert_eq!(peers.len(), MAX_PEERS, "and no more peers");
+}
+
+/// The connection count refuses past its cap, counts nothing for the one it
+/// refused, and every place comes back with the connection that held it.
+#[test]
+fn a_connection_past_the_cap_is_refused_until_one_goes() {
+    let connections = Connections::default();
+    let held: Vec<Carried> = (1..MAX_CONNECTIONS)
+        .map(|_| connections.admit().expect("under the cap"))
+        .collect();
+    let last = connections.admit().expect("the last place");
+    assert!(
+        connections.admit().is_none(),
+        "the one past the cap is refused"
+    );
+    assert_eq!(connections.carried(), MAX_CONNECTIONS, "and not counted");
+
+    drop(last);
+    assert_eq!(
+        connections.carried(),
+        MAX_CONNECTIONS - 1,
+        "a dropped place is given back"
+    );
+    assert!(connections.admit().is_some(), "and taken by the next");
+    drop(held);
+    assert_eq!(connections.carried(), 0, "every place goes with its holder");
 }

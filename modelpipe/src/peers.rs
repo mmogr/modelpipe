@@ -1,4 +1,5 @@
-//! Who is connected to the serve side right now, and how.
+//! Who is connected to the serve side right now, how, and how many it
+//! will carry.
 //!
 //! Split from [`crate::listener`] when the per-peer view arrived: the
 //! accept loop is about turning QUIC streams into exchanges, and the set of
@@ -11,8 +12,8 @@
 //! status it publishes goes through the lifecycle it is handed, so this
 //! module owns the *set* and nothing about how a change is broadcast.
 
-use std::collections::{BTreeMap, HashMap};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use tokio::sync::Semaphore;
@@ -25,9 +26,9 @@ use crate::status::PeerView;
 /// connection it holds.
 ///
 /// Backpressure rather than refusal: a peer may open more streams, and they
-/// wait. What is bounded is the work and the memory a single ticket-holder
-/// can command, which — with the head size and the head timeout — is the
-/// whole of what a leaked ticket is worth before it authenticates.
+/// wait. What is bounded is the work and the memory one identity can
+/// command; an identity costs nothing to mint, so how many a ticket-holder
+/// can bring at once is [`MAX_PEERS`].
 ///
 /// Per *peer*, not per connection, and the difference is the bound. The
 /// semaphore used to be built inside the connection loop, so a holder who
@@ -38,6 +39,55 @@ use crate::status::PeerView;
 /// Deliberately generous. A client pipelining a page of requests is normal;
 /// a client with sixty-four in flight is not a client.
 pub(crate) const MAX_CONCURRENT_STREAMS_PER_PEER: usize = 64;
+
+/// How many distinct peers the listener carries at once.
+///
+/// A peer is a fingerprint, so a second connection from a device already
+/// here is not a new peer: it counts against [`MAX_CONNECTIONS`] and not
+/// against this.
+pub(crate) const MAX_PEERS: usize = 32;
+
+/// How many connections the listener carries at once, handshakes included.
+///
+/// Both caps refuse where the stream cap waits, and what would be waited
+/// for is the difference. A stream that waits is waiting on its own peer's
+/// exchanges, which that peer is finishing. A connection or a peer that
+/// waited would be waiting on some *other* peer to leave, and the queue it
+/// sat in would be the thing with no bound. So the one past either cap is
+/// turned away at once, and nothing is held for it.
+pub(crate) const MAX_CONNECTIONS: usize = 256;
+
+/// The connections a listener is carrying, counted against
+/// [`MAX_CONNECTIONS`].
+#[derive(Default)]
+pub(crate) struct Connections(Arc<AtomicUsize>);
+
+/// One connection's place in the count, given back when it drops — on
+/// every way out of the task that holds it, a panic included.
+pub(crate) struct Carried(Arc<AtomicUsize>);
+
+impl Connections {
+    /// A place for one more connection, or `None` when every place is taken.
+    pub(crate) fn admit(&self) -> Option<Carried> {
+        self.0
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| {
+                (n < MAX_CONNECTIONS).then_some(n + 1)
+            })
+            .ok()
+            .map(|_| Carried(self.0.clone()))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn carried(&self) -> usize {
+        self.0.load(Ordering::Relaxed)
+    }
+}
+
+impl Drop for Carried {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::Relaxed);
+    }
+}
 
 /// One peer's stream budget, and how many connections are drawing on it.
 struct Budget {
@@ -89,12 +139,24 @@ impl PeerRegistry {
     /// `reading` is how that connection is routed *at this instant*, and is
     /// routinely not how it will be routed a second later — see
     /// [`set_path`](Self::set_path), which is the other half of this.
-    pub(crate) fn add(&self, name: Arc<str>, reading: Reading, lifecycle: &Lifecycle) -> u64 {
-        let id = self.next.fetch_add(1, Ordering::Relaxed);
+    ///
+    /// `None`, and the set left as it was, when `name` is not here already
+    /// and [`MAX_PEERS`] others are.
+    pub(crate) fn add(
+        &self,
+        name: &Arc<str>,
+        reading: Reading,
+        lifecycle: &Lifecycle,
+    ) -> Option<u64> {
         self.mutate(lifecycle, |peers| {
-            peers.insert(id, (name, reading));
-        });
-        id
+            let here: HashSet<&str> = peers.values().map(|(held, _)| &**held).collect();
+            if here.len() >= MAX_PEERS && !here.contains(&**name) {
+                return None;
+            }
+            let id = self.next.fetch_add(1, Ordering::Relaxed);
+            peers.insert(id, (name.clone(), reading));
+            Some(id)
+        })
     }
 
     /// Record what one peer's path has become, and republish what the set
@@ -160,18 +222,19 @@ impl PeerRegistry {
     /// The lock is never held across an await — the closure is synchronous
     /// and the status is computed inside it — so a slow peer cannot stall
     /// another's accept.
-    fn mutate(
+    fn mutate<R>(
         &self,
         lifecycle: &Lifecycle,
-        f: impl FnOnce(&mut BTreeMap<u64, (Arc<str>, Reading)>),
-    ) {
+        f: impl FnOnce(&mut BTreeMap<u64, (Arc<str>, Reading)>) -> R,
+    ) -> R {
         let mut guard = self.lock();
-        f(&mut guard);
+        let result = f(&mut guard);
         let paths: Vec<PeerPath> = guard.values().map(|(_, reading)| reading.path).collect();
         // Released before publishing, so nothing observes the status while
         // the set it describes is still locked.
         drop(guard);
         lifecycle.set_status(aggregate(&paths));
+        result
     }
 
     // A poisoned lock cannot happen here: nothing panics while holding it.

@@ -3,21 +3,26 @@
 //! Split out via `#[path]` so `listener.rs` stays inside the file-size
 //! budget.
 //!
-//! One test, and it is here rather than in `path_watch_tests.rs` because it
-//! asserts a different thing: not that the watcher works, but that this side
-//! reaches it. The watcher's own tests call `follow` directly and pass
-//! against a `serve_connection` that never spawns one.
+//! Each test asserts not that a piece works but that this side reaches it.
+//! The path watcher's own tests call `follow` directly and pass against a
+//! `serve_connection` that never spawns one; the caps' own tests in
+//! `peers_tests.rs` call the registry and the count directly and pass
+//! against an accept loop that never asks either.
 //!
-//! It goes through a real [`serve`] rather than a hand-built [`ServeState`],
-//! since the spawn under test is on the path from `serve` to a connected
-//! peer and a state assembled here could be wired up correctly by the test
+//! They go through a real [`serve`] rather than a hand-built [`ServeState`],
+//! since what is under test is on the path from `serve` to a connected peer
+//! and a state assembled here could be wired up correctly by the test
 //! itself.
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use iroh::Endpoint;
 use iroh::endpoint::presets;
 
+use crate::lifecycle::PeerPath;
+use crate::path_watch::Reading;
+use crate::peers::{MAX_CONNECTIONS, MAX_PEERS};
 use crate::serve::serve;
 use crate::serve_handle::ServeHandle;
 use crate::serve_options::ServeOptions;
@@ -97,5 +102,105 @@ async fn a_connected_peer_keeps_being_read_by_the_listener() {
     .await
     .expect("a connected peer must be re-read, not sampled once");
 
+    serving.shutdown().await;
+}
+
+/// Wait for `done` to hold, failing with `what` after [`PATIENCE`].
+async fn until(what: &str, done: impl Fn() -> bool + Send + Sync) {
+    tokio::time::timeout(PATIENCE, async {
+        while !done() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect(what);
+}
+
+/// A peer past the cap is sent away, and the registry is exactly as it was:
+/// the thirty-two it was carrying, and not the one it refused.
+///
+/// A `serve_connection` that went on past the registry's `None` would carry
+/// the peer anyway, and every test of the registry itself would still pass.
+#[tokio::test]
+async fn a_refused_connection_leaves_the_registry_as_it_found_it() {
+    let (serving, _backend) = listening().await;
+    let state = &serving.state;
+    let carried: Vec<Arc<str>> = (0..MAX_PEERS).map(|n| format!("{n:012x}").into()).collect();
+    for peer in &carried {
+        let reading = Reading {
+            path: PeerPath::Direct,
+            rtt: None,
+        };
+        let added = state.peers.add(peer, reading, &state.lifecycle);
+        assert!(added.is_some(), "under the cap");
+    }
+
+    let (_near, connection) = peer_of(&serving).await;
+    tokio::time::timeout(PATIENCE, connection.closed())
+        .await
+        .expect("the listener sends a peer past the cap away");
+    until("the refused connection gives its place back", || {
+        state.connections.carried() == 0
+    })
+    .await;
+
+    let after: Vec<Arc<str>> = serving
+        .peers()
+        .into_iter()
+        .map(|v| v.fingerprint.into())
+        .collect();
+    assert_eq!(after, carried, "the thirty-two, and not the one refused");
+    serving.shutdown().await;
+}
+
+/// Past the connection cap a dial is refused outright and promptly — never
+/// registered, never left to time out — and once a place comes back the next
+/// dial is carried.
+#[tokio::test]
+async fn a_connection_past_the_cap_is_refused_before_it_is_served() {
+    let (serving, _backend) = listening().await;
+    let held: Vec<_> = (0..MAX_CONNECTIONS)
+        .map(|_| serving.state.connections.admit().expect("under the cap"))
+        .collect();
+
+    let addr = transport::addr_from(&serving.ticket()).expect("the ticket names an endpoint");
+    let near = Endpoint::builder(presets::N0)
+        .bind()
+        .await
+        .expect("an endpoint binds");
+    let refused = tokio::time::timeout(PATIENCE, near.connect(addr, transport::ALPN))
+        .await
+        .expect("a refusal is prompt, not a hang");
+    assert!(refused.is_err(), "the dial past the cap is refused");
+    assert!(serving.peers().is_empty(), "and never reaches the registry");
+
+    drop(held);
+    let (_again, _connection) = peer_of(&serving).await;
+    until("a dial after a place comes back is carried", || {
+        serving.peers().len() == 1
+    })
+    .await;
+    serving.shutdown().await;
+}
+
+/// A connection holds its place for as long as it is carried and gives it
+/// back when it goes: the guard is neither let go early nor kept.
+#[tokio::test]
+async fn a_connection_holds_its_place_until_it_goes() {
+    let (serving, _backend) = listening().await;
+    let connections = &serving.state.connections;
+    let (_near, connection) = peer_of(&serving).await;
+    until("the peer is carried", || serving.peers().len() == 1).await;
+    assert_eq!(
+        connections.carried(),
+        1,
+        "a place is held while the peer is here"
+    );
+
+    connection.close(0u32.into(), b"done");
+    until("a connection that goes gives its place back", || {
+        connections.carried() == 0
+    })
+    .await;
     serving.shutdown().await;
 }
