@@ -151,9 +151,13 @@ where
         let line = src.read_line().await?;
         // Chunk extensions follow a `;` and are not ours to interpret.
         let size_text = line.split(|&b| b == b';').next().unwrap_or(&[]);
+        // Spaces and tabs only, as `framing` trims a `Content-Length`, and
+        // for the reason it gives: `str::trim` takes any Unicode whitespace,
+        // a bare LF included, off a line that goes on verbatim, and the
+        // check below must see what the next hop reads.
         let size_text = std::str::from_utf8(size_text)
             .map_err(|_| std::io::Error::other("chunk size is not ASCII"))?
-            .trim();
+            .trim_matches([' ', '\t']);
         // Hex digits and nothing else. `from_str_radix` accepts a leading
         // `+` and RFC 9112 §7.1 makes a chunk-size `1*HEXDIG`, so `+a`
         // framed a ten-byte chunk here while the line was forwarded
