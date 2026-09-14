@@ -155,7 +155,8 @@ and the CLI warns when you do.
 ticket-holder can cost. A request head may be at most 64 KiB, and it must
 arrive within thirty seconds. One peer may have 64 exchanges in flight
 across every connection it holds, and further streams wait. The listener
-carries at most 32 distinct peers and 256 connections at once, and refuses
+carries at most 32 distinct peers and 256 connections at once by default,
+which `ServeOptions::max_peers` and `max_connections` change, and refuses
 the next of either rather than queueing it. Three things are not bounded:
 request bodies, deliberately, because a legitimate vision payload is
 megabytes; the request rate, since there is no rate limiting and no

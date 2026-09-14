@@ -6,8 +6,10 @@
 //! next door.
 
 use std::fmt;
+use std::num::NonZeroUsize;
 use std::time::Duration;
 
+use crate::peers::{DEFAULT_MAX_CONNECTIONS, DEFAULT_MAX_PEERS};
 use crate::token_policy::TokenPolicy;
 
 /// Options for [`serve`](fn@crate::serve).
@@ -161,6 +163,26 @@ pub struct ServeOptions {
     /// same LAN — which is the other half of what makes the comparison a
     /// comparison.
     pub relay_only: bool,
+    /// How many distinct peers the listener carries at once. 32 by default.
+    ///
+    /// A peer is an endpoint identity, so a second connection from a device
+    /// already carried is not a new peer. The one past the cap is sent away
+    /// as soon as its identity is known, rather than queued behind a peer
+    /// that may never leave.
+    ///
+    /// This bounds what the listener spends, not who gets in. Identities
+    /// cost nothing to mint, so a ticket-holder that holds this many open
+    /// fills the set, and a device not already connected is refused until
+    /// one lets go. Raise it for a listener that serves more devices than
+    /// that at once.
+    pub max_peers: NonZeroUsize,
+    /// How many connections the listener carries at once, handshakes
+    /// included. 256 by default.
+    ///
+    /// Counted before any work is spent on a dial, and the one past the cap
+    /// is refused outright. Every peer holds a connection, so when this is
+    /// below [`max_peers`](Self::max_peers) it is the cap on peers too.
+    pub max_connections: NonZeroUsize,
 }
 
 impl Default for ServeOptions {
@@ -178,6 +200,9 @@ impl Default for ServeOptions {
             port_mapping: true,
             discovery: true,
             relay_only: false,
+            max_peers: NonZeroUsize::new(DEFAULT_MAX_PEERS).expect("the default is not zero"),
+            max_connections: NonZeroUsize::new(DEFAULT_MAX_CONNECTIONS)
+                .expect("the default is not zero"),
         }
     }
 }
@@ -201,6 +226,8 @@ impl fmt::Debug for ServeOptions {
             .field("port_mapping", &self.port_mapping)
             .field("discovery", &self.discovery)
             .field("relay_only", &self.relay_only)
+            .field("max_peers", &self.max_peers)
+            .field("max_connections", &self.max_connections)
             .finish()
     }
 }

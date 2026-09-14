@@ -112,7 +112,13 @@ pub async fn serve(backend_url: &str, opts: ServeOptions) -> Result<ServeHandle,
         transport::wait_online(&endpoint, within).await;
     }
 
-    let state = Arc::new(ServeState::new(endpoint, credential, backend));
+    let state = Arc::new(ServeState::new(
+        endpoint,
+        credential,
+        backend,
+        opts.max_peers,
+        opts.max_connections,
+    ));
     tokio::spawn(accept_loop(state.clone()));
     Ok(ServeHandle::new(state))
 }

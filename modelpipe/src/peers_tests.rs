@@ -31,7 +31,7 @@ fn via_relay() -> Reading {
 
 #[test]
 fn an_empty_registry_is_idle_and_reports_nobody() {
-    let registry = PeerRegistry::new();
+    let registry = PeerRegistry::default();
     let lifecycle = Lifecycle::new();
     assert!(registry.views().is_empty());
     assert_eq!(lifecycle.status(), PipeStatus::Idle);
@@ -39,7 +39,7 @@ fn an_empty_registry_is_idle_and_reports_nobody() {
 
 #[test]
 fn each_peer_is_reported_by_name_and_path_in_arrival_order() {
-    let registry = PeerRegistry::new();
+    let registry = PeerRegistry::default();
     let lifecycle = Lifecycle::new();
     registry.add(&name("3ca82708b995"), hole_punched(), &lifecycle);
     registry.add(&name("7f0e11a2c3d4"), via_relay(), &lifecycle);
@@ -56,7 +56,7 @@ fn each_peer_is_reported_by_name_and_path_in_arrival_order() {
 /// number: a relayed peer is not merely slower, it is slower by an amount.
 #[test]
 fn each_peer_is_reported_with_what_its_path_costs() {
-    let registry = PeerRegistry::new();
+    let registry = PeerRegistry::default();
     let lifecycle = Lifecycle::new();
     registry.add(&name("3ca82708b995"), hole_punched(), &lifecycle);
     registry.add(&name("7f0e11a2c3d4"), via_relay(), &lifecycle);
@@ -71,7 +71,7 @@ fn each_peer_is_reported_with_what_its_path_costs() {
 /// hole-punches a moment later has to stop being reported as relayed.
 #[test]
 fn a_peer_that_changes_path_is_reported_on_the_one_it_moved_to() {
-    let registry = PeerRegistry::new();
+    let registry = PeerRegistry::default();
     let lifecycle = Lifecycle::new();
     let peer = registry
         .add(&name("3ca82708b995"), via_relay(), &lifecycle)
@@ -94,7 +94,7 @@ fn a_peer_that_changes_path_is_reported_on_the_one_it_moved_to() {
 /// for ever is worse than the stale path this whole module exists to fix.
 #[test]
 fn a_reading_that_lands_after_a_peer_left_does_not_bring_it_back() {
-    let registry = PeerRegistry::new();
+    let registry = PeerRegistry::default();
     let lifecycle = Lifecycle::new();
     let peer = registry
         .add(&name("3ca82708b995"), via_relay(), &lifecycle)
@@ -111,7 +111,7 @@ fn a_reading_that_lands_after_a_peer_left_does_not_bring_it_back() {
 /// is what says which peer that was.
 #[test]
 fn the_aggregate_is_the_worst_path_and_the_view_says_whose() {
-    let registry = PeerRegistry::new();
+    let registry = PeerRegistry::default();
     let lifecycle = Lifecycle::new();
     let direct = registry
         .add(&name("aaaaaaaaaaaa"), hole_punched(), &lifecycle)
@@ -139,7 +139,7 @@ fn the_aggregate_is_the_worst_path_and_the_view_says_whose() {
 
 #[test]
 fn removing_one_peer_leaves_the_others_alone() {
-    let registry = PeerRegistry::new();
+    let registry = PeerRegistry::default();
     let lifecycle = Lifecycle::new();
     let first = registry
         .add(&name("aaaaaaaaaaaa"), hole_punched(), &lifecycle)
@@ -160,7 +160,7 @@ fn removing_one_peer_leaves_the_others_alone() {
 /// semaphore, and a different endpoint gets its own.
 #[test]
 fn connections_from_one_peer_share_a_budget_and_peers_do_not() {
-    let registry = PeerRegistry::new();
+    let registry = PeerRegistry::default();
     let lifecycle = Lifecycle::new();
     let alice = name("aaaaaaaaaaaa");
     let bob = name("bbbbbbbbbbbb");
@@ -180,7 +180,7 @@ fn connections_from_one_peer_share_a_budget_and_peers_do_not() {
 /// connection cannot take — which is the whole of what "per peer" means.
 #[test]
 fn a_stream_on_one_connection_counts_against_the_peers_other_connections() {
-    let registry = PeerRegistry::new();
+    let registry = PeerRegistry::default();
     let lifecycle = Lifecycle::new();
     let alice = name("aaaaaaaaaaaa");
     registry.add(&alice, hole_punched(), &lifecycle);
@@ -212,7 +212,7 @@ fn a_stream_on_one_connection_counts_against_the_peers_other_connections() {
 /// listener.
 #[test]
 fn a_budget_survives_one_connection_leaving_and_dies_with_the_last() {
-    let registry = PeerRegistry::new();
+    let registry = PeerRegistry::default();
     let lifecycle = Lifecycle::new();
     let alice = name("aaaaaaaaaaaa");
     let first = registry
@@ -243,7 +243,7 @@ fn a_budget_survives_one_connection_leaving_and_dies_with_the_last() {
 /// The registry filled to the peer cap with distinct fingerprints, and
 /// each one's name and id.
 fn fill(registry: &PeerRegistry, lifecycle: &Lifecycle) -> Vec<(Arc<str>, u64)> {
-    (0..MAX_PEERS)
+    (0..DEFAULT_MAX_PEERS)
         .map(|n| {
             let peer = name(&format!("{n:012x}"));
             let id = registry
@@ -258,8 +258,8 @@ fn fill(registry: &PeerRegistry, lifecycle: &Lifecycle) -> Vec<(Arc<str>, u64)> 
 /// soon as one leaves.
 #[test]
 fn a_thirty_third_peer_is_refused_while_thirty_two_are_carried() {
-    assert_eq!(MAX_PEERS, 32, "the number this test is named for");
-    let registry = PeerRegistry::new();
+    assert_eq!(DEFAULT_MAX_PEERS, 32, "the number this test is named for");
+    let registry = PeerRegistry::default();
     let lifecycle = Lifecycle::new();
     let carried = fill(&registry, &lifecycle);
 
@@ -294,7 +294,7 @@ fn a_thirty_third_peer_is_refused_while_thirty_two_are_carried() {
 /// second connection for nothing.
 #[test]
 fn a_second_connection_from_a_peer_already_here_is_not_a_new_peer() {
-    let registry = PeerRegistry::new();
+    let registry = PeerRegistry::default();
     let lifecycle = Lifecycle::new();
     let carried = fill(&registry, &lifecycle);
 
@@ -305,8 +305,8 @@ fn a_second_connection_from_a_peer_already_here_is_not_a_new_peer() {
     );
     let views = registry.views();
     let peers: HashSet<&str> = views.iter().map(|v| v.fingerprint.as_str()).collect();
-    assert_eq!(views.len(), MAX_PEERS + 1, "one more connection");
-    assert_eq!(peers.len(), MAX_PEERS, "and no more peers");
+    assert_eq!(views.len(), DEFAULT_MAX_PEERS + 1, "one more connection");
+    assert_eq!(peers.len(), DEFAULT_MAX_PEERS, "and no more peers");
 }
 
 /// The connection count refuses past its cap, counts nothing for the one it
@@ -314,7 +314,7 @@ fn a_second_connection_from_a_peer_already_here_is_not_a_new_peer() {
 #[test]
 fn a_connection_past_the_cap_is_refused_until_one_goes() {
     let connections = Connections::default();
-    let held: Vec<Carried> = (1..MAX_CONNECTIONS)
+    let held: Vec<Carried> = (1..DEFAULT_MAX_CONNECTIONS)
         .map(|_| connections.admit().expect("under the cap"))
         .collect();
     let last = connections.admit().expect("the last place");
@@ -322,12 +322,16 @@ fn a_connection_past_the_cap_is_refused_until_one_goes() {
         connections.admit().is_none(),
         "the one past the cap is refused"
     );
-    assert_eq!(connections.carried(), MAX_CONNECTIONS, "and not counted");
+    assert_eq!(
+        connections.carried(),
+        DEFAULT_MAX_CONNECTIONS,
+        "and not counted"
+    );
 
     drop(last);
     assert_eq!(
         connections.carried(),
-        MAX_CONNECTIONS - 1,
+        DEFAULT_MAX_CONNECTIONS - 1,
         "a dropped place is given back"
     );
     assert!(connections.admit().is_some(), "and taken by the next");

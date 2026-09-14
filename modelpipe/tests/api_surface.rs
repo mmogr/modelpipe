@@ -75,6 +75,8 @@ fn the_options_structs_are_constructible_from_outside() {
     serve_opts.port_mapping = false;
     serve_opts.discovery = false;
     serve_opts.relay_only = true;
+    serve_opts.max_peers = std::num::NonZeroUsize::new(4).expect("four is not zero");
+    serve_opts.max_connections = std::num::NonZeroUsize::new(16).expect("sixteen is not zero");
 
     let mut connect_opts = ConnectOptions::default();
     connect_opts.bind = Some("127.0.0.1:8080".parse().unwrap());
