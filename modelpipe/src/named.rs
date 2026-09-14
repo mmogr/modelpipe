@@ -24,6 +24,7 @@ use std::sync::{Arc, RwLock};
 use subtle::ConstantTimeEq;
 
 use crate::minting::presentable;
+use crate::peer_id::PeerId;
 
 /// The longest name accepted. Long enough for any identifier an embedder
 /// would mint, short enough that a name is never the bulk of a header.
@@ -33,6 +34,8 @@ pub(crate) const MAX_NAME_LEN: usize = 64;
 struct NamedToken {
     name: Arc<str>,
     token: String,
+    /// The one endpoint it admits from, or `None` for any.
+    pinned: Option<PeerId>,
 }
 
 /// Every named token a listener holds.
@@ -58,6 +61,17 @@ pub(crate) enum AddRefused {
     UnpresentableToken,
 }
 
+/// What a presented value is to the named tokens.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum NamedMatch {
+    /// A token held under this name, from an endpoint it admits from.
+    Admits(Arc<str>),
+    /// A token pinned to another endpoint than the one it came from.
+    PinnedElsewhere,
+    /// Not a token held here.
+    Unknown,
+}
+
 /// Whether `name` can be a token's name: non-empty, at most
 /// [`MAX_NAME_LEN`] bytes, and only ASCII letters, digits, `.`, `_` and
 /// `-`. That is the intersection of what a header value, a log line and
@@ -77,13 +91,18 @@ impl Named {
         }
     }
 
-    /// Hold `token` under `name`.
+    /// Hold `token` under `name`, admitting only from `pinned` when it is given.
     ///
     /// # Errors
     ///
     /// [`AddRefused`] says which rule refused it; nothing is held on any
     /// of them.
-    pub(crate) fn add(&self, name: &str, token: String) -> Result<(), AddRefused> {
+    pub(crate) fn add(
+        &self,
+        name: &str,
+        token: String,
+        pinned: Option<PeerId>,
+    ) -> Result<(), AddRefused> {
         if !valid_name(name) {
             return Err(AddRefused::InvalidName);
         }
@@ -103,6 +122,7 @@ impl Named {
         entries.push(NamedToken {
             name: Arc::from(name),
             token,
+            pinned,
         });
         drop(entries);
         Ok(())
@@ -126,23 +146,34 @@ impl Named {
             .collect()
     }
 
-    /// The name of the token `presented` is, if it is one.
+    /// Which token `presented` is, and whether it admits from `from`.
     ///
     /// Constant-time in each token, the rule the primary keeps; which
     /// *position* matched is not hidden and is not a secret. Every entry
     /// is compared rather than stopping at the first match, so the time
     /// taken says how many tokens are held — a count the operator already
     /// knows — and not where the presented one sits among them.
-    pub(crate) fn admits(&self, presented: &[u8]) -> Option<Arc<str>> {
+    ///
+    /// A pinned token presented from another endpoint is a copied key, and
+    /// the refusal is logged with its name: it is the one an operator would
+    /// want to hear about.
+    pub(crate) fn admits(&self, presented: &[u8], from: PeerId) -> NamedMatch {
         let entries = self.read();
         let mut matched = None;
         for held in entries.iter() {
             if same(&held.token, presented) && matched.is_none() {
-                matched = Some(Arc::clone(&held.name));
+                matched = Some((Arc::clone(&held.name), held.pinned));
             }
         }
         drop(entries);
-        matched
+        match matched {
+            None => NamedMatch::Unknown,
+            Some((name, Some(pinned))) if pinned != from => {
+                tracing::warn!(device = %name, "a token pinned to one endpoint was presented from another");
+                NamedMatch::PinnedElsewhere
+            }
+            Some((name, _)) => NamedMatch::Admits(name),
+        }
     }
 
     /// How many tokens are held, for a `Debug` that reports state and not

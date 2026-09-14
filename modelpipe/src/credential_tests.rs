@@ -16,6 +16,12 @@ use crate::ServeError;
 
 const TOKEN: &str = "sk-zzq-a-known-credential";
 
+/// An endpoint no token here is pinned to.
+const ANYONE: PeerId = PeerId::from_bytes([7; 32]);
+
+/// The endpoint a pinned token here is pinned to.
+const DESK: PeerId = PeerId::from_bytes([1; 32]);
+
 fn enforcing(token: &str) -> Credential {
     let (cell, given) =
         Credential::new(&TokenPolicy::Supplied(token.to_owned())).expect("a usable token");
@@ -27,12 +33,12 @@ fn enforcing(token: &str) -> Credential {
 /// header at all, which differs from one carrying an empty value — and
 /// neither is ever accepted while a credential is enforced.
 fn offers(cell: &Credential, value: Option<&str>) -> bool {
-    cell.admits(value.map(str::as_bytes)).is_some()
+    cell.admits(value.map(str::as_bytes), ANYONE).is_some()
 }
 
 /// Which credential admitted, for the tests that are about that.
 fn admitted_by(cell: &Credential, value: &str) -> Option<Admitted> {
-    cell.admits(Some(value.as_bytes()))
+    cell.admits(Some(value.as_bytes()), ANYONE)
 }
 
 // ── What is admitted ─────────────────────────────────────────────────────
@@ -710,7 +716,8 @@ fn a_named_only_listener_is_closed_not_open() {
     assert!(!offers(&cell, None));
     assert!(!offers(&cell, Some("Bearer anything")));
     assert!(!offers(&cell, Some("")));
-    cell.add_named("laptop", LAPTOP.to_owned()).expect("held");
+    cell.add_named("laptop", LAPTOP.to_owned(), None)
+        .expect("held");
     assert_eq!(
         admitted_by(&cell, &format!("Bearer {LAPTOP}")),
         Some(by_name("laptop"))
@@ -721,7 +728,8 @@ fn a_named_only_listener_is_closed_not_open() {
 #[test]
 fn a_named_token_admits_beside_the_primary_and_says_which() {
     let cell = enforcing(TOKEN);
-    cell.add_named("laptop", LAPTOP.to_owned()).expect("held");
+    cell.add_named("laptop", LAPTOP.to_owned(), None)
+        .expect("held");
     assert_eq!(
         admitted_by(&cell, &format!("Bearer {TOKEN}")),
         Some(Admitted::Token)
@@ -737,8 +745,10 @@ fn a_named_token_admits_beside_the_primary_and_says_which() {
 #[test]
 fn removing_a_name_refuses_that_token_and_nothing_else() {
     let cell = enforcing(TOKEN);
-    cell.add_named("laptop", LAPTOP.to_owned()).expect("held");
-    cell.add_named("phone", PHONE.to_owned()).expect("held");
+    cell.add_named("laptop", LAPTOP.to_owned(), None)
+        .expect("held");
+    cell.add_named("phone", PHONE.to_owned(), None)
+        .expect("held");
     cell.grant(CODE.to_owned(), LONG, None);
     assert!(cell.remove_named("phone"));
     assert!(!offers(&cell, Some(&format!("Bearer {PHONE}"))));
@@ -753,7 +763,8 @@ fn removing_a_name_refuses_that_token_and_nothing_else() {
 #[test]
 fn a_value_that_is_both_a_named_token_and_a_grant_admits_by_name_and_spends_nothing() {
     let cell = enforcing(TOKEN);
-    cell.add_named("laptop", LAPTOP.to_owned()).expect("held");
+    cell.add_named("laptop", LAPTOP.to_owned(), None)
+        .expect("held");
     cell.grant(LAPTOP.to_owned(), LONG, None);
     assert_eq!(
         admitted_by(&cell, &format!("Bearer {LAPTOP}")),
@@ -765,7 +776,8 @@ fn a_value_that_is_both_a_named_token_and_a_grant_admits_by_name_and_spends_noth
 #[test]
 fn rotating_the_primary_does_not_disturb_a_named_token() {
     let cell = enforcing(TOKEN);
-    cell.add_named("laptop", LAPTOP.to_owned()).expect("held");
+    cell.add_named("laptop", LAPTOP.to_owned(), None)
+        .expect("held");
     let fresh = cell.rotate();
     assert!(!offers(&cell, Some(&format!("Bearer {TOKEN}"))));
     assert!(offers(&cell, Some(&format!("Bearer {fresh}"))));
@@ -779,7 +791,8 @@ fn rotating_the_primary_does_not_disturb_a_named_token() {
 #[test]
 fn a_named_only_listener_can_be_given_a_primary_later() {
     let (cell, _) = Credential::new(&TokenPolicy::Named).expect("a usable policy");
-    cell.add_named("laptop", LAPTOP.to_owned()).expect("held");
+    cell.add_named("laptop", LAPTOP.to_owned(), None)
+        .expect("held");
     assert!(cell.set(TOKEN.to_owned()));
     assert_eq!(cell.token().as_deref(), Some(TOKEN));
     assert_eq!(
@@ -795,7 +808,8 @@ fn a_named_only_listener_can_be_given_a_primary_later() {
 #[test]
 fn debug_counts_named_tokens_and_never_shows_one() {
     let (cell, _) = Credential::new(&TokenPolicy::Named).expect("a usable policy");
-    cell.add_named("laptop", LAPTOP.to_owned()).expect("held");
+    cell.add_named("laptop", LAPTOP.to_owned(), None)
+        .expect("held");
     let rendered = format!("{cell:?}");
     assert!(!rendered.contains(LAPTOP), "the token leaked: {rendered}");
     assert!(
@@ -811,12 +825,13 @@ fn debug_counts_named_tokens_and_never_shows_one() {
 #[test]
 fn forward_carries_the_device_and_the_upstream_bearer() {
     let cell = enforcing(TOKEN);
-    cell.add_named("laptop", LAPTOP.to_owned()).expect("held");
+    cell.add_named("laptop", LAPTOP.to_owned(), None)
+        .expect("held");
     let named = cell
-        .admits(Some(format!("Bearer {LAPTOP}").as_bytes()))
+        .admits(Some(format!("Bearer {LAPTOP}").as_bytes()), ANYONE)
         .expect("admits");
     let primary = cell
-        .admits(Some(format!("Bearer {TOKEN}").as_bytes()))
+        .admits(Some(format!("Bearer {TOKEN}").as_bytes()), ANYONE)
         .expect("admits");
 
     let f = cell.forward(&named);
@@ -846,4 +861,35 @@ fn a_blank_upstream_bearer_is_refused_and_leaves_the_current_one() {
         assert!(!cell.set_upstream(Some(blank.to_owned())), "{blank:?}");
     }
     assert_eq!(cell.upstream().as_deref(), Some("backend-key"));
+}
+
+// ── Pinned to one endpoint ───────────────────────────────────────────────
+
+/// A token pinned to one endpoint admits from that endpoint and is a wrong
+/// token from any other, while the primary beside it is pinned to nothing.
+#[test]
+fn a_pinned_token_admits_only_from_its_endpoint() {
+    let cell = enforcing(TOKEN);
+    cell.add_named("laptop", LAPTOP.to_owned(), Some(DESK))
+        .expect("held");
+    let bearer = format!("Bearer {LAPTOP}");
+    assert_eq!(
+        cell.admits(Some(bearer.as_bytes()), DESK),
+        Some(by_name("laptop"))
+    );
+    assert_eq!(cell.admits(Some(bearer.as_bytes()), ANYONE), None);
+    assert!(offers(&cell, Some(&format!("Bearer {TOKEN}"))));
+}
+
+/// Refused outright from the wrong endpoint: a grant that holds the same value
+/// is not spent by the copied key.
+#[test]
+fn a_pinned_token_from_another_endpoint_spends_no_grant_of_the_same_value() {
+    let cell = enforcing(TOKEN);
+    cell.add_named("laptop", LAPTOP.to_owned(), Some(DESK))
+        .expect("held");
+    cell.grant(LAPTOP.to_owned(), LONG, None);
+    let bearer = format!("Bearer {LAPTOP}");
+    assert_eq!(cell.admits(Some(bearer.as_bytes()), ANYONE), None);
+    assert_eq!(cell.grants.count(), 1, "the grant is still waiting");
 }

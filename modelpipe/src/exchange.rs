@@ -30,6 +30,7 @@ use tracing::field::Empty;
 
 use crate::backend::Backend;
 use crate::body::{self, Buffered};
+use crate::caller::Caller;
 use crate::credential::Credential;
 use crate::framing;
 use crate::head_read;
@@ -77,7 +78,7 @@ pub(crate) async fn serve_exchange<S, B>(
     stream: &mut S,
     credential: &Credential,
     backend: &B,
-    peer: &str,
+    peer: &Caller,
 ) -> std::io::Result<Outcome>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send,
@@ -131,7 +132,7 @@ async fn run<S, B>(
     stream: &mut S,
     credential: &Credential,
     backend: &B,
-    peer: &str,
+    peer: &Caller,
 ) -> std::io::Result<Outcome>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send,
@@ -169,7 +170,7 @@ where
     };
 
     // 3. The credential. Still nothing has been sent anywhere.
-    let Some(admitted) = credential.admits(http_head::authorization(&head.headers)) else {
+    let Some(admitted) = credential.admits(http_head::authorization(&head.headers), peer.id) else {
         return refusal::send(stream, refusal::unauthorized(), Outcome::Unauthorized).await;
     };
     // The name is the operator's and the backend is about to be told it;
@@ -184,7 +185,7 @@ where
     // client's.
     let expects_continue = http_head::expects_continue(&head.headers);
     let forward = credential.forward(&admitted);
-    http_head::rewrite_for_backend(&mut head, backend.authority(), peer, &forward);
+    http_head::rewrite_for_backend(&mut head, backend.authority(), &peer.name, &forward);
     // A backend that will not take the connection is a gateway failure with
     // an answer, not a stream that dies silently. Without this the client
     // received nothing at all — not a status, not a malformed response, no

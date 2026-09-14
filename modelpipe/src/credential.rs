@@ -30,7 +30,8 @@ use crate::ServeError;
 pub(crate) use crate::admitted::{Admitted, Forward};
 use crate::grant::Grants;
 use crate::minting::{mint, presentable};
-use crate::named::{AddRefused, Named};
+use crate::named::{AddRefused, Named, NamedMatch};
+use crate::peer_id::PeerId;
 use crate::superseded::Superseded;
 use crate::token_policy::TokenPolicy;
 
@@ -132,7 +133,11 @@ impl Credential {
     /// one: the whitespace refusals this type has always made are still
     /// made, and a token that begins with a space is still a different
     /// token.
-    pub(crate) fn admits(&self, offered: Option<&[u8]>) -> Option<Admitted> {
+    ///
+    /// `from` is the endpoint the request arrived from. A token pinned to one
+    /// endpoint admits from that one only, and from any other is refused here,
+    /// before a grant holding the same value could be spent.
+    pub(crate) fn admits(&self, offered: Option<&[u8]>, from: PeerId) -> Option<Admitted> {
         // Cloned and the lock released before comparing, so a rotation is
         // never blocked behind an in-flight request.
         let primary = self.snapshot();
@@ -163,8 +168,10 @@ impl Credential {
         // presenting *does* spend, only after them. Reversed, a value that
         // is both would burn its one admission on a request that would
         // have been admitted for free.
-        if let Some(name) = self.named.admits(presented) {
-            return Some(Admitted::Named(name));
+        match self.named.admits(presented, from) {
+            NamedMatch::Admits(name) => return Some(Admitted::Named(name)),
+            NamedMatch::PinnedElsewhere => return None,
+            NamedMatch::Unknown => {}
         }
         if self.superseded.admits(presented) {
             return Some(Admitted::Superseded);
@@ -197,10 +204,16 @@ impl Credential {
         true
     }
 
-    /// Hold `token` under `name` as a standing credential. See
-    /// [`Named::add`] for what is refused and why.
-    pub(crate) fn add_named(&self, name: &str, token: String) -> Result<(), AddRefused> {
-        self.named.add(name, token)
+    /// Hold `token` under `name` as a standing credential, admitting only from
+    /// `pinned` when it is given. See [`Named::add`] for what is refused and
+    /// why.
+    pub(crate) fn add_named(
+        &self,
+        name: &str,
+        token: String,
+        pinned: Option<PeerId>,
+    ) -> Result<(), AddRefused> {
+        self.named.add(name, token, pinned)
     }
 
     /// Stop admitting the token held under `name`; whether there was one.

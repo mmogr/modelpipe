@@ -14,11 +14,12 @@ use iroh::Endpoint;
 use tracing::Instrument as _;
 
 use crate::backend::TcpBackend;
+use crate::caller::Caller;
 use crate::credential::Credential;
 use crate::exchange;
-use crate::fingerprint;
 use crate::lifecycle::{Lifecycle, aggregate};
 use crate::path_watch;
+use crate::peer_id::PeerId;
 use crate::peers::{Connections, PeerRegistry};
 use crate::status::CloseReason;
 
@@ -126,7 +127,8 @@ async fn serve_connection(
     // way. The same twelve characters reach the backend on every request
     // from this peer, as `X-Modelpipe-Peer`, and are what `peers()` reports
     // to an embedder — so every surface names a device identically.
-    let peer_name: std::sync::Arc<str> = fingerprint::of(connection.remote_id().as_bytes()).into();
+    let caller = Caller::new(PeerId::from_bytes(*connection.remote_id().as_bytes()));
+    let peer_name = caller.name.clone();
     let Some(peer) = state.peers.add(&peer_name, reading, &state.lifecycle) else {
         tracing::debug!(peer = %peer_name, "a peer was refused: the listener is at its peer cap");
         return;
@@ -193,7 +195,7 @@ async fn serve_connection(
         // accept cannot observe zero in flight and return while this
         // exchange is starting.
         let guard = state.lifecycle.enter();
-        let peer_name = peer_name.clone();
+        let caller = caller.clone();
         // `.instrument`, not an `enter()`: the guard a synchronous enter
         // returns is not `Send` across an await, and this task is spawned.
         // Attaching the span to the future is also what makes the peer
@@ -210,7 +212,7 @@ async fn serve_connection(
                     &mut stream,
                     &state.credential,
                     &state.backend,
-                    &peer_name,
+                    &caller,
                 )
                 .await;
                 deliver(stream).await;
