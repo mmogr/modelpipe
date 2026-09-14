@@ -94,7 +94,7 @@ impl ServeHandle {
 
     /// Stop admitting the token held under `name`, from this call forward.
     /// Every other credential — the primary, every other name, a graced
-    /// key, a live grant — is untouched, which is the whole reason names
+    /// key — is untouched, which is the whole reason names
     /// exist.
     ///
     /// Returns whether a token was held under `name`. A name nothing is

@@ -182,105 +182,8 @@ fn set_turns_auth_on_when_serving_open() {
     assert!(offers(&cell, Some(&format!("Bearer {TOKEN}"))));
 }
 
-// ── Grants ───────────────────────────────────────────────────────────────
-
-const CODE: &str = "483920";
+/// A window long enough never to close during a test.
 const LONG: std::time::Duration = std::time::Duration::from_mins(1);
-
-/// A grant is a credential that admits once: the second presentation of
-/// the same value is a plain wrong token.
-#[test]
-fn a_grant_admits_one_request_and_then_is_a_wrong_token() {
-    let cell = enforcing(TOKEN);
-    assert!(
-        cell.grant(CODE.to_owned(), LONG, None),
-        "a presentable code takes"
-    );
-    let as_bearer = format!("Bearer {CODE}");
-    assert!(
-        offers(&cell, Some(&as_bearer)),
-        "the first presentation admits"
-    );
-    assert!(
-        !offers(&cell, Some(&as_bearer)),
-        "the second is refused like any wrong token"
-    );
-}
-
-/// Granting changes nothing about the token: it still admits, it is still
-/// what the handle reports, and the grant is not it.
-#[test]
-fn a_grant_leaves_the_enforced_token_untouched() {
-    let cell = enforcing(TOKEN);
-    cell.grant(CODE.to_owned(), LONG, None);
-    assert!(offers(&cell, Some(&format!("Bearer {TOKEN}"))));
-    assert_eq!(cell.token().as_deref(), Some(TOKEN));
-    assert!(
-        offers(&cell, Some(&format!("Bearer {CODE}"))),
-        "and the grant is still unspent — the token did not consume it"
-    );
-}
-
-/// The grant follows the scheme rules the token follows: it is a bearer
-/// credential, not a magic string that admits from anywhere in the header.
-#[test]
-fn a_grant_is_presented_as_a_bearer_or_not_at_all() {
-    let cell = enforcing(TOKEN);
-    cell.grant(CODE.to_owned(), LONG, None);
-    assert!(!offers(&cell, Some(CODE)), "no scheme");
-    assert!(
-        !offers(&cell, Some(&format!("Basic {CODE}"))),
-        "wrong scheme"
-    );
-    assert!(
-        offers(&cell, Some(&format!("bearer {CODE}"))),
-        "the scheme is case-insensitive"
-    );
-}
-
-/// An unused grant dies at its deadline rather than lingering as a
-/// standing credential nobody remembers issuing.
-#[test]
-fn an_unused_grant_expires() {
-    let cell = enforcing(TOKEN);
-    cell.grant(CODE.to_owned(), std::time::Duration::ZERO, None);
-    assert!(!offers(&cell, Some(&format!("Bearer {CODE}"))));
-}
-
-/// A rotation neither spends nor extends a grant: the two are independent
-/// credentials with independent lifetimes.
-#[test]
-fn rotating_the_token_does_not_disturb_a_live_grant() {
-    let cell = enforcing(TOKEN);
-    cell.grant(CODE.to_owned(), LONG, None);
-    cell.set("sk-zzq-the-replacement".to_owned());
-    assert!(offers(&cell, Some(&format!("Bearer {CODE}"))));
-}
-
-/// The value `set` refuses, `grant` refuses, and for the same reason.
-#[test]
-fn an_unpresentable_grant_is_refused() {
-    let cell = enforcing(TOKEN);
-    for blank in ["", " ", "\t\n"] {
-        assert!(
-            !cell.grant(blank.to_owned(), LONG, None),
-            "{blank:?} must not become a grant"
-        );
-    }
-}
-
-/// Grants are counted in `Debug`, never shown.
-#[test]
-fn debug_counts_grants_and_never_shows_one() {
-    let cell = enforcing(TOKEN);
-    cell.grant(CODE.to_owned(), LONG, None);
-    let rendered = format!("{cell:?}");
-    assert!(!rendered.contains(CODE), "the grant leaked: {rendered}");
-    assert!(
-        rendered.contains("grants: 1"),
-        "but the count is legible: {rendered}"
-    );
-}
 
 // ── Redaction ────────────────────────────────────────────────────────────
 
@@ -429,7 +332,7 @@ fn the_key_a_graced_rotation_replaced_keeps_admitting() {
     );
 }
 
-/// Not a grant. Several machines are holding the replaced key, so the
+/// Not spent by use. Several machines are holding the replaced key, so the
 /// second one to reconnect must not be refused for being second.
 #[test]
 fn the_replaced_key_admits_every_machine_not_just_the_first() {
@@ -439,7 +342,7 @@ fn the_replaced_key_admits_every_machine_not_just_the_first() {
     for machine in 1..=4 {
         assert!(
             offers(&cell, Some(&as_bearer)),
-            "machine {machine} was refused; the window is being spent like a grant"
+            "machine {machine} was refused; the window is being spent on first use"
         );
     }
 }
@@ -595,47 +498,8 @@ fn a_graced_rotation_onto_an_open_listener_holds_nothing() {
     assert!(offers(&cell, Some(&format!("Bearer {TOKEN}"))));
 }
 
-/// The window is consulted before grants, and that order is the whole
-/// reason this test exists: a value that is *both* an open window's key and
-/// a live grant must be admitted by the window, which spends nothing,
-/// leaving the grant's one admission still there to spend afterwards.
-#[test]
-fn a_key_the_window_already_admits_does_not_spend_a_grant() {
-    let cell = enforcing(TOKEN);
-    assert!(
-        cell.grant(TOKEN.to_owned(), LONG, None),
-        "the same value, granted"
-    );
-    cell.set_with_grace(NEXT.to_owned(), LONG);
-
-    let as_bearer = format!("Bearer {TOKEN}");
-    assert!(offers(&cell, Some(&as_bearer)), "admitted by the window");
-
-    // Shut the window. If the presentation above had been answered by the
-    // grant instead, there is nothing left here.
-    cell.set("sk-zzq-the-third".to_owned());
-    assert!(
-        offers(&cell, Some(&as_bearer)),
-        "the grant was spent by a request the window should have answered"
-    );
-    assert!(
-        !offers(&cell, Some(&as_bearer)),
-        "and now it really is spent"
-    );
-}
-
-/// A graced rotation neither spends nor extends a grant, the promise a
-/// plain rotation already makes.
-#[test]
-fn a_graced_rotation_does_not_disturb_a_live_grant() {
-    let cell = enforcing(TOKEN);
-    cell.grant(CODE.to_owned(), LONG, None);
-    cell.set_with_grace(NEXT.to_owned(), LONG);
-    assert!(offers(&cell, Some(&format!("Bearer {CODE}"))));
-}
-
 /// An open window is reported as open and never as the key it holds — the
-/// rule the token and the grants already follow.
+/// rule the token already follows.
 #[test]
 fn debug_says_a_window_is_open_and_never_which_key() {
     let cell = enforcing(TOKEN);
@@ -652,49 +516,6 @@ fn debug_says_a_window_is_open_and_never_which_key() {
         open.contains("grace: true"),
         "but the state is legible: {open}"
     );
-}
-
-// ── A grant that burns ───────────────────────────────────────────────────
-
-const THREE: NonZeroU8 = NonZeroU8::new(3).expect("three is not zero");
-
-/// The whole point of the bounded form: three wrong bearers through the
-/// edge and the code is dead, without a byte reaching the handshake route
-/// that used to be the only thing counting.
-#[test]
-fn three_wrong_bearers_burn_a_bounded_grant_at_the_edge() {
-    let cell = enforcing(TOKEN);
-    assert!(cell.grant(CODE.to_owned(), LONG, Some(THREE)));
-    for wrong in ["000000", "000001", "000002"] {
-        assert!(!offers(&cell, Some(&format!("Bearer {wrong}"))));
-    }
-    assert_eq!(cell.grants.count(), 0, "burned");
-    assert!(
-        !offers(&cell, Some(&format!("Bearer {CODE}"))),
-        "the code itself is now a wrong token"
-    );
-    assert!(
-        offers(&cell, Some(&format!("Bearer {TOKEN}"))),
-        "and the enforced token was never in question"
-    );
-}
-
-/// What does not count: the enforced token, presented as often as anyone
-/// likes, and anything that is not a bearer at all. Neither is a guess at
-/// the code, and a paired machine making requests during a pairing window
-/// must not be the thing that closes it.
-#[test]
-fn only_a_wrong_bearer_counts_as_a_wrong_presentation() {
-    let cell = enforcing(TOKEN);
-    assert!(cell.grant(CODE.to_owned(), LONG, Some(THREE)));
-    for _ in 0..5 {
-        assert!(offers(&cell, Some(&format!("Bearer {TOKEN}"))));
-    }
-    for not_a_guess in [None, Some(""), Some("Basic dXNlcjpwYXNz"), Some("Bearer")] {
-        assert!(!offers(&cell, not_a_guess));
-    }
-    assert_eq!(cell.grants.count(), 1, "still waiting for the device");
-    assert!(offers(&cell, Some(&format!("Bearer {CODE}"))));
 }
 
 // ── Named tokens ─────────────────────────────────────────────────────────
@@ -749,28 +570,11 @@ fn removing_a_name_refuses_that_token_and_nothing_else() {
         .expect("held");
     cell.add_named("phone", PHONE.to_owned(), None)
         .expect("held");
-    cell.grant(CODE.to_owned(), LONG, None);
     assert!(cell.remove_named("phone"));
     assert!(!offers(&cell, Some(&format!("Bearer {PHONE}"))));
     assert!(offers(&cell, Some(&format!("Bearer {LAPTOP}"))));
     assert!(offers(&cell, Some(&format!("Bearer {TOKEN}"))));
-    assert_eq!(cell.grants.count(), 1, "the grant is still waiting");
     assert_eq!(cell.named(), ["laptop"]);
-}
-
-/// A named token spends nothing, so it is asked before a grant: a value
-/// that is both admits by name and leaves the grant live.
-#[test]
-fn a_value_that_is_both_a_named_token_and_a_grant_admits_by_name_and_spends_nothing() {
-    let cell = enforcing(TOKEN);
-    cell.add_named("laptop", LAPTOP.to_owned(), None)
-        .expect("held");
-    cell.grant(LAPTOP.to_owned(), LONG, None);
-    assert_eq!(
-        admitted_by(&cell, &format!("Bearer {LAPTOP}")),
-        Some(by_name("laptop"))
-    );
-    assert_eq!(cell.grants.count(), 1, "the grant was not spent");
 }
 
 #[test]
@@ -881,15 +685,19 @@ fn a_pinned_token_admits_only_from_its_endpoint() {
     assert!(offers(&cell, Some(&format!("Bearer {TOKEN}"))));
 }
 
-/// Refused outright from the wrong endpoint: a grant that holds the same value
-/// is not spent by the copied key.
+/// Refused outright from the wrong endpoint: a graced key that holds the same
+/// value does not admit the copied key in the pin's place.
 #[test]
-fn a_pinned_token_from_another_endpoint_spends_no_grant_of_the_same_value() {
-    let cell = enforcing(TOKEN);
+fn a_pinned_token_from_another_endpoint_is_not_admitted_by_a_graced_key_of_the_same_value() {
+    let cell = enforcing(LAPTOP);
+    assert!(cell.set_with_grace(NEXT.to_owned(), LONG));
     cell.add_named("laptop", LAPTOP.to_owned(), Some(DESK))
         .expect("held");
-    cell.grant(LAPTOP.to_owned(), LONG, None);
     let bearer = format!("Bearer {LAPTOP}");
     assert_eq!(cell.admits(Some(bearer.as_bytes()), ANYONE), None);
-    assert_eq!(cell.grants.count(), 1, "the grant is still waiting");
+    assert_eq!(
+        cell.admits(Some(bearer.as_bytes()), DESK),
+        Some(by_name("laptop")),
+        "from its own endpoint it is the named token, not the graced key"
+    );
 }

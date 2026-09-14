@@ -20,15 +20,12 @@
 //! to the file-size budget.
 
 use std::fmt;
-use std::num::NonZeroU8;
 use std::sync::{Arc, RwLock};
-use std::time::Duration;
 
 use subtle::ConstantTimeEq;
 
 use crate::ServeError;
 pub(crate) use crate::admitted::{Admitted, Forward};
-use crate::grant::Grants;
 use crate::minting::{mint, presentable};
 use crate::named::{AddRefused, Named, NamedMatch};
 use crate::peer_id::PeerId;
@@ -51,17 +48,11 @@ pub(crate) struct Credential {
     /// same reason.
     primary: RwLock<Primary>,
     /// Standing credentials added by name, one per paired machine.
-    /// Consulted after the primary and before the two below: presenting
-    /// one spends nothing, and it is the answer to "which device" that the
-    /// backend is told.
+    /// Consulted after the primary and before the graced key below, and it
+    /// is the answer to "which device" that the backend is told.
     named: Named,
-    /// Credentials that admit once. Consulted only after everything that
-    /// spends nothing has failed to match, so nothing here can widen what
-    /// the others admit — only add a single, expiring exception to them.
-    grants: Grants,
     /// The key a graced rotation replaced, until its window closes.
-    /// Consulted after the primary and the named tokens, and *before*
-    /// `grants` because this check spends nothing.
+    /// Consulted after the primary and the named tokens.
     superseded: Superseded,
     /// What the backend is told in `Authorization`, in place of whatever
     /// the client sent — or `None` to forward the client's own. The
@@ -97,7 +88,6 @@ impl Credential {
         let cell = Self {
             primary: RwLock::new(primary),
             named: Named::new(),
-            grants: Grants::new(),
             superseded: Superseded::new(),
             upstream: RwLock::new(None),
         };
@@ -136,7 +126,7 @@ impl Credential {
     ///
     /// `from` is the endpoint the request arrived from. A token pinned to one
     /// endpoint admits from that one only, and from any other is refused here,
-    /// before a grant holding the same value could be spent.
+    /// before a graced key holding the same value could admit it.
     pub(crate) fn admits(&self, offered: Option<&[u8]>, from: PeerId) -> Option<Admitted> {
         // Cloned and the lock released before comparing, so a rotation is
         // never blocked behind an in-flight request.
@@ -161,13 +151,9 @@ impl Credential {
                 return Some(Admitted::Token);
             }
         }
-        // Not the primary. Three other things it could be, and the order
-        // is load-bearing: everything that spends nothing is asked before
-        // the one thing that does. A named token and the key a graced
-        // rotation replaced both admit repeatedly; a grant, which
-        // presenting *does* spend, only after them. Reversed, a value that
-        // is both would burn its one admission on a request that would
-        // have been admitted for free.
+        // Not the primary. A named token, then the key a graced rotation
+        // replaced; a pinned token from the wrong endpoint stops here rather
+        // than being admitted by a graced key of the same value.
         match self.named.admits(presented, from) {
             NamedMatch::Admits(name) => return Some(Admitted::Named(name)),
             NamedMatch::PinnedElsewhere => return None,
@@ -176,32 +162,7 @@ impl Credential {
         if self.superseded.admits(presented) {
             return Some(Admitted::Superseded);
         }
-        if self.grants.consume(presented) {
-            return Some(Admitted::Grant);
-        }
         None
-    }
-
-    /// Admit one request bearing `token` before `ttl` elapses, without
-    /// touching what is enforced. With `burn_after`, the grant also dies at
-    /// that many wrong presentations — see [`Grants::consume`] for what
-    /// counts as one.
-    ///
-    /// Returns whether it took: a token nothing can present is refused for
-    /// the reason [`Credential::new`] refuses it. Has no effect while
-    /// serving open, where everything is admitted already — the grant is
-    /// stored, and is simply never the reason a request got in.
-    pub(crate) fn grant(
-        &self,
-        token: String,
-        ttl: Duration,
-        burn_after: Option<NonZeroU8>,
-    ) -> bool {
-        if !presentable(&token) {
-            return false;
-        }
-        self.grants.add(token, ttl, burn_after);
-        true
     }
 
     /// Hold `token` under `name` as a standing credential, admitting only from
@@ -231,7 +192,7 @@ impl Credential {
         Forward {
             device: match admitted {
                 Admitted::Named(name) => Some(Arc::clone(name)),
-                Admitted::Open | Admitted::Token | Admitted::Superseded | Admitted::Grant => None,
+                Admitted::Open | Admitted::Token | Admitted::Superseded => None,
             },
             upstream: self.upstream(),
         }
@@ -271,7 +232,7 @@ impl Credential {
 impl fmt::Debug for Credential {
     /// Reports only what kind of credential is enforced, never which — the
     /// same rule `Debug for TokenPolicy` follows one screen up. Named
-    /// tokens and grants are counted and a grace window is reported open or
+    /// tokens are counted and a grace window is reported open or
     /// shut, for the same reason: state, never secrets.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let state = match self.snapshot() {
@@ -285,7 +246,6 @@ impl fmt::Debug for Credential {
         f.debug_struct("Credential")
             .field("state", &state)
             .field("named", &self.named.count())
-            .field("grants", &self.grants.count())
             .field("grace", &self.superseded.is_open())
             .finish_non_exhaustive()
     }

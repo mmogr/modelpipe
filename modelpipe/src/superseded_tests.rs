@@ -4,7 +4,8 @@
 //! budget, the arrangement `credential.rs` already uses.
 //!
 //! Deadlines are asserted with `Duration::ZERO` and a minute wherever one
-//! answer will do, which is what `credential_tests.rs` does with grants and
+//! answer will do, which is what `credential_tests.rs` does with the grace
+//! window, and
 //! is the reason none of this can flake. One test sleeps, deliberately:
 //! zero and a minute are both consistent with an implementation that
 //! special-cases zero and never looks at the clock again, and the whole
@@ -33,9 +34,8 @@ fn a_fresh_window_is_closed_and_admits_nothing() {
     assert!(!window.admits(b""));
 }
 
-/// The one property that distinguishes this from a grant: presenting the
-/// key does not spend it, so the second machine to reconnect is not
-/// refused for being second.
+/// Presenting the key does not spend it, so the second machine to
+/// reconnect is not refused for being second.
 #[test]
 fn a_held_key_admits_every_time_it_is_presented() {
     let window = holding(OLD);

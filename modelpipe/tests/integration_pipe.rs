@@ -12,7 +12,6 @@
 
 mod common;
 
-use std::num::NonZeroU8;
 use std::time::Duration;
 
 use common::{MockBackend, Scratch, request, within};
@@ -397,101 +396,6 @@ async fn a_supplied_credential_can_be_replaced_in_place() {
         .expect("request")
         .starts_with("HTTP/1.1 200")
     );
-
-    connected.shutdown().await;
-    serving.shutdown().await;
-}
-
-/// `grant_once` is the pairing primitive: one request bearing the code gets
-/// through the edge, the next one bearing it does not, and the token the
-/// listener enforces is unaffected throughout.
-#[tokio::test]
-async fn a_grant_admits_one_request_through_a_live_pipe_and_then_none() {
-    let backend = MockBackend::json(200, OK_BODY).await;
-    let (serving, connected, url) =
-        paired(&backend, TokenPolicy::Supplied("the-real-key".to_owned())).await;
-
-    serving
-        .grant_once("483920".to_owned(), Duration::from_mins(2))
-        .expect("a presentable code is granted");
-
-    let first = within(
-        "the code admits once",
-        request(&url, "/v1/models", Some("Bearer 483920")),
-    )
-    .await
-    .expect("request");
-    assert!(first.starts_with("HTTP/1.1 200"), "got: {first}");
-
-    let second = within(
-        "the spent code is a wrong token",
-        request(&url, "/v1/models", Some("Bearer 483920")),
-    )
-    .await
-    .expect("request");
-    assert!(second.starts_with("HTTP/1.1 401"), "got: {second}");
-
-    let token = within(
-        "the real key still works",
-        request(&url, "/v1/models", Some("Bearer the-real-key")),
-    )
-    .await
-    .expect("request");
-    assert!(token.starts_with("HTTP/1.1 200"), "got: {token}");
-    assert_eq!(serving.token().as_deref(), Some("the-real-key"));
-    assert_eq!(
-        backend.accepts(),
-        2,
-        "the refusal never reached the backend"
-    );
-
-    connected.shutdown().await;
-    serving.shutdown().await;
-}
-
-/// A bounded grant is burned by wrong bearers *through the pipe* — the
-/// place they actually arrive from, and the place no counter behind the
-/// edge could ever see them.
-#[tokio::test]
-async fn three_wrong_bearers_through_the_pipe_burn_a_bounded_grant() {
-    let backend = MockBackend::json(200, OK_BODY).await;
-    let (serving, connected, url) =
-        paired(&backend, TokenPolicy::Supplied("the-real-key".to_owned())).await;
-
-    serving
-        .grant_once_bounded(
-            "483920".to_owned(),
-            Duration::from_mins(2),
-            NonZeroU8::new(3).expect("three is not zero"),
-        )
-        .expect("a presentable code is granted");
-
-    for wrong in ["000000", "000001", "000002"] {
-        let refused = within(
-            "a wrong bearer is refused",
-            request(&url, "/v1/models", Some(&format!("Bearer {wrong}"))),
-        )
-        .await
-        .expect("request");
-        assert!(refused.starts_with("HTTP/1.1 401"), "got: {refused}");
-    }
-
-    let burned = within(
-        "the real code arrives too late",
-        request(&url, "/v1/models", Some("Bearer 483920")),
-    )
-    .await
-    .expect("request");
-    assert!(burned.starts_with("HTTP/1.1 401"), "got: {burned}");
-
-    let token = within(
-        "the real key still works",
-        request(&url, "/v1/models", Some("Bearer the-real-key")),
-    )
-    .await
-    .expect("request");
-    assert!(token.starts_with("HTTP/1.1 200"), "got: {token}");
-    assert_eq!(backend.accepts(), 1, "only the key reached the backend");
 
     connected.shutdown().await;
     serving.shutdown().await;
