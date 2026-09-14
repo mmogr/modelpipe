@@ -58,6 +58,17 @@ Neither string ever needs to go anywhere but those two places. A ticket
 alone can't make a request, and a token alone can't find the listener,
 which is the point of there being two.
 
+### Pairing a device instead of carrying the token
+
+`serve --named --invite` holds a key per device instead of one token for
+everybody, and prints a pairing string beside the ticket: the ticket, a dash
+and a six-digit code. On the device, `modelpipe connect` with the whole
+pairing string redeems the code for that device's own key, prints the base
+URL and then the key, once, and keeps the pipe up. After that, the device
+connects with the ticket alone and uses its key. The code works once, for two
+minutes. `--devices <file>` keeps paired devices' keys across a restart, and
+`--identity <file>` keeps the ticket they paired with.
+
 ### When it says no
 
 modelpipe answers with a JSON error that names which machine to look at.
@@ -163,6 +174,9 @@ the client.
 | `--token <T>` | Enforce this token instead of generating one. Also read from `MODELPIPE_TOKEN` (exported but empty is refused, not enforced); `--help` never prints the value. Visible in `ps` and shell history, so prefer the next one. |
 | `--token-file <PATH>` | Read the token from a file, trimming the trailing newline every editor adds. |
 | `--insecure-no-auth` | Serve with no token at all. The name is the warning. |
+| `--named` | Hold a key per device instead of one token for everybody. Pair devices with `--invite`, and keep them with `--devices`. |
+| `--invite` | With `--named`: print a pairing string, the ticket, a dash and a six-digit code, that a device redeems once, within two minutes, for its own key. Says on stderr how it ended. |
+| `--devices <FILE>` | With `--named`: keep paired devices' keys here, so a restart admits them. Created `0600`; refuses to start if others can read it. |
 | `--identity <FILE>` | Keep the endpoint key here so the ticket survives a restart. Created `0600`; refuses to start if others can read it. |
 | `--allow-private-backend` | Accept a backend on a private (RFC 1918 / ULA) address, not only loopback. Link-local is never accepted. |
 | `--relay <URL>` | Use your own relay instead of the public ones. Does **not** disable discovery — see below. |
@@ -171,11 +185,13 @@ the client.
 | `--no-discovery` | Don't publish to, or resolve through, n0's discovery service. The ticket then carries every path it will ever have — see below before using it. |
 | `--relay-only` | Serve through the relay and never directly — a measuring switch, not a production one. See below. |
 
-`modelpipe connect <TICKET>`
+`modelpipe connect <TICKET>`, or `modelpipe connect <TICKET>-<CODE>` to pair
 
 | Flag | What it does |
 |---|---|
 | `--bind <ADDR>` | Local address to listen on. Defaults to a free loopback port. Binding off loopback exposes the one hop with no encryption in front of it, and warns you. |
+| `--name <LABEL>` | What this device calls itself when it pairs. The serve side shows it. |
+| `--identity <FILE>` | Keep this side's endpoint key here, so the serve side sees the same device every time. Created `0600`. |
 | `--relay <URL>` | The relay *this* side registers with and falls back to. The serve side's relay is in the ticket and is dialled regardless. |
 | `--no-portmap` | As for `serve`. |
 | `--no-discovery` | Don't resolve the peer through n0; dial only the paths the ticket carries. |

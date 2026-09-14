@@ -123,7 +123,7 @@ fn report(out: &mut impl Write, status: PipeStatus, metrics: NetworkMetrics, rep
 
 /// The `relay:` line a reading earns, or `None` when it says nothing new.
 ///
-/// **Nothing at zero**, which is the shape `main.rs` already uses for
+/// **Nothing at zero**, which is the shape `serve_out.rs` already uses for
 /// output that would otherwise be noise: `token_line` and `qr` both hand
 /// back an `Option<String>` and the caller prints what is there. A pipe no
 /// relay has ever throttled — nearly every pipe — must read exactly as it
