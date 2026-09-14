@@ -38,16 +38,15 @@ impl ServeHandle {
     /// to the tunnel.
     ///
     /// While the window is open **two values are the credential** for the
-    /// whole tunnel, exactly as [`grant_once`](Self::grant_once) says of a
-    /// live grant. Size `grace` by how long the rollout actually takes and
+    /// whole tunnel. Size `grace` by how long the rollout actually takes and
     /// not by what is convenient — a window measured in hours is a second
     /// standing key with a comment attached.
     ///
     /// Windows do not chain. A second call inside an open window retires
     /// the key the first one was protecting, so this never accumulates:
-    /// what is enforced, plus the one thing it directly replaced. (A live
-    /// [`grant_once`](Self::grant_once) code is a third credential with
-    /// its own lifetime, untouched by any of this.)
+    /// what is enforced, plus the one thing it directly replaced. (Named
+    /// tokens are credentials with lifetimes of their own, untouched by any
+    /// of this.)
     /// [`set_token`](Self::set_token) closes an open window outright, and
     /// is the way to end an overlap early — a rotation that says nothing
     /// about grace is a rotation that wants none.

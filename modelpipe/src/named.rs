@@ -15,7 +15,7 @@
 //! to show a person "Matt's iPhone" keeps that mapping on its own side,
 //! keyed by the identifier it chose here.
 //!
-//! Kept beside, not inside, [`crate::credential`], as [`crate::grant`] is:
+//! Kept beside, not inside, [`crate::credential`], as [`crate::superseded`] is:
 //! the primary's rotation contract must not be reachable from here, and
 //! the file-size gate says the same from the other direction.
 

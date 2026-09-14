@@ -21,25 +21,10 @@ connect at all; the token gates who can make requests. The token is
 deliberately not inside the ticket, so a leaked ticket alone cannot make a
 request and a leaked token alone cannot reach the listener.
 
-**A grant is a one-request credential, and while it is live it is a full
-one.** `ServeHandle::grant_once` lets an embedder admit a single request
-bearing a code of its choosing, so a pairing handshake can run through the
-tunnel and hand a new device the real key without the key ever being shown.
-The grant is consumed on first use and expires unused; the enforced token is
-not affected. What the edge cannot do is scope it — the one request it
-admits may name any path — so the embedder must keep the window short and
-choose a code that survives it. Counting guesses is the edge's job, not the
-route's: a wrong bearer is refused before any route sees it, so a count kept
-behind the edge counts nothing. `ServeHandle::grant_once_bounded` keeps it
-where the guesses arrive and burns the grant at the number the embedder
-names. modelpipe checks the code in constant time and never logs it, like
-the token.
-
-**A superseded token is a third credential, and it is the loosest one.**
+**A superseded token is another credential, and it is the loosest one.**
 `ServeHandle::set_token_with_grace` keeps the replaced token admitting requests
 for a window the operator chooses, so a rollout to several clients does not have
-to race their reconfiguration. Unlike a grant it is not one-request and not
-scoped: for the length of that window two full credentials open the door, and a
+to race their reconfiguration. It is not scoped: for the length of that window two full credentials open the door, and a
 window measured in hours is a second standing key with a comment attached. It
 expires on its own and a plain `set_token` closes it immediately — a rotation
 that says nothing about grace is a rotation that wants none. Choose the shortest

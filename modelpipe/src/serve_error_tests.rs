@@ -10,8 +10,8 @@
 
 use super::*;
 
-/// Both are the operator's to fix, and no amount of waiting changes
-/// either one.
+/// Each is the operator's to fix, and no amount of waiting changes any of
+/// them.
 #[test]
 fn a_user_fixable_serve_error_is_not_retryable() {
     for e in [

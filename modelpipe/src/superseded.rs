@@ -13,18 +13,16 @@
 //!
 //! A *superseded* key is the third option: for a bounded window after a
 //! rotation, the value it replaced goes on admitting, so the rollout has
-//! somewhere to happen. It is neither of the two credentials this crate
-//! already had. Unlike a [`grant`](crate::grant) it admits as many
-//! requests as arrive — it is the key those machines are still holding,
-//! not a one-shot pairing code, and spending it on the first request would
-//! un-pair the second one. Unlike the enforced token it dies on a
-//! deadline rather than on the next rotation, so an overlap that nobody
-//! remembers to close still closes.
+//! somewhere to happen. It admits as many requests as arrive — it is the
+//! key those machines are still holding, and spending it on the first
+//! request would un-pair the second one. Unlike the enforced token it dies
+//! on a deadline rather than on the next rotation, so an overlap that
+//! nobody remembers to close still closes.
 //!
-//! Kept beside, not inside, [`crate::credential`] for the reason
-//! [`crate::grant`] is: the primary token has a rotation contract that a
-//! second credential's state must not be able to disturb, and the
-//! file-size gate says the same thing from the other direction.
+//! Kept beside, not inside, [`crate::credential`]: the primary token has a
+//! rotation contract that a second credential's state must not be able to
+//! disturb, and the file-size gate says the same thing from the other
+//! direction.
 
 use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
@@ -54,10 +52,8 @@ impl Superseded {
     /// **Windows do not chain.** A second rotation inside an open window
     /// retires the key the first one was protecting rather than adding to
     /// a set, so this slot holds one key and never a growing set: what is
-    /// enforced, plus the one thing it directly replaced. (A live
-    /// [`grant`](crate::grant) is a third credential with its own
-    /// lifetime, and is not what this bounds.) Three reasons, heaviest
-    /// first.
+    /// enforced, plus the one thing it directly replaced. Three reasons,
+    /// heaviest first.
     ///
     /// 1. Chaining would make *how many credentials does this listener
     ///    accept* a function of how often the embedder happened to rotate.
@@ -106,10 +102,9 @@ impl Superseded {
 
     /// Whether `presented` is the held key, still inside its window.
     ///
-    /// Admits repeatedly, which is the whole difference from a grant: this
-    /// is a key several machines are holding, so nothing is spent by
-    /// presenting it and the second machine to arrive is not refused for
-    /// being second.
+    /// Admits repeatedly. This is a key several machines are holding, so
+    /// nothing is spent by presenting it, and the second machine to arrive
+    /// is not refused for being second.
     ///
     /// An expired key is *dropped* here, not merely refused. There is no
     /// timer — sweeping on this path is what makes a listener stop
@@ -151,7 +146,7 @@ impl Superseded {
     // its deadline with `checked_add` before taking the lock precisely so
     // that stays true. Recovering the guard rather than propagating is the
     // honest response to an impossible case, and matches what `credential`
-    // and `grant` do with theirs.
+    // and `named` do with theirs.
     fn lock(&self) -> MutexGuard<'_, Option<Held>> {
         self.held.lock().unwrap_or_else(PoisonError::into_inner)
     }

@@ -52,8 +52,8 @@ pub enum TokenPolicy {
     /// hence the name. Loudly discouraged.
     InsecureNoAuth,
     /// Enforce no token of the listener's own: only tokens added by name
-    /// through [`ServeHandle::add_token`](crate::ServeHandle::add_token),
-    /// and one-time grants, admit. For an embedder that issues every
+    /// through [`ServeHandle::add_token`](crate::ServeHandle::add_token)
+    /// admit. For an embedder that issues every
     /// device its own credential and revokes them one at a time — the
     /// shape [`remove_token`](crate::ServeHandle::remove_token) exists for.
     /// Until the first `add_token`, nothing admits: the listener is

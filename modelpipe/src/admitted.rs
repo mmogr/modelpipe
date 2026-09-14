@@ -26,8 +26,6 @@ pub(crate) enum Admitted {
     Named(Arc<str>),
     /// The key a graced rotation replaced, inside its window.
     Superseded,
-    /// A one-time grant, now spent.
-    Grant,
 }
 
 impl Admitted {
@@ -35,7 +33,7 @@ impl Admitted {
     pub(crate) fn device(&self) -> Option<&str> {
         match self {
             Self::Named(name) => Some(name),
-            Self::Open | Self::Token | Self::Superseded | Self::Grant => None,
+            Self::Open | Self::Token | Self::Superseded => None,
         }
     }
 }

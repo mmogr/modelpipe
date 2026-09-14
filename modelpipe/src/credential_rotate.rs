@@ -21,8 +21,8 @@ use crate::minting::{mint, presentable};
 pub(super) enum Primary {
     /// Serving open: everything admits, and nothing else is consulted.
     Open,
-    /// No token of its own — [`TokenPolicy::Named`](crate::TokenPolicy::Named). Only named tokens, a
-    /// graced key and grants admit. This is *closed*, and the difference
+    /// No token of its own — [`TokenPolicy::Named`](crate::TokenPolicy::Named). Only named tokens and a
+    /// graced key admit. This is *closed*, and the difference
     /// from [`Open`](Self::Open) is the whole reason the cell is an enum
     /// rather than an `Option`: before named tokens, "no primary" and
     /// "serving open" were the same state.
