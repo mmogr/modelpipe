@@ -3,6 +3,10 @@
 //! Split out via `#[path]` so `outcome.rs` stays inside the file-size
 //! budget.
 
+use std::io;
+
+use iroh::endpoint::{ConnectionError, ReadError, VarInt, WriteError};
+
 use super::Outcome;
 
 /// Every variant, listed by hand because nothing derives it.
@@ -19,6 +23,7 @@ const EVERY: &[Outcome] = &[
     Outcome::BadGateway,
     Outcome::Unfinished,
     Outcome::Paired,
+    Outcome::ClientGone,
 ];
 
 /// Two outcomes that log the same word are one outcome, as far as anyone
@@ -76,7 +81,8 @@ fn a_new_variant_cannot_be_added_without_visiting_this_file() {
             | Outcome::TimedOut
             | Outcome::BadGateway
             | Outcome::Unfinished
-            | Outcome::Paired => {}
+            | Outcome::Paired
+            | Outcome::ClientGone => {}
         }
     }
 }
@@ -96,5 +102,40 @@ fn every_word_is_greppable() {
             word.bytes().all(|b| b.is_ascii_lowercase() || b == b'_'),
             "{outcome:?} logs {word:?}, which is not the house vocabulary"
         );
+    }
+}
+
+/// A client that went away is told apart from a failure by the QUIC error
+/// inside, and an error of the same kind from anywhere else is still a
+/// failure.
+#[test]
+fn a_client_that_went_away_is_told_apart_from_a_failure() {
+    let gone: Vec<io::Error> = vec![
+        WriteError::Stopped(VarInt::from_u32(0)).into(),
+        WriteError::ConnectionLost(ConnectionError::Reset).into(),
+        WriteError::ConnectionLost(ConnectionError::TimedOut).into(),
+        ReadError::Reset(VarInt::from_u32(0)).into(),
+        ReadError::ConnectionLost(ConnectionError::TimedOut).into(),
+    ];
+    for error in &gone {
+        assert_eq!(
+            Outcome::of_error(error),
+            Some(Outcome::ClientGone),
+            "{error:?}"
+        );
+    }
+
+    let failures: Vec<io::Error> = vec![
+        // A backend's reset: the kind a stopped stream has, and a fault.
+        io::ErrorKind::ConnectionReset.into(),
+        io::ErrorKind::NotConnected.into(),
+        io::Error::other("chunk size is not hexadecimal"),
+        WriteError::ClosedStream.into(),
+        // This side closed the connection, which is not the client's doing.
+        WriteError::ConnectionLost(ConnectionError::LocallyClosed).into(),
+        ReadError::ConnectionLost(ConnectionError::VersionMismatch).into(),
+    ];
+    for error in &failures {
+        assert_eq!(Outcome::of_error(error), None, "{error:?}");
     }
 }

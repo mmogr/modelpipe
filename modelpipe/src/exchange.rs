@@ -104,24 +104,22 @@ where
         // a wrong number anywhere, and an exchange that ran for half a
         // billion years is better reported as a large one than a small one.
         let elapsed_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
-        match &result {
-            Ok(outcome) => tracing::info!(outcome = outcome.as_str(), elapsed_ms, "exchange"),
-            // A refusal is an `Ok` carrying an outcome. An `Err` is a
-            // transport failure with nothing left to say to anybody, and
-            // it can come from either half: the local stream, or the
-            // backend connection once the head is already upstream —
-            // `run` propagates both, and by here which of them gave out
-            // is no longer recoverable. Deliberately not claimed to be
-            // the client's doing. A backend that declares ten body bytes
-            // and closes after five arrives exactly here, with the client
-            // still connected and nothing wrong at its end.
-            //
-            // The backend failures that *can* be told apart are told
-            // apart before this, as `BadGateway` and `Unfinished`; what
-            // reaches this arm is the residue neither of those can
-            // describe. The listener discards the error, so this line is
-            // the only record of it anywhere.
-            Err(error) => tracing::warn!(%error, elapsed_ms, "exchange failed"),
+        let gone = result.as_ref().err().and_then(Outcome::of_error);
+        match (&result, gone) {
+            (Ok(outcome), _) => tracing::info!(outcome = outcome.as_str(), elapsed_ms, "exchange"),
+            // A client that stopped reading, reset its stream or lost its
+            // connection is no fault here, and the QUIC error inside says so.
+            (Err(error), Some(gone)) => {
+                tracing::debug!(outcome = gone.as_str(), %error, elapsed_ms, "exchange");
+            }
+            // Any other `Err` is a transport failure with nothing left to say
+            // to anybody, from either half: the local stream, or the backend
+            // once the head is upstream. A backend that declares ten body
+            // bytes and closes after five arrives here, with the client still
+            // connected. The backend failures that can be told apart are, as
+            // `BadGateway` and `Unfinished`; the listener discards the error,
+            // so this line is the only record of it anywhere.
+            (Err(error), None) => tracing::warn!(%error, elapsed_ms, "exchange failed"),
         }
         result
     }
