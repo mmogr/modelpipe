@@ -6,6 +6,18 @@ use std::time::Duration;
 use super::*;
 use crate::status::PipeStatus;
 
+/// An endpoint id for the tests that are not about which one a peer has.
+const SOMEONE: PeerId = PeerId::from_bytes([9; 32]);
+
+/// A connection from the endpoint named `name`.
+fn calling(name: &Arc<str>) -> Caller {
+    Caller {
+        id: SOMEONE,
+        name: name.clone(),
+        at: SOMEONE,
+    }
+}
+
 fn name(s: &str) -> Arc<str> {
     s.into()
 }
@@ -41,8 +53,8 @@ fn an_empty_registry_is_idle_and_reports_nobody() {
 fn each_peer_is_reported_by_name_and_path_in_arrival_order() {
     let registry = PeerRegistry::default();
     let lifecycle = Lifecycle::new();
-    registry.add(&name("3ca82708b995"), hole_punched(), &lifecycle);
-    registry.add(&name("7f0e11a2c3d4"), via_relay(), &lifecycle);
+    registry.add(&calling(&name("3ca82708b995")), hole_punched(), &lifecycle);
+    registry.add(&calling(&name("7f0e11a2c3d4")), via_relay(), &lifecycle);
 
     let views = registry.views();
     assert_eq!(views.len(), 2);
@@ -58,8 +70,8 @@ fn each_peer_is_reported_by_name_and_path_in_arrival_order() {
 fn each_peer_is_reported_with_what_its_path_costs() {
     let registry = PeerRegistry::default();
     let lifecycle = Lifecycle::new();
-    registry.add(&name("3ca82708b995"), hole_punched(), &lifecycle);
-    registry.add(&name("7f0e11a2c3d4"), via_relay(), &lifecycle);
+    registry.add(&calling(&name("3ca82708b995")), hole_punched(), &lifecycle);
+    registry.add(&calling(&name("7f0e11a2c3d4")), via_relay(), &lifecycle);
 
     let views = registry.views();
     assert_eq!(views[0].rtt_ms, Some(4));
@@ -74,7 +86,7 @@ fn a_peer_that_changes_path_is_reported_on_the_one_it_moved_to() {
     let registry = PeerRegistry::default();
     let lifecycle = Lifecycle::new();
     let peer = registry
-        .add(&name("3ca82708b995"), via_relay(), &lifecycle)
+        .add(&calling(&name("3ca82708b995")), via_relay(), &lifecycle)
         .expect("under the cap");
     assert_eq!(lifecycle.status(), PipeStatus::Relayed, "as it arrived");
 
@@ -97,7 +109,7 @@ fn a_reading_that_lands_after_a_peer_left_does_not_bring_it_back() {
     let registry = PeerRegistry::default();
     let lifecycle = Lifecycle::new();
     let peer = registry
-        .add(&name("3ca82708b995"), via_relay(), &lifecycle)
+        .add(&calling(&name("3ca82708b995")), via_relay(), &lifecycle)
         .expect("under the cap");
     registry.remove(peer, &lifecycle);
 
@@ -114,12 +126,12 @@ fn the_aggregate_is_the_worst_path_and_the_view_says_whose() {
     let registry = PeerRegistry::default();
     let lifecycle = Lifecycle::new();
     let direct = registry
-        .add(&name("aaaaaaaaaaaa"), hole_punched(), &lifecycle)
+        .add(&calling(&name("aaaaaaaaaaaa")), hole_punched(), &lifecycle)
         .expect("under the cap");
     assert_eq!(lifecycle.status(), PipeStatus::Direct);
 
     let relayed = registry
-        .add(&name("bbbbbbbbbbbb"), via_relay(), &lifecycle)
+        .add(&calling(&name("bbbbbbbbbbbb")), via_relay(), &lifecycle)
         .expect("under the cap");
     assert_eq!(lifecycle.status(), PipeStatus::Relayed, "one relayed peer");
     let slow: Vec<_> = registry
@@ -142,9 +154,9 @@ fn removing_one_peer_leaves_the_others_alone() {
     let registry = PeerRegistry::default();
     let lifecycle = Lifecycle::new();
     let first = registry
-        .add(&name("aaaaaaaaaaaa"), hole_punched(), &lifecycle)
+        .add(&calling(&name("aaaaaaaaaaaa")), hole_punched(), &lifecycle)
         .expect("under the cap");
-    registry.add(&name("bbbbbbbbbbbb"), hole_punched(), &lifecycle);
+    registry.add(&calling(&name("bbbbbbbbbbbb")), hole_punched(), &lifecycle);
     registry.remove(first, &lifecycle);
     let left: Vec<_> = registry
         .views()
@@ -164,9 +176,9 @@ fn connections_from_one_peer_share_a_budget_and_peers_do_not() {
     let lifecycle = Lifecycle::new();
     let alice = name("aaaaaaaaaaaa");
     let bob = name("bbbbbbbbbbbb");
-    registry.add(&alice, hole_punched(), &lifecycle);
-    registry.add(&alice, hole_punched(), &lifecycle);
-    registry.add(&bob, hole_punched(), &lifecycle);
+    registry.add(&calling(&alice), hole_punched(), &lifecycle);
+    registry.add(&calling(&alice), hole_punched(), &lifecycle);
+    registry.add(&calling(&bob), hole_punched(), &lifecycle);
 
     let first = registry.slots(&alice);
     let second = registry.slots(&alice);
@@ -183,8 +195,8 @@ fn a_stream_on_one_connection_counts_against_the_peers_other_connections() {
     let registry = PeerRegistry::default();
     let lifecycle = Lifecycle::new();
     let alice = name("aaaaaaaaaaaa");
-    registry.add(&alice, hole_punched(), &lifecycle);
-    registry.add(&alice, hole_punched(), &lifecycle);
+    registry.add(&calling(&alice), hole_punched(), &lifecycle);
+    registry.add(&calling(&alice), hole_punched(), &lifecycle);
     let via_first = registry.slots(&alice);
     let via_second = registry.slots(&alice);
 
@@ -216,10 +228,10 @@ fn a_budget_survives_one_connection_leaving_and_dies_with_the_last() {
     let lifecycle = Lifecycle::new();
     let alice = name("aaaaaaaaaaaa");
     let first = registry
-        .add(&alice, hole_punched(), &lifecycle)
+        .add(&calling(&alice), hole_punched(), &lifecycle)
         .expect("under the cap");
     let second = registry
-        .add(&alice, hole_punched(), &lifecycle)
+        .add(&calling(&alice), hole_punched(), &lifecycle)
         .expect("under the cap");
     let budget = registry.slots(&alice);
     let _also = registry.slots(&alice);
@@ -247,7 +259,7 @@ fn fill(registry: &PeerRegistry, lifecycle: &Lifecycle) -> Vec<(Arc<str>, u64)> 
         .map(|n| {
             let peer = name(&format!("{n:012x}"));
             let id = registry
-                .add(&peer, hole_punched(), lifecycle)
+                .add(&calling(&peer), hole_punched(), lifecycle)
                 .expect("under the cap");
             (peer, id)
         })
@@ -265,7 +277,7 @@ fn a_thirty_third_peer_is_refused_while_thirty_two_are_carried() {
 
     let late = name("ffffffffffff");
     assert_eq!(
-        registry.add(&late, via_relay(), &lifecycle),
+        registry.add(&calling(&late), via_relay(), &lifecycle),
         None,
         "the thirty-third is refused"
     );
@@ -284,7 +296,9 @@ fn a_thirty_third_peer_is_refused_while_thirty_two_are_carried() {
 
     registry.remove(carried[0].1, &lifecycle);
     assert!(
-        registry.add(&late, via_relay(), &lifecycle).is_some(),
+        registry
+            .add(&calling(&late), via_relay(), &lifecycle)
+            .is_some(),
         "a place opens when one leaves"
     );
 }
@@ -300,7 +314,9 @@ fn a_second_connection_from_a_peer_already_here_is_not_a_new_peer() {
 
     let (again, _) = &carried[7];
     assert!(
-        registry.add(again, via_relay(), &lifecycle).is_some(),
+        registry
+            .add(&calling(again), via_relay(), &lifecycle)
+            .is_some(),
         "a peer already here is carried at the cap"
     );
     let views = registry.views();
@@ -337,4 +353,19 @@ fn a_connection_past_the_cap_is_refused_until_one_goes() {
     assert!(connections.admit().is_some(), "and taken by the next");
     drop(held);
     assert_eq!(connections.carried(), 0, "every place goes with its holder");
+}
+
+/// A view names the whole endpoint id the peer connected from, beside the
+/// fingerprint made from it.
+#[test]
+fn a_view_names_the_whole_endpoint_id_it_connected_from() {
+    let registry = PeerRegistry::default();
+    let lifecycle = Lifecycle::new();
+    let desk = PeerId::from_bytes([0xd7; 32]);
+    registry.add(&Caller::new(desk, SOMEONE), hole_punched(), &lifecycle);
+
+    let views = registry.views();
+    assert_eq!(views.len(), 1);
+    assert_eq!(views[0].id, desk);
+    assert_eq!(views[0].fingerprint, desk.fingerprint());
 }

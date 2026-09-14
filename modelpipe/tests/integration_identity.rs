@@ -34,12 +34,9 @@ async fn listening(backend: &MockBackend) -> ServeHandle {
     .expect("serve")
 }
 
-/// Whether `serving` carries a peer with `id`'s fingerprint.
+/// Whether `serving` carries the peer whose whole endpoint id is `id`.
 fn carries(serving: &ServeHandle, id: PeerId) -> bool {
-    serving
-        .peers()
-        .iter()
-        .any(|peer| peer.fingerprint == id.fingerprint())
+    serving.peers().iter().any(|peer| peer.id == id)
 }
 
 /// Connect as `identity`, wait until the serve side carries this peer, hang

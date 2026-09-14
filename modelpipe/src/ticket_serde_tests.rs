@@ -54,9 +54,17 @@ fn a_status_serializes_as_the_identifier_as_str_reports() {
     }
 }
 
+/// A whole endpoint id whose fingerprint is the one the views below carry.
+const ID: &str = "3ca82708b9950000000000000000000000000000000000000000000000000000";
+
+fn id() -> crate::PeerId {
+    ID.parse().expect("sixty-four hex characters")
+}
+
 #[test]
 fn a_peer_view_round_trips_as_a_plain_object() {
     let view = PeerView {
+        id: id(),
         fingerprint: "3ca82708b995".to_owned(),
         path: PipeStatus::Relayed,
         rtt_ms: Some(91),
@@ -64,7 +72,7 @@ fn a_peer_view_round_trips_as_a_plain_object() {
     let json = serde_json::to_string(&view).unwrap();
     assert_eq!(
         json,
-        r#"{"fingerprint":"3ca82708b995","path":"relayed","rtt_ms":91}"#
+        format!(r#"{{"id":"{ID}","fingerprint":"3ca82708b995","path":"relayed","rtt_ms":91}}"#)
     );
     let back: PeerView = serde_json::from_str(&json).unwrap();
     assert_eq!(back, view);
@@ -78,6 +86,7 @@ fn a_peer_view_round_trips_as_a_plain_object() {
 #[test]
 fn a_peer_view_carries_its_round_trip_time_as_one_number_or_null() {
     let unmeasured = PeerView {
+        id: id(),
         fingerprint: "3ca82708b995".to_owned(),
         path: PipeStatus::Relayed,
         rtt_ms: None,
@@ -85,33 +94,35 @@ fn a_peer_view_carries_its_round_trip_time_as_one_number_or_null() {
     let json = serde_json::to_string(&unmeasured).unwrap();
     assert_eq!(
         json,
-        r#"{"fingerprint":"3ca82708b995","path":"relayed","rtt_ms":null}"#
+        format!(r#"{{"id":"{ID}","fingerprint":"3ca82708b995","path":"relayed","rtt_ms":null}}"#)
     );
     let back: PeerView = serde_json::from_str(&json).unwrap();
     assert_eq!(back, unmeasured);
 }
 
-/// A `PeerView` written by 0.3.0 — before `rtt_ms` existed — still parses,
-/// and parses as "not measured" rather than as an error.
+/// A `PeerView` with no round-trip time in it parses as "not measured", as
+/// serde gives an absent `Option` field, and one with no id does not parse.
 ///
-/// The compatibility property the field's arrival rested on, and the one the
-/// test above does *not* check: that one round-trips a `null` this crate
-/// wrote itself, which an absent key is not. serde supplies `None` for a
-/// missing `Option` field, so this holds — but "holds" and "is pinned" are
-/// different claims, and the second was made without the first. A stored
-/// status page, a cached DTO, or a peer still on the older release all send
-/// the two-field object below, and this is what says they keep working.
+/// This used to pin that a view 0.3.0 wrote, before `rtt_ms` existed, still
+/// parsed. 0.6 added the required `id`, so no view an older release wrote
+/// parses now, and the test says so rather than keeping a promise it cannot.
 #[test]
-fn a_peer_view_written_before_the_round_trip_time_existed_still_parses() {
-    let older = r#"{"fingerprint":"3ca82708b995","path":"relayed"}"#;
-    let parsed: PeerView = serde_json::from_str(older).expect("0.3.0 wrote exactly this");
+fn a_peer_view_without_a_round_trip_time_parses_and_one_without_an_id_does_not() {
+    let without_rtt = format!(r#"{{"id":"{ID}","fingerprint":"3ca82708b995","path":"relayed"}}"#);
+    let parsed: PeerView =
+        serde_json::from_str(&without_rtt).expect("an absent rtt_ms is unmeasured");
     assert_eq!(
         parsed,
         PeerView {
+            id: id(),
             fingerprint: "3ca82708b995".to_owned(),
             path: PipeStatus::Relayed,
             rtt_ms: None,
-        },
-        "an absent key means unmeasured, which is what `null` means too"
+        }
+    );
+    let older = r#"{"fingerprint":"3ca82708b995","path":"relayed"}"#;
+    assert!(
+        serde_json::from_str::<PeerView>(older).is_err(),
+        "a view with no id is not one"
     );
 }
