@@ -74,6 +74,7 @@ mod locality;
 mod minting;
 mod named;
 mod outcome;
+mod pairing_string;
 mod path_watch;
 mod peer;
 mod peers;
@@ -109,6 +110,7 @@ mod serve_status;
 pub use connect::{ConnectError, ConnectOptions, connect};
 pub use connect_handle::ConnectHandle;
 pub use network::NetworkMetrics;
+pub use pairing_string::{PairingCode, PairingString, PairingStringError};
 pub use serve::serve;
 pub use serve_error::{NamedTokenRefusal, ServeError};
 pub use serve_handle::ServeHandle;
@@ -139,6 +141,11 @@ const fn auto_trait_promises() {
     assert::<ServeError>();
     assert::<ConnectError>();
     assert::<TicketParseError>();
+    // A pairing string is parsed on one task and dialled on another, and
+    // its error rides through `anyhow` like the ticket's.
+    assert::<PairingString>();
+    assert::<PairingCode>();
+    assert::<PairingStringError>();
     // A metrics snapshot is read on one task and rendered on another —
     // that is what a status page is — so it needs the same bounds the
     // views beside it have.
@@ -161,6 +168,7 @@ const fn auto_trait_promises() {
     // `status_changed`'s snapshot comparison.
     assert_clone::<Ticket>();
     assert_clone::<PeerView>();
+    assert_clone::<PairingString>();
     assert_copy_eq::<PipeStatus>();
     // And the same pair for the metrics snapshot: `Copy` is what the doc
     // means by "holding one in a UI's state costs nothing", and `Eq` is
