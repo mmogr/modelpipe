@@ -107,6 +107,32 @@ fn a_header_value_that_is_not_utf8_is_malformed() {
     assert_eq!(parse_request(raw), Err(HeadError::Malformed));
 }
 
+/// A folded line — RFC 9112 §5.2's obsolete line folding — carries a field
+/// value on to a line that starts with a space or a tab. Accepted, the line
+/// break can travel on inside the value; skipped, the rest of the value is
+/// dropped. Both heads refuse it, whether the fold follows a value or comes
+/// straight after the colon, two shapes httparse reads down separate paths.
+#[test]
+fn an_obsolete_folded_header_is_refused_rather_than_unfolded() {
+    for value in [" hello", ""] {
+        for fold in ["\r\n there", "\r\n\tthere", "\r\n \r\n there"] {
+            let field = format!("X-Folded:{value}{fold}");
+            let request = format!("GET / HTTP/1.1\r\nHost: x\r\n{field}\r\n\r\n");
+            assert_eq!(
+                parse_request(request.as_bytes()),
+                Err(HeadError::Malformed),
+                "a request carrying {field:?}"
+            );
+            let response = format!("HTTP/1.1 200 OK\r\n{field}\r\n\r\n");
+            assert_eq!(
+                parse_response(response.as_bytes()),
+                Err(HeadError::Malformed),
+                "a response carrying {field:?}"
+            );
+        }
+    }
+}
+
 // ── Framing that is accepted ─────────────────────────────────────────────
 
 #[test]

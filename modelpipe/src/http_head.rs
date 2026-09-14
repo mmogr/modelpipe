@@ -12,6 +12,8 @@
 //! disagreement to desynchronize, which is the property that makes an
 //! opaque body safe here and would not make it safe on a shared socket.
 
+use std::sync::LazyLock;
+
 use crate::admitted::Forward;
 use crate::framing::Framing;
 use crate::headers;
@@ -26,6 +28,25 @@ pub(crate) const MAX_HEAD_BYTES: usize = 64 * 1024;
 
 /// The most header fields a head may carry, bounding the parse itself.
 const MAX_HEADER_FIELDS: usize = 128;
+
+/// How both heads are parsed. The three switches a folded line's refusal
+/// rests on are set by name; the rest are left at httparse's defaults.
+///
+/// A folded line — RFC 9112 §5.2's obsolete line folding — carries a field
+/// value on to a line that starts with a space or a tab. This edge refuses
+/// it. Accepted, the line break can travel on inside the value, for the next
+/// hop to read its own way; skipped, the rest of the value is dropped
+/// without a word. httparse refuses a fold only while two things hold:
+/// folding is off (a switch a response has and a request does not), and an
+/// invalid line is refused rather than skipped (a switch each head has).
+/// Both are its defaults today, and a default is not ours to assume.
+static PARSER: LazyLock<httparse::ParserConfig> = LazyLock::new(|| {
+    let mut config = httparse::ParserConfig::default();
+    config.allow_obsolete_multiline_headers_in_responses(false);
+    config.ignore_invalid_headers_in_requests(false);
+    config.ignore_invalid_headers_in_responses(false);
+    config
+});
 
 /// Why a head was refused. Every variant is a 400 to the client; they are
 /// separate so a test can say which rule fired rather than only that one
@@ -72,7 +93,7 @@ pub(crate) fn parse_request(buf: &[u8]) -> Result<Option<(RequestHead, usize)>, 
     }
     let mut fields = [httparse::EMPTY_HEADER; MAX_HEADER_FIELDS];
     let mut req = httparse::Request::new(&mut fields);
-    match req.parse(buf) {
+    match PARSER.parse_request(&mut req, buf) {
         Ok(httparse::Status::Complete(consumed)) => {
             let head = RequestHead {
                 method: req.method.ok_or(HeadError::Malformed)?.to_owned(),
@@ -97,7 +118,7 @@ pub(crate) fn parse_response(buf: &[u8]) -> Result<Option<(ResponseHead, usize)>
     }
     let mut fields = [httparse::EMPTY_HEADER; MAX_HEADER_FIELDS];
     let mut res = httparse::Response::new(&mut fields);
-    match res.parse(buf) {
+    match PARSER.parse_response(&mut res, buf) {
         Ok(httparse::Status::Complete(consumed)) => {
             let head = ResponseHead {
                 status: res.code.ok_or(HeadError::Malformed)?,
