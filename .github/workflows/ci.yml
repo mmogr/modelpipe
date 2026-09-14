@@ -83,6 +83,12 @@ jobs:
       - name: Check the pairing vectors match the spec
         run: python3 scripts/pairing_vectors.py --check
 
+      # The codes the edge writes exist in refusal.rs and in the list a client
+      # builds against. This keeps the two the same, and the README's table
+      # to codes that exist.
+      - name: Check the published error codes match the edge
+        run: python3 scripts/error_codes.py --check
+
   clippy:
     name: Clippy
     runs-on: ubuntu-latest

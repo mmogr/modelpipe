@@ -1,0 +1,48 @@
+{
+  "version": 0,
+  "about": "The error responses modelpipe writes itself rather than relaying from the backend. Each has the JSON body {\"error\":{\"message\":...,\"code\":...}}; match on code. written_by is the side that wrote it: serving is the machine with the backend, connecting the machine with the local port.",
+  "codes": [
+    {
+      "code": "invalid_api_key",
+      "status": 401,
+      "written_by": "serving",
+      "message": "invalid or missing bearer token"
+    },
+    {
+      "code": "bad_request",
+      "status": 400,
+      "written_by": "serving",
+      "message": "malformed or ambiguous request"
+    },
+    {
+      "code": "bad_gateway",
+      "status": 502,
+      "written_by": "serving",
+      "message": "the backend did not return a response this tunnel could read"
+    },
+    {
+      "code": "backend_unreachable",
+      "status": 502,
+      "written_by": "serving",
+      "message": "the serving side could not reach its backend"
+    },
+    {
+      "code": "tunnel_unavailable",
+      "status": 502,
+      "written_by": "connecting",
+      "message": "no tunnel to the serving side is connected right now"
+    },
+    {
+      "code": "incomplete_request",
+      "status": 400,
+      "written_by": "serving",
+      "message": "the request body did not arrive complete"
+    },
+    {
+      "code": "invalid_pairing_code",
+      "status": 401,
+      "written_by": "serving",
+      "message": "that pairing code was not accepted"
+    }
+  ]
+}

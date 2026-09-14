@@ -69,6 +69,10 @@ Three of them cover nearly everything:
 | `backend_unreachable` | the serving side | The token was fine. The model server behind it isn't answering on the port you gave `serve`. |
 | `tunnel_unavailable` | the connecting side | The other machine is gone. It'll reconnect when it's back. |
 
+Every code modelpipe writes itself, with its status and the side that writes
+it, is in [`docs/error-codes-v0.json`](docs/error-codes-v0.json), for a client
+that matches on them.
+
 ## How it works
 
 It's [iroh](https://github.com/n0-computer/iroh). Both machines dial *out*
