@@ -158,6 +158,27 @@ async fn a_trailer_that_is_not_a_field_is_dropped() {
     assert!(text.contains("X-Kept: 1"), "{text}");
 }
 
+/// A trailer whose name is not UTF-8 is dropped, like a line with no colon:
+/// the filter decides on the name, and a name this edge cannot read is one
+/// it cannot say is not forbidden.
+#[tokio::test]
+async fn a_trailer_whose_name_is_not_utf8_is_dropped() {
+    let input = b"0\r\nX-\xff\xfe: 1\r\n\r\n";
+    let (_, out) = run(b"", input, Framing::Chunked).await.unwrap();
+    assert_eq!(out, b"0\r\n\r\n", "{:?}", String::from_utf8_lossy(&out));
+}
+
+/// The negative control: a trailer the edge can read and does not forbid is
+/// still the peer's to send, colons in its value and a UTF-8 value outside
+/// ASCII included. Without it, dropping every trailer would pass the test
+/// above.
+#[tokio::test]
+async fn a_trailer_the_edge_can_read_and_does_not_forbid_still_passes() {
+    let input = b"0\r\nX-Checksum: 1\r\nX-Sent-At: 12:00:01\r\nX-Note: caf\xc3\xa9\r\n\r\n";
+    let (_, out) = run(b"", input, Framing::Chunked).await.unwrap();
+    assert_eq!(out, input, "{:?}", String::from_utf8_lossy(&out));
+}
+
 /// Chunk extensions are not this edge's to interpret, and must survive.
 #[tokio::test]
 async fn chunk_extensions_pass_through_uninterpreted() {

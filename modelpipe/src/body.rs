@@ -240,12 +240,16 @@ fn find_crlf(buf: &[u8]) -> Option<usize> {
     buf.windows(2).position(|w| w == b"\r\n")
 }
 
-/// Whether a trailer line names a field the edge strips from a head.
+/// Whether a trailer line is dropped rather than forwarded.
 ///
-/// A line with no colon is not a field at all; it is dropped, because
-/// passing bytes onward that this edge could not read is how a value means
-/// one thing here and another downstream — the rule `http_head::collect`
-/// already applies to header values.
+/// A field is dropped when [`headers::is_forbidden_in_trailer`] names it.
+/// A line with no colon is not a field at all, and a name that is not
+/// UTF-8 cannot be checked against that list; both are dropped, because
+/// passing on bytes this edge could not read is how a field means one
+/// thing here and another downstream — the rule `http_head::collect`
+/// applies to header values. `collect` refuses the message where this
+/// drops the line: a trailer arrives after its head has been forwarded,
+/// and refusing then could only mean cutting off a body already under way.
 ///
 /// A line carrying a bare CR or LF is dropped for that same reason, and it
 /// is the one that matters. [`Buffered::read_line`] ends a line at CRLF, so
@@ -255,15 +259,18 @@ fn find_crlf(buf: &[u8]) -> Option<usize> {
 /// filtered on `X-Ok`, and two fields to whoever reads it next, the second
 /// of which nothing filtered. That is the whole shape of request smuggling,
 /// arriving through the one part of the message the head strip does not
-/// see, so it is refused rather than resolved — the same call
+/// see, so it is dropped rather than resolved — the same call
 /// [`crate::framing`] makes about a message framed two ways at once.
 fn dropped(line: &[u8]) -> bool {
     if line.contains(&b'\n') || line.contains(&b'\r') {
         return true;
     }
-    line.iter().position(|&b| b == b':').is_none_or(|colon| {
-        std::str::from_utf8(&line[..colon]).is_ok_and(headers::is_forbidden_in_trailer)
-    })
+    let name = line.iter().position(|&b| b == b':').map(|end| &line[..end]);
+    match name.map(std::str::from_utf8) {
+        Some(Ok(name)) => headers::is_forbidden_in_trailer(name),
+        // No colon, or a name that is not UTF-8: nothing this edge can check.
+        None | Some(Err(_)) => true,
+    }
 }
 
 fn unexpected_eof() -> std::io::Error {
