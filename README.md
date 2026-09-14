@@ -116,7 +116,9 @@ encrypted hop, instead of a person carrying it? `ServeHandle::invite` holds a
 key for the device and mints a six-digit code that redeems for it once, and
 the edge answers the device's `POST /modelpipe/pair` itself. Store the key,
 `arm` the invite, then show the pairing string, `<ticket>-<code>`. The
-invite's handle says when the code was redeemed, and from which endpoint. The
+invite's handle says when the code was redeemed, and from which endpoint. A
+device redeems it in one call with `modelpipe::pair`, which dials the ticket,
+presents the code, and hands back its key with the pipe still up. The
 exchange, and the odds a guesser has, are in
 [docs/pairing-v0.md](docs/pairing-v0.md).
 
