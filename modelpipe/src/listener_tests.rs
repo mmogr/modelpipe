@@ -27,7 +27,7 @@ use crate::peers::{DEFAULT_MAX_CONNECTIONS, DEFAULT_MAX_PEERS};
 use crate::serve::serve;
 use crate::serve_handle::ServeHandle;
 use crate::serve_options::ServeOptions;
-use crate::status::PipeStatus;
+use crate::status::{CloseReason, PipeStatus};
 use crate::transport;
 
 /// Long enough that a failure is a failure rather than a slow machine.
@@ -256,4 +256,24 @@ async fn a_listener_told_to_carry_one_connection_refuses_the_second_dial() {
         .expect("a refusal is prompt, not a hang");
     assert!(refused.is_err(), "the second dial is refused");
     serving.shutdown().await;
+}
+
+/// The serve side says why it closed: nothing while live, `Shutdown` after a
+/// shutdown, and `ListenerFailed` when its endpoint stops yielding
+/// connections with nobody asking.
+#[tokio::test]
+async fn the_listener_says_why_it_closed() {
+    let (serving, _backend) = listening().await;
+    assert_eq!(serving.close_reason(), None, "live");
+    serving.shutdown().await;
+    assert_eq!(serving.close_reason(), Some(CloseReason::Shutdown));
+
+    let (failing, _other) = listening().await;
+    failing.state.endpoint.close().await;
+    until("the accept loop notices its endpoint is gone", || {
+        failing.close_reason().is_some()
+    })
+    .await;
+    assert_eq!(failing.close_reason(), Some(CloseReason::ListenerFailed));
+    assert_eq!(failing.status(), PipeStatus::Closed);
 }
