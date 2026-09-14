@@ -13,6 +13,7 @@
 //! module owns the *set* and nothing about how a change is broadcast.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::num::NonZeroUsize;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -28,7 +29,8 @@ use crate::status::PeerView;
 /// Backpressure rather than refusal: a peer may open more streams, and they
 /// wait. What is bounded is the work and the memory one identity can
 /// command; an identity costs nothing to mint, so how many a ticket-holder
-/// can bring at once is [`MAX_PEERS`].
+/// can bring at once is the peer cap,
+/// [`ServeOptions::max_peers`](crate::ServeOptions::max_peers).
 ///
 /// Per *peer*, not per connection, and the difference is the bound. The
 /// semaphore used to be built inside the connection loop, so a holder who
@@ -40,14 +42,17 @@ use crate::status::PeerView;
 /// a client with sixty-four in flight is not a client.
 pub(crate) const MAX_CONCURRENT_STREAMS_PER_PEER: usize = 64;
 
-/// How many distinct peers the listener carries at once.
+/// How many distinct peers a listener carries at once, unless
+/// [`ServeOptions::max_peers`](crate::ServeOptions::max_peers) says otherwise.
 ///
 /// A peer is a fingerprint, so a second connection from a device already
-/// here is not a new peer: it counts against [`MAX_CONNECTIONS`] and not
+/// here is not a new peer: it counts against the connection cap and not
 /// against this.
-pub(crate) const MAX_PEERS: usize = 32;
+pub(crate) const DEFAULT_MAX_PEERS: usize = 32;
 
-/// How many connections the listener carries at once, handshakes included.
+/// How many connections a listener carries at once, handshakes included,
+/// unless [`ServeOptions::max_connections`](crate::ServeOptions::max_connections)
+/// says otherwise.
 ///
 /// Both caps refuse where the stream cap waits, and what would be waited
 /// for is the difference. A stream that waits is waiting on its own peer's
@@ -55,31 +60,47 @@ pub(crate) const MAX_PEERS: usize = 32;
 /// waited would be waiting on some *other* peer to leave, and the queue it
 /// sat in would be the thing with no bound. So the one past either cap is
 /// turned away at once, and nothing is held for it.
-pub(crate) const MAX_CONNECTIONS: usize = 256;
+pub(crate) const DEFAULT_MAX_CONNECTIONS: usize = 256;
 
-/// The connections a listener is carrying, counted against
-/// [`MAX_CONNECTIONS`].
-#[derive(Default)]
-pub(crate) struct Connections(Arc<AtomicUsize>);
+/// The connections a listener is carrying, counted against its cap.
+pub(crate) struct Connections {
+    carried: Arc<AtomicUsize>,
+    max: usize,
+}
 
 /// One connection's place in the count, given back when it drops — on
 /// every way out of the task that holds it, a panic included.
 pub(crate) struct Carried(Arc<AtomicUsize>);
 
 impl Connections {
+    /// A count that carries at most `max` connections.
+    pub(crate) fn new(max: NonZeroUsize) -> Self {
+        Self {
+            carried: Arc::default(),
+            max: max.get(),
+        }
+    }
+
     /// A place for one more connection, or `None` when every place is taken.
     pub(crate) fn admit(&self) -> Option<Carried> {
-        self.0
+        self.carried
             .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| {
-                (n < MAX_CONNECTIONS).then_some(n + 1)
+                (n < self.max).then_some(n + 1)
             })
             .ok()
-            .map(|_| Carried(self.0.clone()))
+            .map(|_| Carried(self.carried.clone()))
     }
 
     #[cfg(test)]
     pub(crate) fn carried(&self) -> usize {
-        self.0.load(Ordering::Relaxed)
+        self.carried.load(Ordering::Relaxed)
+    }
+}
+
+impl Default for Connections {
+    /// The count a listener started from `ServeOptions::default()` keeps.
+    fn default() -> Self {
+        Self::new(NonZeroUsize::new(DEFAULT_MAX_CONNECTIONS).expect("the default is not zero"))
     }
 }
 
@@ -103,14 +124,24 @@ pub(crate) struct PeerRegistry {
     /// connections and dropped when its last one goes.
     budgets: Mutex<HashMap<Arc<str>, Budget>>,
     next: AtomicU64,
+    /// How many distinct peers it carries.
+    max_peers: usize,
+}
+
+impl Default for PeerRegistry {
+    /// The registry a listener started from `ServeOptions::default()` keeps.
+    fn default() -> Self {
+        Self::new(NonZeroUsize::new(DEFAULT_MAX_PEERS).expect("the default is not zero"))
+    }
 }
 
 impl PeerRegistry {
-    pub(crate) fn new() -> Self {
+    pub(crate) fn new(max_peers: NonZeroUsize) -> Self {
         Self {
             peers: Mutex::new(BTreeMap::new()),
             budgets: Mutex::new(HashMap::new()),
             next: AtomicU64::new(0),
+            max_peers: max_peers.get(),
         }
     }
 
@@ -141,7 +172,7 @@ impl PeerRegistry {
     /// [`set_path`](Self::set_path), which is the other half of this.
     ///
     /// `None`, and the set left as it was, when `name` is not here already
-    /// and [`MAX_PEERS`] others are.
+    /// and as many others as the cap allows are.
     pub(crate) fn add(
         &self,
         name: &Arc<str>,
@@ -150,7 +181,7 @@ impl PeerRegistry {
     ) -> Option<u64> {
         self.mutate(lifecycle, |peers| {
             let here: HashSet<&str> = peers.values().map(|(held, _)| &**held).collect();
-            if here.len() >= MAX_PEERS && !here.contains(&**name) {
+            if here.len() >= self.max_peers && !here.contains(&**name) {
                 return None;
             }
             let id = self.next.fetch_add(1, Ordering::Relaxed);

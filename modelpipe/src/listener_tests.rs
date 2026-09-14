@@ -14,6 +14,7 @@
 //! and a state assembled here could be wired up correctly by the test
 //! itself.
 
+use std::num::NonZeroUsize;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -22,7 +23,7 @@ use iroh::endpoint::presets;
 
 use crate::lifecycle::PeerPath;
 use crate::path_watch::Reading;
-use crate::peers::{MAX_CONNECTIONS, MAX_PEERS};
+use crate::peers::{DEFAULT_MAX_CONNECTIONS, DEFAULT_MAX_PEERS};
 use crate::serve::serve;
 use crate::serve_handle::ServeHandle;
 use crate::serve_options::ServeOptions;
@@ -38,13 +39,16 @@ const PATIENCE: Duration = Duration::from_secs(20);
 /// the URL and checks it is local, and a port that has gone away between the
 /// bind and the check is a flake this test has no interest in.
 async fn listening() -> (ServeHandle, tokio::net::TcpListener) {
+    listening_with(ServeOptions::default()).await
+}
+
+/// [`listening`], started with `opts`.
+async fn listening_with(opts: ServeOptions) -> (ServeHandle, tokio::net::TcpListener) {
     let backend = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
         .expect("a loopback port");
     let url = format!("http://{}", backend.local_addr().expect("bound"));
-    let serving = serve(&url, ServeOptions::default())
-        .await
-        .expect("a listener starts");
+    let serving = serve(&url, opts).await.expect("a listener starts");
     (serving, backend)
 }
 
@@ -125,7 +129,9 @@ async fn until(what: &str, done: impl Fn() -> bool + Send + Sync) {
 async fn a_refused_connection_leaves_the_registry_as_it_found_it() {
     let (serving, _backend) = listening().await;
     let state = &serving.state;
-    let carried: Vec<Arc<str>> = (0..MAX_PEERS).map(|n| format!("{n:012x}").into()).collect();
+    let carried: Vec<Arc<str>> = (0..DEFAULT_MAX_PEERS)
+        .map(|n| format!("{n:012x}").into())
+        .collect();
     for peer in &carried {
         let reading = Reading {
             path: PeerPath::Direct,
@@ -159,7 +165,7 @@ async fn a_refused_connection_leaves_the_registry_as_it_found_it() {
 #[tokio::test]
 async fn a_connection_past_the_cap_is_refused_before_it_is_served() {
     let (serving, _backend) = listening().await;
-    let held: Vec<_> = (0..MAX_CONNECTIONS)
+    let held: Vec<_> = (0..DEFAULT_MAX_CONNECTIONS)
         .map(|_| serving.state.connections.admit().expect("under the cap"))
         .collect();
 
@@ -202,5 +208,52 @@ async fn a_connection_holds_its_place_until_it_goes() {
         connections.carried() == 0
     })
     .await;
+    serving.shutdown().await;
+}
+
+/// The peer cap is the embedder's: a listener told to carry one peer carries
+/// the first and sends the second away.
+#[tokio::test]
+async fn a_listener_told_to_carry_one_peer_sends_the_second_away() {
+    let (serving, _backend) = listening_with(ServeOptions {
+        max_peers: NonZeroUsize::MIN,
+        ..ServeOptions::default()
+    })
+    .await;
+    let (_first, _held) = peer_of(&serving).await;
+    until("the first peer is carried", || serving.peers().len() == 1).await;
+
+    let (_second, refused) = peer_of(&serving).await;
+    tokio::time::timeout(PATIENCE, refused.closed())
+        .await
+        .expect("the second peer is sent away");
+    assert_eq!(serving.peers().len(), 1, "and the first is still carried");
+    serving.shutdown().await;
+}
+
+/// So is the connection cap: told to carry one connection, a listener
+/// refuses the second dial outright.
+#[tokio::test]
+async fn a_listener_told_to_carry_one_connection_refuses_the_second_dial() {
+    let (serving, _backend) = listening_with(ServeOptions {
+        max_connections: NonZeroUsize::MIN,
+        ..ServeOptions::default()
+    })
+    .await;
+    let (_first, _held) = peer_of(&serving).await;
+    until("the first connection is carried", || {
+        serving.peers().len() == 1
+    })
+    .await;
+
+    let addr = transport::addr_from(&serving.ticket()).expect("the ticket names an endpoint");
+    let near = Endpoint::builder(presets::N0)
+        .bind()
+        .await
+        .expect("an endpoint binds");
+    let refused = tokio::time::timeout(PATIENCE, near.connect(addr, transport::ALPN))
+        .await
+        .expect("a refusal is prompt, not a hang");
+    assert!(refused.is_err(), "the second dial is refused");
     serving.shutdown().await;
 }

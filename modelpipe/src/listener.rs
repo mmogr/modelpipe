@@ -34,19 +34,25 @@ pub(crate) struct ServeState {
     pub(crate) lifecycle: Lifecycle,
     /// Connected peers and how each is reaching us.
     pub(crate) peers: PeerRegistry,
-    /// Connections carried, handshakes included — see `peers::MAX_CONNECTIONS`.
+    /// Connections carried, handshakes included, against `ServeOptions::max_connections`.
     pub(crate) connections: Connections,
 }
 
 impl ServeState {
-    pub(crate) fn new(endpoint: Endpoint, credential: Credential, backend: TcpBackend) -> Self {
+    pub(crate) fn new(
+        endpoint: Endpoint,
+        credential: Credential,
+        backend: TcpBackend,
+        max_peers: std::num::NonZeroUsize,
+        max_connections: std::num::NonZeroUsize,
+    ) -> Self {
         Self {
             endpoint,
             credential,
             backend,
             lifecycle: Lifecycle::new(),
-            peers: PeerRegistry::new(),
-            connections: Connections::default(),
+            peers: PeerRegistry::new(max_peers),
+            connections: Connections::new(max_connections),
         }
     }
 }
