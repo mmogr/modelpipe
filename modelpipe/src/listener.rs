@@ -19,7 +19,7 @@ use crate::exchange;
 use crate::fingerprint;
 use crate::lifecycle::{Lifecycle, aggregate};
 use crate::path_watch;
-use crate::peers::PeerRegistry;
+use crate::peers::{Connections, PeerRegistry};
 use crate::status::CloseReason;
 
 /// Everything a live listener shares.
@@ -34,6 +34,8 @@ pub(crate) struct ServeState {
     pub(crate) lifecycle: Lifecycle,
     /// Connected peers and how each is reaching us.
     pub(crate) peers: PeerRegistry,
+    /// Connections carried, handshakes included — see `peers::MAX_CONNECTIONS`.
+    pub(crate) connections: Connections,
 }
 
 impl ServeState {
@@ -44,6 +46,7 @@ impl ServeState {
             backend,
             lifecycle: Lifecycle::new(),
             peers: PeerRegistry::new(),
+            connections: Connections::default(),
         }
     }
 }
@@ -68,8 +71,15 @@ pub(crate) async fn accept_loop(state: std::sync::Arc<ServeState>) {
             incoming = state.endpoint.accept() => incoming,
         };
         let Some(incoming) = incoming else { break };
+        // Counted before a task is spent on it, and refused past the cap.
+        let Some(carried) = state.connections.admit() else {
+            tracing::debug!("a connection was refused: the listener is at its connection cap");
+            incoming.refuse();
+            continue;
+        };
         let state = state.clone();
         tokio::spawn(async move {
+            let _carried = carried; // until this task ends, by whichever path
             // A connection that fails to establish is not an event worth
             // reporting to the operator: the peer went away, or was never
             // speaking this protocol.
@@ -107,9 +117,10 @@ async fn serve_connection(
     // from this peer, as `X-Modelpipe-Peer`, and are what `peers()` reports
     // to an embedder — so every surface names a device identically.
     let peer_name: std::sync::Arc<str> = fingerprint::of(connection.remote_id().as_bytes()).into();
-    let peer = state
-        .peers
-        .add(peer_name.clone(), reading, &state.lifecycle);
+    let Some(peer) = state.peers.add(&peer_name, reading, &state.lifecycle) else {
+        tracing::debug!(peer = %peer_name, "a peer was refused: the listener is at its peer cap");
+        return;
+    };
     // The peer's budget, not this connection's: every connection from one
     // endpoint draws on the same sixty-four — see `peers::MAX_CONCURRENT_STREAMS_PER_PEER`.
     let slots = state.peers.slots(&peer_name);
