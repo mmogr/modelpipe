@@ -92,11 +92,7 @@ pub async fn serve(backend_url: &str, opts: ServeOptions) -> Result<ServeHandle,
     // it come first: a path the operator cannot use is theirs to fix, and
     // finding out after a listener is up would mean finding out as a ticket
     // that is not the one they expected.
-    let key = opts
-        .identity
-        .as_deref()
-        .map(identity::load_or_mint)
-        .transpose()?;
+    let key = identity::stored(opts.identity.as_deref())?;
     let backend = TcpBackend::new(backend_url, opts.allow_private_backend).await?;
     let net = transport::NetOptions {
         port_mapping: opts.port_mapping,

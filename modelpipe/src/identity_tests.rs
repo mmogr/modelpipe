@@ -103,11 +103,11 @@ fn a_file_that_is_not_base32_is_refused() {
     fs::write(&path, "not a key!!!\n").expect("write");
 
     let refused = load_or_mint(&path).expect_err("must not be accepted");
+    assert!(matches!(refused, Unusable { .. }), "got: {refused:?}");
     assert!(
-        matches!(refused, ServeError::Identity { .. }),
-        "got: {refused:?}"
+        !ServeError::from(refused).is_retryable(),
+        "the operator named this path"
     );
-    assert!(!refused.is_retryable(), "the operator named this path");
 }
 
 /// Valid base32 of the wrong length is the more dangerous shape — it
@@ -124,7 +124,7 @@ fn a_file_of_the_wrong_length_is_refused() {
     .expect("write");
 
     assert!(
-        matches!(load_or_mint(&path), Err(ServeError::Identity { .. })),
+        matches!(load_or_mint(&path), Err(Unusable { .. })),
         "a key is exactly {KEY_BYTES} bytes"
     );
 }
@@ -143,7 +143,7 @@ fn an_identity_others_can_read_is_refused() {
     fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).expect("chmod");
 
     let refused = load_or_mint(&path).expect_err("a readable key must be refused");
-    let explained = format!("{}", std::error::Error::source(&refused).expect("a cause"));
+    let explained = refused.source.to_string();
     assert!(
         explained.contains("chmod"),
         "and it must say what to do: {explained}"
@@ -165,4 +165,26 @@ fn the_identity_this_module_writes_is_one_it_will_read() {
     let mode = fs::metadata(&path).expect("metadata").permissions().mode();
     assert_eq!(mode & 0o077, 0, "created owner-only: {mode:04o}");
     load_or_mint(&path).expect("and read back without complaint");
+}
+
+/// Both sides keep a key, and a key file either one cannot use is the same
+/// verdict on each: permanent, naming the file, with the cause as source.
+#[test]
+fn an_unusable_key_is_each_sides_identity_error() {
+    let scratch = Scratch::new("both-sides");
+    let path = scratch.join("key");
+    fs::write(&path, "not a key!!!\n").expect("write");
+
+    let serving = ServeError::from(load_or_mint(&path).expect_err("refused"));
+    let connecting = ConnectError::from(load_or_mint(&path).expect_err("refused"));
+    assert!(
+        matches!(&serving, ServeError::Identity { path: named, .. } if *named == path.display().to_string())
+    );
+    assert!(
+        matches!(&connecting, ConnectError::Identity { path: named, .. } if *named == path.display().to_string())
+    );
+    assert!(!serving.is_retryable() && !connecting.is_retryable());
+    assert!(std::error::Error::source(&serving).is_some());
+    assert!(std::error::Error::source(&connecting).is_some());
+    assert_eq!(serving.to_string(), connecting.to_string());
 }

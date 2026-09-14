@@ -23,7 +23,7 @@ workspace = true
 
 [features]
 # `Serialize`/`Deserialize` for `Ticket` (as its canonical string),
-# `PipeStatus`, `PeerView` and `NetworkMetrics`. Off by default: the CLI never
+# `PipeStatus`, `PeerView`, `NetworkMetrics` and `PeerId` (as its printed form). Off by default: the CLI never
 # needs them, and an embedder that puts a ticket or a status page's numbers in
 # a DTO opts in with one line.
 serde = ["dep:serde"]

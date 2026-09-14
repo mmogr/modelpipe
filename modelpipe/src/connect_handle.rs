@@ -8,6 +8,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::dialer::{self, ConnectState};
+use crate::peer_id::PeerId;
 use crate::status::{CloseReason, PipeStatus};
 
 /// A live connect side.
@@ -71,6 +72,16 @@ impl ConnectHandle {
     /// emitted in a form no URL parser accepts.
     pub fn base_url(&self) -> String {
         base_url(self.state.local_addr)
+    }
+
+    /// Who this side connects as: the peer the serve side sees on every
+    /// connection from this pipe.
+    ///
+    /// Fixed for the life of the handle. Fresh per process unless
+    /// [`ConnectOptions::identity`](crate::ConnectOptions#structfield.identity)
+    /// names a key to keep, in which case it is the same every time.
+    pub fn peer_id(&self) -> PeerId {
+        PeerId::from_bytes(*self.state.peer.endpoint.id().as_bytes())
     }
 
     /// How this side is currently reaching the peer.

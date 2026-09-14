@@ -32,6 +32,10 @@
 //! is only a note that the two halves are separate, and that switching off
 //! the one this crate does not control takes the other with it.
 //!
+//! The connect side keeps a key too, for another reason. Nothing dials it,
+//! so its key is in no ticket, but a serve side sees it on every connection,
+//! and a key that lasts is a device the serve side can recognise.
+//!
 //! Pure of iroh, deliberately. This hands back thirty-two bytes and
 //! [`crate::transport`] is where they become a key, so the whole of the
 //! file handling — the format, the permissions, the refusals — is
@@ -41,8 +45,8 @@ use std::fs;
 use std::io;
 use std::path::Path;
 
-use crate::ServeError;
 use crate::base32;
+use crate::{ConnectError, ServeError};
 
 /// Bytes in an endpoint's secret key. Fixed by the curve, not by us.
 pub(crate) const KEY_BYTES: usize = 32;
@@ -56,10 +60,11 @@ pub(crate) const KEY_BYTES: usize = 32;
 ///
 /// # Errors
 ///
-/// [`ServeError::Identity`] for a file that exists and is not a key this
-/// can use, or one it cannot read or write. All of them are permanent: the
-/// path came from the operator, and retrying it fails the same way.
-pub(crate) fn load_or_mint(path: &Path) -> Result<[u8; KEY_BYTES], ServeError> {
+/// [`Unusable`] for a file that exists and is not a key this can use, or
+/// one it cannot read or write, which each side reports as its own error's
+/// `Identity` variant. All of them are permanent: the path came from the
+/// operator, and retrying it fails the same way.
+pub(crate) fn load_or_mint(path: &Path) -> Result<[u8; KEY_BYTES], Unusable> {
     match fs::read_to_string(path) {
         Ok(stored) => check_private(path)
             .and_then(|()| parse(&stored))
@@ -71,6 +76,12 @@ pub(crate) fn load_or_mint(path: &Path) -> Result<[u8; KEY_BYTES], ServeError> {
         }
         Err(e) => Err(unusable(path, e)),
     }
+}
+
+/// [`load_or_mint`] for a path that may not have been given. `None` keeps
+/// no key, and the endpoint mints one for the life of the process.
+pub(crate) fn stored(path: Option<&Path>) -> Result<Option<[u8; KEY_BYTES]>, Unusable> {
+    path.map(load_or_mint).transpose()
 }
 
 /// The stored form: base32 of the key's bytes, one line.
@@ -198,11 +209,40 @@ fn mint() -> [u8; KEY_BYTES] {
 }
 
 /// Every failure here is the same verdict with a different cause, so the
-/// cause rides in `source` and the variant names the file.
-fn unusable(path: &Path, why: io::Error) -> ServeError {
-    ServeError::Identity {
+/// cause rides in `source` and the verdict names the file.
+fn unusable(path: &Path, why: io::Error) -> Unusable {
+    Unusable {
         path: path.display().to_string(),
         source: why,
+    }
+}
+
+/// A key file this cannot use, and why.
+///
+/// Neither side's error, because both sides keep a key: `serve` reports it
+/// as [`ServeError::Identity`] and `connect` as [`ConnectError::Identity`],
+/// with the same path and the same cause.
+#[derive(Debug)]
+pub(crate) struct Unusable {
+    pub(crate) path: String,
+    pub(crate) source: io::Error,
+}
+
+impl From<Unusable> for ServeError {
+    fn from(unusable: Unusable) -> Self {
+        Self::Identity {
+            path: unusable.path,
+            source: unusable.source,
+        }
+    }
+}
+
+impl From<Unusable> for ConnectError {
+    fn from(unusable: Unusable) -> Self {
+        Self::Identity {
+            path: unusable.path,
+            source: unusable.source,
+        }
     }
 }
 

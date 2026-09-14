@@ -51,6 +51,17 @@ pub enum ConnectError {
         /// The offending URL, for the error message.
         url: String,
     },
+    /// [`ConnectOptions::identity`] names a file this side cannot use as its
+    /// endpoint key: one that is not a key, one others can read, or one it
+    /// cannot read or write. The twin of
+    /// [`ServeError::Identity`](crate::ServeError::Identity), and permanent
+    /// for the same reason: the path is the caller's.
+    Identity {
+        /// The offending path, for the error message.
+        path: String,
+        /// What went wrong with it.
+        source: std::io::Error,
+    },
 }
 
 impl ConnectError {
@@ -74,7 +85,7 @@ impl ConnectError {
     pub const fn is_retryable(&self) -> bool {
         match self {
             Self::PeerUnreachable | Self::Endpoint(_) => true,
-            Self::Bind(_) | Self::InvalidRelay { .. } => false,
+            Self::Bind(_) | Self::InvalidRelay { .. } | Self::Identity { .. } => false,
         }
     }
 }
@@ -96,6 +107,8 @@ impl fmt::Display for ConnectError {
                     "{url} does not parse as a relay URL — check the value passed as the relay"
                 )
             }
+            // The cause is `source`, for the reason `Bind` gives.
+            Self::Identity { path, .. } => write!(f, "the identity file at {path} cannot be used"),
         }
     }
 }
@@ -104,7 +117,7 @@ impl std::error::Error for ConnectError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::PeerUnreachable | Self::InvalidRelay { .. } => None,
-            Self::Bind(e) | Self::Endpoint(e) => Some(e),
+            Self::Bind(e) | Self::Endpoint(e) | Self::Identity { source: e, .. } => Some(e),
         }
     }
 }
@@ -136,6 +149,23 @@ pub struct ConnectOptions {
     /// this side is the cheaper of the two, because it needs no
     /// re-pairing — the serve side keeps the ticket it already handed out.
     pub relay_only: bool,
+    /// Where to keep this side's endpoint key, so a serve side sees the same
+    /// peer every time this machine connects.
+    ///
+    /// `None`, the default, mints a fresh key per process, as every version
+    /// before this one did. Nothing dials a connect side, so its key is in no
+    /// ticket, but the serve side does see it: as the peer in
+    /// [`ServeHandle::peers`](crate::ServeHandle::peers) and the
+    /// `X-Modelpipe-Peer` header, and as [`ConnectHandle::peer_id`] here. A
+    /// key kept in this file makes that the same across restarts, which is
+    /// what lets a serve side recognise a device by it.
+    ///
+    /// The file rules are
+    /// [`ServeOptions::identity`](crate::ServeOptions#structfield.identity)'s:
+    /// minted on first use, created readable only by its owner, and refused
+    /// as [`ConnectError::Identity`] when others can read it. Keep it apart
+    /// from any listener's file, because one key is one endpoint.
+    pub identity: Option<std::path::PathBuf>,
 }
 
 impl Default for ConnectOptions {
@@ -146,6 +176,7 @@ impl Default for ConnectOptions {
             port_mapping: true,
             discovery: true,
             relay_only: false,
+            identity: None,
         }
     }
 }
@@ -231,51 +262,5 @@ pub async fn connect(ticket: &Ticket, opts: ConnectOptions) -> Result<ConnectHan
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn an_unreachable_peer_is_retryable() {
-        assert!(ConnectError::PeerUnreachable.is_retryable());
-    }
-
-    /// The p2p endpoint is nobody's choice, so failing to bind it is a
-    /// machine condition — the same verdict `ServeError::Bind` gets for the
-    /// same socket.
-    #[test]
-    fn failing_to_bind_the_p2p_endpoint_is_retryable() {
-        let e = ConnectError::Endpoint(std::io::Error::other("too many open files"));
-        assert!(e.is_retryable(), "{e} should be retryable");
-    }
-
-    /// The one variant that is permanent, and the reason it is a variant of
-    /// its own: the caller named this port through `ConnectOptions::bind`,
-    /// so retrying the same value fails the same way forever. The p2p
-    /// endpoint's own bind failure is `Endpoint`, above.
-    #[test]
-    fn a_connect_bind_failure_is_not_retryable_because_the_caller_chose_the_address() {
-        let e = ConnectError::Bind(std::io::Error::other("address in use"));
-        assert!(!e.is_retryable(), "{e} should not be retryable");
-    }
-
-    /// The operator typed the relay, so no amount of waiting fixes it —
-    /// the same verdict the serve side gives the same value.
-    #[test]
-    fn an_unparseable_relay_is_permanent_and_names_the_value() {
-        let e = ConnectError::InvalidRelay {
-            url: "not a url".to_owned(),
-        };
-        assert!(!e.is_retryable());
-        assert!(e.to_string().contains("not a url"));
-        assert!(std::error::Error::source(&e).is_none());
-    }
-
-    /// The defaults are what every version before this one did.
-    #[test]
-    fn the_default_options_keep_every_network_contact_on() {
-        let opts = ConnectOptions::default();
-        assert!(opts.port_mapping);
-        assert!(opts.discovery);
-        assert!(opts.relay.is_none());
-    }
-}
+#[path = "connect_tests.rs"]
+mod connect_tests;

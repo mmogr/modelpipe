@@ -11,11 +11,11 @@
 //!
 //! `serde` (off by default) implements `Serialize` and `Deserialize` for
 //! [`Ticket`] — as its canonical string, the same text `Display` prints
-//! and `FromStr` reads, never as a struct — and for [`PipeStatus`],
-//! [`PeerView`] and [`NetworkMetrics`], the first as the identifiers
-//! [`PipeStatus::as_str`] already freezes and the other two as their own
-//! fields. For an embedder that renders a status page from a JSON DTO;
-//! the CLI has no use for it.
+//! and `FromStr` reads, never as a struct — and [`PeerId`] the same way,
+//! and for [`PipeStatus`], [`PeerView`] and [`NetworkMetrics`], the first
+//! as the identifiers [`PipeStatus::as_str`] already freezes and the other
+//! two as their own fields. For an embedder that renders a status page
+//! from a JSON DTO; the CLI has no use for it.
 //!
 //! # Diagnostics
 //!
@@ -77,6 +77,7 @@ mod outcome;
 mod pairing_string;
 mod path_watch;
 mod peer;
+mod peer_id;
 mod peers;
 mod refusal;
 mod request_body;
@@ -111,6 +112,7 @@ pub use connect::{ConnectError, ConnectOptions, connect};
 pub use connect_handle::ConnectHandle;
 pub use network::NetworkMetrics;
 pub use pairing_string::{PairingCode, PairingString, PairingStringError};
+pub use peer_id::{PeerId, PeerIdParseError};
 pub use serve::serve;
 pub use serve_error::{NamedTokenRefusal, ServeError};
 pub use serve_handle::ServeHandle;
@@ -146,6 +148,9 @@ const fn auto_trait_promises() {
     assert::<PairingString>();
     assert::<PairingCode>();
     assert::<PairingStringError>();
+    // A peer id is recorded on one task and compared on another.
+    assert::<PeerId>();
+    assert::<PeerIdParseError>();
     // A metrics snapshot is read on one task and rendered on another —
     // that is what a status page is — so it needs the same bounds the
     // views beside it have.
@@ -170,6 +175,7 @@ const fn auto_trait_promises() {
     assert_clone::<PeerView>();
     assert_clone::<PairingString>();
     assert_copy_eq::<PipeStatus>();
+    assert_copy_eq::<PeerId>();
     // And the same pair for the metrics snapshot: `Copy` is what the doc
     // means by "holding one in a UI's state costs nothing", and `Eq` is
     // what lets a caller notice that two readings are identical rather
