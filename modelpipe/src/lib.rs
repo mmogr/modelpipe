@@ -68,12 +68,15 @@ mod head_read;
 mod headers;
 mod http_head;
 mod identity;
+mod invite;
+mod invites;
 mod lifecycle;
 mod listener;
 mod locality;
 mod minting;
 mod named;
 mod outcome;
+mod pair_route;
 mod pairing_string;
 mod path_watch;
 mod peer;
@@ -101,6 +104,7 @@ mod serve;
 mod serve_error;
 mod serve_grace;
 mod serve_handle;
+mod serve_invite;
 mod serve_named;
 mod serve_options;
 mod serve_status;
@@ -111,6 +115,7 @@ mod serve_status;
 pub use connect::{ConnectError, ConnectOptions, connect};
 pub use connect_handle::ConnectHandle;
 pub use connect_reach::Unreached;
+pub use invite::{Invite, InviteHandle, InviteOptions, InviteOutcome, InviteRefusal, PAIR_PATH};
 pub use network::NetworkMetrics;
 pub use pairing_string::{PairingCode, PairingString, PairingStringError};
 pub use peer_id::{PeerId, PeerIdParseError};
@@ -144,6 +149,12 @@ const fn auto_trait_promises() {
     assert::<ServeError>();
     assert::<ConnectError>();
     assert::<Unreached>();
+    // An invite is made on one task and waited on from another.
+    assert::<Invite>();
+    assert::<InviteHandle>();
+    assert::<InviteOptions>();
+    assert::<InviteOutcome>();
+    assert::<InviteRefusal>();
     assert::<TicketParseError>();
     // A pairing string is parsed on one task and dialled on another, and
     // its error rides through `anyhow` like the ticket's.
@@ -179,6 +190,9 @@ const fn auto_trait_promises() {
     assert_copy_eq::<PipeStatus>();
     assert_copy_eq::<PeerId>();
     assert_copy_eq::<Unreached>();
+    assert_clone::<InviteHandle>();
+    assert_clone::<InviteOutcome>();
+    assert_copy_eq::<InviteRefusal>();
     // And the same pair for the metrics snapshot: `Copy` is what the doc
     // means by "holding one in a UI's state costs nothing", and `Eq` is
     // what lets a caller notice that two readings are identical rather
@@ -192,7 +206,12 @@ const fn auto_trait_promises() {
 // breaking exactly that embedding. Pinning the futures has to name them,
 // which means calling the functions — dead code, type-checked, never run.
 #[expect(dead_code, reason = "compile-time pin; never called")]
-fn future_promises(serve_side: &ServeHandle, connect_side: &ConnectHandle, ticket: &Ticket) {
+fn future_promises(
+    serve_side: &ServeHandle,
+    connect_side: &ConnectHandle,
+    ticket: &Ticket,
+    invite: &InviteHandle,
+) {
     fn assert_send(_: impl Send) {}
     assert_send(serve("", ServeOptions::default()));
     assert_send(connect(ticket, ConnectOptions::default()));
@@ -204,6 +223,7 @@ fn future_promises(serve_side: &ServeHandle, connect_side: &ConnectHandle, ticke
     assert_send(connect_side.status_changed());
     assert_send(connect_side.status_changed_since(PipeStatus::Idle));
     assert_send(connect_side.wait_reachable(Duration::from_secs(0)));
+    assert_send(invite.outcome());
     assert_send(connect_side.notify_network_change());
     assert_send(connect_side.shutdown());
     assert_send(connect_side.shutdown_timeout(Duration::from_secs(0)));

@@ -37,6 +37,8 @@ pub(crate) struct ServeState {
     pub(crate) peers: PeerRegistry,
     /// Connections carried, handshakes included, against `ServeOptions::max_connections`.
     pub(crate) connections: Connections,
+    /// The runtime `serve` ran on, which an invite's expiry is spawned onto.
+    pub(crate) runtime: tokio::runtime::Handle,
 }
 
 impl ServeState {
@@ -46,6 +48,7 @@ impl ServeState {
         backend: TcpBackend,
         max_peers: std::num::NonZeroUsize,
         max_connections: std::num::NonZeroUsize,
+        runtime: tokio::runtime::Handle,
     ) -> Self {
         Self {
             endpoint,
@@ -54,6 +57,7 @@ impl ServeState {
             lifecycle: Lifecycle::new(),
             peers: PeerRegistry::new(max_peers),
             connections: Connections::new(max_connections),
+            runtime,
         }
     }
 }
@@ -127,14 +131,16 @@ async fn serve_connection(
     // way. The same twelve characters reach the backend on every request
     // from this peer, as `X-Modelpipe-Peer`, and are what `peers()` reports
     // to an embedder — so every surface names a device identically.
-    let caller = Caller::new(PeerId::from_bytes(*connection.remote_id().as_bytes()));
+    let caller = Caller::new(
+        PeerId::from_bytes(*connection.remote_id().as_bytes()),
+        PeerId::from_bytes(*state.endpoint.id().as_bytes()),
+    );
     let peer_name = caller.name.clone();
     let Some(peer) = state.peers.add(&peer_name, reading, &state.lifecycle) else {
         tracing::debug!(peer = %peer_name, "a peer was refused: the listener is at its peer cap");
         return;
     };
-    // The peer's budget, not this connection's: every connection from one
-    // endpoint draws on the same sixty-four — see `peers::MAX_CONCURRENT_STREAMS_PER_PEER`.
+    // The peer's budget, shared by its connections: `peers::MAX_CONCURRENT_STREAMS_PER_PEER`.
     let slots = state.peers.slots(&peer_name);
 
     // `info_span!` rather than `debug_span!`, and that is not a taste

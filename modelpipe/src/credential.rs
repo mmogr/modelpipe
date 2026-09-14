@@ -26,6 +26,7 @@ use subtle::ConstantTimeEq;
 
 use crate::ServeError;
 pub(crate) use crate::admitted::{Admitted, Forward};
+use crate::invites::Invites;
 use crate::minting::{mint, presentable};
 use crate::named::{AddRefused, Named, NamedMatch};
 use crate::peer_id::PeerId;
@@ -38,6 +39,21 @@ use rotate::{Enforced, Primary};
 
 /// The scheme, with its trailing space, as it appears in the header.
 const BEARER_PREFIX: &str = "Bearer ";
+
+/// The credential in an `Authorization` value, after its `Bearer ` scheme, or
+/// `None` for a value that is not a bearer credential.
+///
+/// `BEARER_PREFIX` carries the space, so this splits scheme from credential in
+/// one step, and a value shorter than the scheme cannot index past its end.
+pub(crate) fn bearer(offered: Option<&[u8]>) -> Option<&[u8]> {
+    let offered = offered?;
+    let scheme = BEARER_PREFIX.len();
+    if offered.len() <= scheme || !offered[..scheme].eq_ignore_ascii_case(BEARER_PREFIX.as_bytes())
+    {
+        return None;
+    }
+    Some(&offered[scheme..])
+}
 
 /// The credential a listener currently enforces, and the comparison
 /// against it.
@@ -54,6 +70,9 @@ pub(crate) struct Credential {
     /// The key a graced rotation replaced, until its window closes.
     /// Consulted after the primary and the named tokens.
     superseded: Superseded,
+    /// Invites for devices not yet paired, and the strikes against them.
+    /// Shared with every `InviteHandle`, which may outlive a borrow of this.
+    invites: Arc<Invites>,
     /// What the backend is told in `Authorization`, in place of whatever
     /// the client sent — or `None` to forward the client's own. The
     /// outbound half of the concern the rest of this type is the inbound
@@ -89,6 +108,7 @@ impl Credential {
             primary: RwLock::new(primary),
             named: Named::new(),
             superseded: Superseded::new(),
+            invites: Arc::default(),
             upstream: RwLock::new(None),
         };
         Ok((cell, token))
@@ -134,17 +154,7 @@ impl Credential {
         if matches!(primary, Primary::Open) {
             return Some(Admitted::Open);
         }
-        let offered = offered?;
-        // `BEARER_PREFIX` carries the space, so this splits scheme from
-        // credential in one step and a value shorter than the scheme cannot
-        // index past its end.
-        let scheme = BEARER_PREFIX.len();
-        if offered.len() <= scheme
-            || !offered[..scheme].eq_ignore_ascii_case(BEARER_PREFIX.as_bytes())
-        {
-            return None;
-        }
-        let presented = &offered[scheme..];
+        let presented = bearer(offered)?;
         if let Primary::Token(enforced) = &primary {
             let expected = enforced.token.as_bytes();
             if expected.len() == presented.len() && bool::from(expected.ct_eq(presented)) {
@@ -185,6 +195,22 @@ impl Credential {
     /// Every name a token is held under.
     pub(crate) fn named(&self) -> Vec<String> {
         self.named.names()
+    }
+
+    /// The invites this listener holds.
+    pub(crate) const fn invites(&self) -> &Arc<Invites> {
+        &self.invites
+    }
+
+    /// Whether the listener serves open, admitting everything unchecked.
+    pub(crate) fn serves_open(&self) -> bool {
+        matches!(self.snapshot(), Primary::Open)
+    }
+
+    /// Whether a named token is pinned to `peer`: a device this listener
+    /// already knows by its endpoint.
+    pub(crate) fn pinned_to(&self, peer: PeerId) -> bool {
+        self.named.pins(peer)
     }
 
     /// What the backend is told about a request `admitted` let through.
@@ -247,6 +273,7 @@ impl fmt::Debug for Credential {
             .field("state", &state)
             .field("named", &self.named.count())
             .field("grace", &self.superseded.is_open())
+            .field("invites", &self.invites.count())
             .finish_non_exhaustive()
     }
 }

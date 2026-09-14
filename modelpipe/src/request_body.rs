@@ -73,6 +73,37 @@ use crate::http_head;
 /// is going to answer the end of a body answers it promptly.
 pub(crate) const ANSWER_GRACE: Duration = Duration::from_secs(10);
 
+/// Tell a client that asked to be told before sending its body that it may.
+///
+/// Called once the edge has decided: on the admitted path, the credential
+/// passed, the backend took the connection and the head is upstream; on the
+/// pairing route, the request has passed the checks that come before its
+/// body. Nothing left about the request can change that, so the interim answer
+/// is this edge's to give.
+///
+/// Relaying the backend's own `100` instead would be the strict reading and
+/// the wrong one, because the edge already pushes the body without waiting for
+/// it — so the relay would arrive after the thing it was meant to unblock.
+/// Measured, the same 2 MB POST that curl sends with `Expect` (it adds the
+/// header itself over 1 MB): 1.015s through the pipe against 0.048s straight
+/// at the same backend. The whole second is curl waiting out its own timeout
+/// for a `100` that never came, and then sending anyway.
+///
+/// Never written before a refusal, so a 401, a 400 or a 502 is still the
+/// first status the client sees. The backend's own interim head is still
+/// skipped by `final_response`, which is correct rather than lossy: the client
+/// has already had its answer.
+pub(crate) async fn continue_if_expected<S: AsyncWrite + Unpin>(
+    stream: &mut S,
+    expected: bool,
+) -> std::io::Result<()> {
+    if expected {
+        stream.write_all(b"HTTP/1.1 100 Continue\r\n\r\n").await?;
+        stream.flush().await?;
+    }
+    Ok(())
+}
+
 /// What came back, once the request body had been carried as far as it
 /// could go.
 pub(crate) enum Carried {

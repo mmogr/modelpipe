@@ -41,6 +41,9 @@ pub(crate) enum Outcome {
     /// did nothing wrong, and reporting it there sends whoever is debugging
     /// to the far side of a tunnel that was working.
     Unfinished,
+    /// A pairing request the edge answered itself, handing a device its key.
+    /// The backend was not contacted.
+    Paired,
 }
 
 impl Outcome {
@@ -62,6 +65,7 @@ impl Outcome {
             Self::TimedOut => "timed_out",
             Self::BadGateway => "bad_gateway",
             Self::Unfinished => "unfinished",
+            Self::Paired => "paired",
         }
     }
 }

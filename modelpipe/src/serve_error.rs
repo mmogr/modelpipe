@@ -130,6 +130,10 @@ pub enum ServeError {
         /// Which rule refused it.
         reason: NamedTokenRefusal,
     },
+    /// [`ServeHandle::invite`](crate::ServeHandle::invite) refused, and the
+    /// [`InviteRefusal`](crate::InviteRefusal) says why. Nothing was held and
+    /// no code is live.
+    Invite(crate::invite::InviteRefusal),
 }
 
 /// Why a token could not be held under a name.
@@ -180,7 +184,8 @@ impl ServeError {
             | Self::InvalidToken
             | Self::InvalidRelay { .. }
             | Self::Identity { .. }
-            | Self::NamedToken { .. } => false,
+            | Self::NamedToken { .. }
+            | Self::Invite(_) => false,
             // Everything about the machine underneath. `serve` takes no
             // bind option, so no address here was caller-chosen, and both
             // transient resource exhaustion and a resolver that is briefly
@@ -227,6 +232,7 @@ impl fmt::Display for ServeError {
             Self::NamedToken { name, reason } => {
                 write!(f, "could not hold a token under {name:?}: {reason}")
             }
+            Self::Invite(reason) => write!(f, "could not invite a device: {reason}"),
         }
     }
 }
@@ -239,7 +245,8 @@ impl std::error::Error for ServeError {
             | Self::BackendNotLocal { .. }
             | Self::InvalidToken
             | Self::InvalidRelay { .. }
-            | Self::NamedToken { .. } => None,
+            | Self::NamedToken { .. }
+            | Self::Invite(_) => None,
             Self::Bind(e) | Self::Identity { source: e, .. } => Some(e),
         }
     }

@@ -80,7 +80,12 @@ impl ServeHandle {
     }
 
     /// Hold `token` under `name`, pinned to `pinned` when it is given.
-    fn hold(&self, name: &str, token: String, pinned: Option<PeerId>) -> Result<(), ServeError> {
+    pub(crate) fn hold(
+        &self,
+        name: &str,
+        token: String,
+        pinned: Option<PeerId>,
+    ) -> Result<(), ServeError> {
         self.state
             .credential
             .add_named(name, token, pinned)
@@ -102,7 +107,13 @@ impl ServeHandle {
     /// state there is. Like [`set_token`](Self::set_token), this gates
     /// admission and not delivery — a request the token admitted before
     /// the call runs to completion.
+    ///
+    /// A live [`invite`](Self::invite) for `name` is withdrawn first, so its
+    /// code cannot hand out a key that no longer admits.
     pub fn remove_token(&self, name: &str) -> bool {
+        // Before the token goes, and not inside its lock: the invites are
+        // never locked while the named tokens are.
+        self.state.credential.invites().withdraw_device(name);
         self.state.credential.remove_named(name)
     }
 

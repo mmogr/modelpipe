@@ -114,6 +114,7 @@ pub async fn serve(backend_url: &str, opts: ServeOptions) -> Result<ServeHandle,
         backend,
         opts.max_peers,
         opts.max_connections,
+        tokio::runtime::Handle::current(),
     ));
     tokio::spawn(accept_loop(state.clone()));
     Ok(ServeHandle::new(state))
