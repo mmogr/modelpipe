@@ -294,6 +294,30 @@ fn the_authorization_header_is_found_whatever_its_case() {
     assert_eq!(authorization(&fields(&[("Accept", "*/*")])), None);
 }
 
+/// A credential is one value. A head repeating it is refused whatever the
+/// copies say and whatever their case, so the edge never checks one while
+/// the backend reads another; one beside a `Proxy-Authorization` is still
+/// one.
+#[test]
+fn two_authorization_headers_are_refused_rather_than_resolved() {
+    for pair in [
+        "Authorization: Bearer a\r\nAuthorization: Bearer b",
+        "Authorization: Bearer a\r\nAuthorization: Bearer a",
+        "authorization: Bearer a\r\nAccept: */*\r\nAUTHORIZATION: Bearer b",
+        "Authorization: Bearer a\r\nAuthorization: ",
+    ] {
+        let raw = format!("GET / HTTP/1.1\r\nHost: x\r\n{pair}\r\n\r\n");
+        assert_eq!(
+            parse_request(raw.as_bytes()),
+            Err(HeadError::DuplicateAuthorization),
+            "{pair:?}"
+        );
+    }
+    let one = b"GET / HTTP/1.1\r\nProxy-Authorization: Basic p\r\nAuthorization: Bearer a\r\n\r\n";
+    let (head, _) = parse_request(one).expect("valid").expect("complete");
+    assert_eq!(authorization(&head.headers), Some(&b"Bearer a"[..]));
+}
+
 /// The three header rules applied in the order the edge applies them,
 /// pinned once as a combination.
 #[test]
@@ -447,11 +471,19 @@ fn a_content_length_is_trimmed_of_http_whitespace_and_no_more() {
 
 /// With an upstream bearer, the client's `Authorization` — every copy of
 /// it, whatever its case — is gone and the edge's is in its place, and the
-/// device marker rides alongside.
+/// device marker rides alongside. Built by hand, because [`parse_request`]
+/// refuses the second copy; the rewrite does not lean on that.
 #[test]
 fn rewrite_presents_the_upstream_bearer_and_drops_the_clients() {
-    let raw = b"GET /v1/models HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer device-key\r\nauthorization: Bearer twice\r\n\r\n";
-    let (mut head, _) = parse_request(raw).expect("valid").expect("complete");
+    let mut head = RequestHead {
+        method: "GET".to_owned(),
+        target: "/v1/models".to_owned(),
+        headers: fields(&[
+            ("Host", "x"),
+            ("Authorization", "Bearer device-key"),
+            ("authorization", "Bearer twice"),
+        ]),
+    };
     let forward = Forward {
         device: Some("laptop".into()),
         upstream: Some("backend-key".into()),

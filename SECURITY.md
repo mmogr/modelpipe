@@ -57,7 +57,9 @@ own keys. A relay carries ciphertext it cannot read.
 **Requests that are ambiguous are refused, not resolved.** A message
 carrying both `Content-Length` and `Transfer-Encoding` is rejected rather
 than interpreted, because interpreting it correctly is what makes a proxy
-exploitable — the next hop resolves the same ambiguity the other way.
+exploitable — the next hop resolves the same ambiguity the other way. So is
+a request carrying two `Authorization` headers: the edge would check one,
+and a backend handed the client's bearer could read the other.
 
 ## What modelpipe does not defend against
 

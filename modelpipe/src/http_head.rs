@@ -40,6 +40,9 @@ pub(crate) enum HeadError {
     /// `Content-Length` headers that disagree, or a length that is not a
     /// number. The request-smuggling family.
     ConflictingFraming,
+    /// More than one `Authorization` header, which the edge and the
+    /// backend could read differently. The same family, over the credential.
+    DuplicateAuthorization,
     /// A transfer coding this edge does not implement.
     UnsupportedTransferCoding,
 }
@@ -76,6 +79,9 @@ pub(crate) fn parse_request(buf: &[u8]) -> Result<Option<(RequestHead, usize)>, 
                 target: req.path.ok_or(HeadError::Malformed)?.to_owned(),
                 headers: collect(req.headers)?,
             };
+            if duplicate_authorization(&head.headers) {
+                return Err(HeadError::DuplicateAuthorization);
+            }
             Ok(Some((head, consumed)))
         }
         Ok(httparse::Status::Partial) => Ok(None),
@@ -138,12 +144,27 @@ fn write_fields(out: &mut Vec<u8>, fields: &[(String, String)], framing: Framing
     out.extend_from_slice(b"\r\n");
 }
 
-/// The value of the first `Authorization` header, if any.
+/// The value of the first `Authorization` header, if any: the only one in
+/// any head [`parse_request`] returns.
 pub(crate) fn authorization(fields: &[(String, String)]) -> Option<&[u8]> {
     fields
         .iter()
         .find(|(name, _)| name.eq_ignore_ascii_case("authorization"))
         .map(|(_, value)| value.as_bytes())
+}
+
+/// Whether a head carries more than one `Authorization` header.
+///
+/// Refused rather than resolved, for the reason [`crate::framing::framing`]
+/// gives. Accepted, such a head would be checked on its first copy and,
+/// unless the edge presents a bearer of its own, forwarded with both to a
+/// backend that may check the client's bearer too and read the other.
+fn duplicate_authorization(fields: &[(String, String)]) -> bool {
+    fields
+        .iter()
+        .filter(|(name, _)| name.eq_ignore_ascii_case("authorization"))
+        .nth(1)
+        .is_some()
 }
 
 /// The request target with its query string removed.

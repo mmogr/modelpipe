@@ -264,6 +264,39 @@ async fn a_head_that_is_not_http_is_refused_without_a_backend_connection() {
     assert_eq!(backend.connects(), 0);
 }
 
+/// Two `Authorization` headers are refused before either is checked, with
+/// the backend untouched, whichever copy is valid and whatever the policy.
+///
+/// A valid first copy is the case that matters: admitted on it, the request
+/// would reach the backend carrying both, and a backend that checks the
+/// client's bearer itself — llama-server's `--api-key` — reads whichever
+/// its parser picks. The refusal comes before the credential, so serving
+/// open refuses it too.
+#[tokio::test]
+async fn a_request_with_two_authorization_headers_gets_a_400_and_never_reaches_the_backend() {
+    let backend = CountingBackend::new(OK_RESPONSE);
+    let valid = format!("Bearer {TOKEN}");
+    let cases = [
+        (supplied(), valid.as_str(), "Bearer wrong-token"),
+        (supplied(), "Bearer wrong-token", valid.as_str()),
+        (supplied(), valid.as_str(), valid.as_str()),
+        (TokenPolicy::InsecureNoAuth, "Bearer a", "Bearer b"),
+    ];
+    for (i, (policy, first, second)) in cases.iter().enumerate() {
+        let mut req = b"GET /v1/models HTTP/1.1\r\nHost: 127.0.0.1:8080\r\n".to_vec();
+        req.extend_from_slice(format!("Authorization: {first}\r\n").as_bytes());
+        req.extend_from_slice(format!("authorization: {second}\r\n\r\n").as_bytes());
+        let (outcome, seen) = exchange(&req, policy, &backend).await;
+        assert_eq!(outcome, Outcome::BadRequest, "case {i}");
+        assert!(
+            String::from_utf8_lossy(&seen).starts_with("HTTP/1.1 400"),
+            "case {i} must be refused"
+        );
+    }
+    assert_eq!(backend.connects(), 0, "the backend was never contacted");
+    assert!(backend.received().await.is_empty(), "and sent nothing");
+}
+
 // ── What the backend receives ────────────────────────────────────────────
 
 /// Connection-scoped headers stop at the edge; the message survives.
