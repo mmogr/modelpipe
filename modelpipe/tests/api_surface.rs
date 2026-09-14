@@ -217,6 +217,8 @@ fn a_peer_view_is_readable_from_outside() {
                 // rendering it one multiplication rather than a match on a
                 // `Duration`'s two halves.
                 let rtt: Option<u64> = peer.rtt_ms;
+                // The whole id beside the fingerprint, to pin a token to.
+                let _: modelpipe::PeerId = peer.id;
                 let cost = rtt.map_or_else(String::new, |ms| format!(" {ms}ms"));
                 format!("{} {}{cost}", peer.fingerprint, peer.path.as_str())
             })

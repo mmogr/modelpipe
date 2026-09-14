@@ -136,7 +136,7 @@ async fn serve_connection(
         PeerId::from_bytes(*state.endpoint.id().as_bytes()),
     );
     let peer_name = caller.name.clone();
-    let Some(peer) = state.peers.add(&peer_name, reading, &state.lifecycle) else {
+    let Some(peer) = state.peers.add(&caller, reading, &state.lifecycle) else {
         tracing::debug!(peer = %peer_name, "a peer was refused: the listener is at its peer cap");
         return;
     };

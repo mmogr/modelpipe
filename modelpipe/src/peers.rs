@@ -19,8 +19,10 @@ use std::sync::{Arc, Mutex};
 
 use tokio::sync::Semaphore;
 
+use crate::caller::Caller;
 use crate::lifecycle::{Lifecycle, PeerPath, aggregate};
 use crate::path_watch::{self, Reading};
+use crate::peer_id::PeerId;
 use crate::status::PeerView;
 
 /// How many exchanges one peer may have in flight at once, across every
@@ -116,10 +118,14 @@ struct Budget {
     connections: usize,
 }
 
+/// One connection in the registry: its peer's fingerprint, whole endpoint id
+/// and path.
+type Connected = (Arc<str>, PeerId, Reading);
+
 /// The connected peers, keyed by an id that exists only to name the right
 /// entry when one changes path or goes.
 pub(crate) struct PeerRegistry {
-    peers: Mutex<BTreeMap<u64, (Arc<str>, Reading)>>,
+    peers: Mutex<BTreeMap<u64, Connected>>,
     /// Stream budgets by peer identity, shared across that peer's
     /// connections and dropped when its last one goes.
     budgets: Mutex<HashMap<Arc<str>, Budget>>,
@@ -162,30 +168,31 @@ impl PeerRegistry {
 
     /// Record a peer and republish the aggregate status.
     ///
-    /// `name` is the fingerprint the listener derived for the connection,
-    /// which is what [`views`](Self::views) reports and what the `peer`
-    /// log field and the `X-Modelpipe-Peer` header already carry — one
-    /// rule, so a device is named identically everywhere it appears.
+    /// `caller` is the connection's endpoint. Its fingerprint is what
+    /// [`views`](Self::views) reports and what the `peer` log field and the
+    /// `X-Modelpipe-Peer` header already carry — one rule, so a device is
+    /// named identically everywhere it appears — and its whole id is
+    /// reported beside it.
     ///
     /// `reading` is how that connection is routed *at this instant*, and is
     /// routinely not how it will be routed a second later — see
     /// [`set_path`](Self::set_path), which is the other half of this.
     ///
-    /// `None`, and the set left as it was, when `name` is not here already
+    /// `None`, and the set left as it was, when `caller` is not here already
     /// and as many others as the cap allows are.
     pub(crate) fn add(
         &self,
-        name: &Arc<str>,
+        caller: &Caller,
         reading: Reading,
         lifecycle: &Lifecycle,
     ) -> Option<u64> {
         self.mutate(lifecycle, |peers| {
-            let here: HashSet<&str> = peers.values().map(|(held, _)| &**held).collect();
-            if here.len() >= self.max_peers && !here.contains(&**name) {
+            let here: HashSet<&str> = peers.values().map(|(held, _, _)| &**held).collect();
+            if here.len() >= self.max_peers && !here.contains(&*caller.name) {
                 return None;
             }
             let id = self.next.fetch_add(1, Ordering::Relaxed);
-            peers.insert(id, (name.clone(), reading));
+            peers.insert(id, (caller.name.clone(), caller.id, reading));
             Some(id)
         })
     }
@@ -204,7 +211,7 @@ impl PeerRegistry {
     /// it just removed would leave a departed device in `peers()` for ever.
     pub(crate) fn set_path(&self, id: u64, reading: Reading, lifecycle: &Lifecycle) {
         self.mutate(lifecycle, |peers| {
-            if let Some((_, held)) = peers.get_mut(&id) {
+            if let Some((_, _, held)) = peers.get_mut(&id) {
                 *held = reading;
             }
         });
@@ -213,7 +220,7 @@ impl PeerRegistry {
     pub(crate) fn remove(&self, id: u64, lifecycle: &Lifecycle) {
         let mut departed = None;
         self.mutate(lifecycle, |peers| {
-            departed = peers.remove(&id).map(|(name, _)| name);
+            departed = peers.remove(&id).map(|(name, _, _)| name);
         });
         if let Some(name) = departed {
             self.release(&name);
@@ -240,7 +247,8 @@ impl PeerRegistry {
     pub(crate) fn views(&self) -> Vec<PeerView> {
         self.lock()
             .values()
-            .map(|(name, reading)| PeerView {
+            .map(|(name, peer, reading)| PeerView {
+                id: *peer,
                 fingerprint: name.to_string(),
                 path: aggregate(&[reading.path]),
                 rtt_ms: reading.rtt.map(path_watch::millis),
@@ -256,11 +264,11 @@ impl PeerRegistry {
     fn mutate<R>(
         &self,
         lifecycle: &Lifecycle,
-        f: impl FnOnce(&mut BTreeMap<u64, (Arc<str>, Reading)>) -> R,
+        f: impl FnOnce(&mut BTreeMap<u64, Connected>) -> R,
     ) -> R {
         let mut guard = self.lock();
         let result = f(&mut guard);
-        let paths: Vec<PeerPath> = guard.values().map(|(_, reading)| reading.path).collect();
+        let paths: Vec<PeerPath> = guard.values().map(|(_, _, reading)| reading.path).collect();
         // Released before publishing, so nothing observes the status while
         // the set it describes is still locked.
         drop(guard);
@@ -269,7 +277,7 @@ impl PeerRegistry {
     }
 
     // A poisoned lock cannot happen here: nothing panics while holding it.
-    fn lock(&self) -> std::sync::MutexGuard<'_, BTreeMap<u64, (Arc<str>, Reading)>> {
+    fn lock(&self) -> std::sync::MutexGuard<'_, BTreeMap<u64, Connected>> {
         self.peers
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)

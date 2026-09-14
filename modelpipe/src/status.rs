@@ -4,6 +4,8 @@
 //! that publishes transitions, and the aggregation that turns several
 //! peers' connection types into one of these, live with the handles.
 
+use crate::peer_id::PeerId;
+
 /// What the transport is doing right now.
 ///
 /// The `Relayed` case is worth surfacing to users: it explains latency
@@ -143,6 +145,11 @@ impl PipeStatus {
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub struct PeerView {
+    /// The peer's whole endpoint id. [`fingerprint`](Self::fingerprint) is its
+    /// first twelve hex characters, and the id is what
+    /// [`ServeHandle::add_token_pinned`](crate::ServeHandle::add_token_pinned)
+    /// pins a token to, and what an invite's outcome names.
+    pub id: PeerId,
     /// The peer's fingerprint: twelve hex characters, the same rule the
     /// `peer` log field and the `X-Modelpipe-Peer` header use, so a device
     /// is one name everywhere it appears.

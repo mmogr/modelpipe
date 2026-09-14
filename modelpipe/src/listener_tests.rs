@@ -137,7 +137,13 @@ async fn a_refused_connection_leaves_the_registry_as_it_found_it() {
             path: PeerPath::Direct,
             rtt: None,
         };
-        let added = state.peers.add(peer, reading, &state.lifecycle);
+        let nobody = crate::peer_id::PeerId::from_bytes([0; 32]);
+        let caller = crate::caller::Caller {
+            id: nobody,
+            name: peer.clone(),
+            at: nobody,
+        };
+        let added = state.peers.add(&caller, reading, &state.lifecycle);
         assert!(added.is_some(), "under the cap");
     }
 
