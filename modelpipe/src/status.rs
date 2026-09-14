@@ -49,8 +49,9 @@ pub enum PipeStatus {
     ///
     /// Carried as a bare state rather than a reason so this type stays
     /// `Copy`; the need proved real, and the diagnostic accessor that
-    /// answers *which* of those it was is
-    /// [`ConnectHandle::close_reason`](crate::ConnectHandle::close_reason).
+    /// answers *which* of those it was is `close_reason`, on
+    /// [`ConnectHandle`](crate::ConnectHandle::close_reason) and
+    /// [`ServeHandle`](crate::ServeHandle::close_reason) alike.
     Closed,
 }
 
@@ -59,8 +60,9 @@ pub enum PipeStatus {
 /// The distinction [`PipeStatus`] deliberately does not carry, kept out of
 /// it so that type stays `Copy` and stays small enough to sit in a
 /// watcher's own state. Read it from
-/// [`ConnectHandle::close_reason`](crate::ConnectHandle::close_reason),
-/// which answers `None` for as long as the pipe is live.
+/// [`ConnectHandle::close_reason`](crate::ConnectHandle::close_reason) or
+/// [`ServeHandle::close_reason`](crate::ServeHandle::close_reason), which
+/// answer `None` for as long as the pipe is live.
 ///
 /// **What it is for is telling a failure from a success**, which the status
 /// alone cannot do. A connect side reports [`PipeStatus::Idle`] both while
@@ -87,9 +89,10 @@ pub enum CloseReason {
     /// the accessor needs a handle, and a dropped handle is the one thing
     /// a caller no longer has.
     Shutdown,
-    /// The local listener stopped accepting and could not carry on. Nobody
-    /// asked for this one: it is the reason here that reports a failure
-    /// rather than an intention, and the one worth waking somebody over.
+    /// The listener stopped accepting and could not carry on: the connect
+    /// side's local port, or the serve side's endpoint. Nobody asked for
+    /// this one: it is the reason here that reports a failure rather than
+    /// an intention, and the one worth waking somebody over.
     ListenerFailed,
 }
 

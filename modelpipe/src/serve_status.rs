@@ -7,7 +7,7 @@
 //! *who is using it right now, and how are they reaching it*.
 
 use crate::serve_handle::ServeHandle;
-use crate::status::{PeerView, PipeStatus};
+use crate::status::{CloseReason, PeerView, PipeStatus};
 
 impl ServeHandle {
     /// How this side is currently reaching its peers.
@@ -108,5 +108,20 @@ impl ServeHandle {
     /// left by the time the list is read. Empty when idle or closed.
     pub fn peers(&self) -> Vec<PeerView> {
         self.state.peers.views()
+    }
+
+    /// Why the listener closed, or `None` while it is still live.
+    ///
+    /// The serve side's half of
+    /// [`ConnectHandle::close_reason`](crate::ConnectHandle::close_reason),
+    /// with the same contract: set once and never changed, and read beside
+    /// [`status`](Self::status) rather than instead of it.
+    /// [`CloseReason::Shutdown`] means this side ended it, by `shutdown`,
+    /// `shutdown_timeout` or dropping the handle.
+    /// [`CloseReason::ListenerFailed`] means the endpoint stopped yielding
+    /// connections with nobody asking, which is worth showing as the failure
+    /// it is.
+    pub fn close_reason(&self) -> Option<CloseReason> {
+        self.state.lifecycle.close_reason()
     }
 }

@@ -565,3 +565,10 @@ fn a_dependent_can_read_why_a_wait_for_the_serve_side_ended() {
     assert!(closed.to_string().contains("shutdown"), "{closed}");
     let _: &dyn Error = &closed;
 }
+
+/// Both handles say why they closed, in the same type.
+#[test]
+fn both_handles_say_why_they_closed() {
+    let _: fn(&ServeHandle) -> Option<CloseReason> = ServeHandle::close_reason;
+    let _: fn(&ConnectHandle) -> Option<CloseReason> = ConnectHandle::close_reason;
+}

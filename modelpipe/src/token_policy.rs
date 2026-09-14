@@ -25,6 +25,15 @@ use std::fmt;
 /// present) use [`Supplied`](Self::Supplied): the same key is then
 /// enforced at the tunnel edge, before a byte reaches the backend, and
 /// the embedder keeps exactly one credential.
+///
+/// A policy says what a listener enforces **of its own**. Tokens added by
+/// name through [`ServeHandle::add_token`](crate::ServeHandle::add_token)
+/// admit under every policy but [`InsecureNoAuth`](Self::InsecureNoAuth),
+/// where everything is admitted and no request is told apart by name. So a
+/// listener started with [`Generate`](Self::Generate) or
+/// [`Supplied`](Self::Supplied) holds its own token and any number of named
+/// ones at once, and [`Named`](Self::Named) is the policy with no token of
+/// its own.
 #[derive(Default)]
 #[non_exhaustive]
 pub enum TokenPolicy {

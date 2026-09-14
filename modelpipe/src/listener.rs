@@ -100,6 +100,10 @@ pub(crate) async fn accept_loop(state: std::sync::Arc<ServeState>) {
             }
         });
     }
+    // Reached by teardown, which has already recorded why, or by an endpoint
+    // that stopped yielding connections with nobody asking. The first reason
+    // recorded is the one that keeps, so this names only the second.
+    state.lifecycle.close(CloseReason::ListenerFailed);
 }
 
 /// Serve every stream one peer opens, until it goes away.
