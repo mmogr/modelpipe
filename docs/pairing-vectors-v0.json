@@ -1,0 +1,157 @@
+{
+  "format": "modelpipe-pairing-string",
+  "version": 0,
+  "provenance": {
+    "repository": "https://github.com/mmogr/modelpipe",
+    "spec": "docs/pairing-v0.md",
+    "generator": "scripts/pairing_vectors.py",
+    "regenerate": "scripts/pairing_vectors.py --json > docs/pairing-vectors-v0.json",
+    "note": "Normative. There is deliberately no --update: a v0 vector that changes is a broken client in another language, not a stale fixture."
+  },
+  "verdicts": [
+    "accepted",
+    "empty",
+    "code",
+    "ticket-malformed",
+    "ticket-unsupported-version"
+  ],
+  "string_form": {
+    "separator": "-",
+    "code_digits": 6,
+    "code_alphabet": "0123456789",
+    "trimmed": [
+      " ",
+      "\t",
+      "\n",
+      "\f",
+      "\r"
+    ],
+    "ticket": "docs/ticket-format-v0.md",
+    "order": [
+      "trim",
+      "empty",
+      "code",
+      "ticket"
+    ]
+  },
+  "vectors": [
+    {
+      "id": "accept/a-ticket-alone",
+      "name": "a ticket alone",
+      "input": "pipeadlvvgabqkyqvn6vjp7nhslea45a5yls6pnkmizfv4bbu2hxa5iruaaauhlp2na",
+      "verdict": "accepted",
+      "ticket": "pipeadlvvgabqkyqvn6vjp7nhslea45a5yls6pnkmizfv4bbu2hxa5iruaaauhlp2na",
+      "code": null
+    },
+    {
+      "id": "accept/a-ticket-and-a-code",
+      "name": "a ticket and a code",
+      "input": "pipeadlvvgabqkyqvn6vjp7nhslea45a5yls6pnkmizfv4bbu2hxa5iruaaauhlp2na-483920",
+      "verdict": "accepted",
+      "ticket": "pipeadlvvgabqkyqvn6vjp7nhslea45a5yls6pnkmizfv4bbu2hxa5iruaaauhlp2na",
+      "code": "483920"
+    },
+    {
+      "id": "accept/a-ticket-that-carries-addresses-and-a-code-with-leading-zeros",
+      "name": "a ticket that carries addresses, and a code with leading zeros",
+      "input": "pipeadlvvgabqkyqvn6vjp7nhslea45a5yls6pnkmizfv4bbu2hxa5iruaicaajcaainxaaaaaaaaaaaaaaaaaaach4qaabstehw-000417",
+      "verdict": "accepted",
+      "ticket": "pipeadlvvgabqkyqvn6vjp7nhslea45a5yls6pnkmizfv4bbu2hxa5iruaicaajcaainxaaaaaaaaaaaaaaaaaaach4qaabstehw",
+      "code": "000417"
+    },
+    {
+      "id": "accept/the-whole-string-upper-cased-as-a-qr-code-carries-it",
+      "name": "the whole string upper-cased, as a QR code carries it",
+      "input": "PIPEADLVVGABQKYQVN6VJP7NHSLEA45A5YLS6PNKMIZFV4BBU2HXA5IRUAQAAANGQ5DUOBZTULZPOJSWYYLZFZSXQYLNOBWGKLTDN5WS6AIAA3AKQAIHCFIQBRP5XR4Q-017284",
+      "verdict": "accepted",
+      "ticket": "pipeadlvvgabqkyqvn6vjp7nhslea45a5yls6pnkmizfv4bbu2hxa5iruaqaaangq5duobztulzpojswyylzfzsxqylnobwgkltdn5ws6aiaa3akqaihcfiqbrp5xr4q",
+      "code": "017284"
+    },
+    {
+      "id": "accept/ascii-whitespace-at-either-end",
+      "name": "ASCII whitespace at either end",
+      "input": " \tpipeadlvvgabqkyqvn6vjp7nhslea45a5yls6pnkmizfv4bbu2hxa5iruaaauhlp2na-483920\r\n",
+      "verdict": "accepted",
+      "ticket": "pipeadlvvgabqkyqvn6vjp7nhslea45a5yls6pnkmizfv4bbu2hxa5iruaaauhlp2na",
+      "code": "483920"
+    },
+    {
+      "id": "refuse/nothing-but-whitespace",
+      "name": "nothing but whitespace",
+      "input": " \t\r\n",
+      "verdict": "empty"
+    },
+    {
+      "id": "refuse/a-separator-with-nothing-after-it",
+      "name": "a separator with nothing after it",
+      "input": "pipeadlvvgabqkyqvn6vjp7nhslea45a5yls6pnkmizfv4bbu2hxa5iruaaauhlp2na-",
+      "verdict": "code"
+    },
+    {
+      "id": "refuse/a-code-one-digit-short",
+      "name": "a code one digit short",
+      "input": "pipeadlvvgabqkyqvn6vjp7nhslea45a5yls6pnkmizfv4bbu2hxa5iruaaauhlp2na-48392",
+      "verdict": "code"
+    },
+    {
+      "id": "refuse/a-code-one-digit-long",
+      "name": "a code one digit long",
+      "input": "pipeadlvvgabqkyqvn6vjp7nhslea45a5yls6pnkmizfv4bbu2hxa5iruaaauhlp2na-4839201",
+      "verdict": "code"
+    },
+    {
+      "id": "refuse/a-code-with-a-letter-in-it",
+      "name": "a code with a letter in it",
+      "input": "pipeadlvvgabqkyqvn6vjp7nhslea45a5yls6pnkmizfv4bbu2hxa5iruaaauhlp2na-48392a",
+      "verdict": "code"
+    },
+    {
+      "id": "refuse/a-code-in-digits-outside-ascii",
+      "name": "a code in digits outside ASCII",
+      "input": "pipeadlvvgabqkyqvn6vjp7nhslea45a5yls6pnkmizfv4bbu2hxa5iruaaauhlp2na-\uff14\uff18\uff13\uff19\uff12\uff10",
+      "verdict": "code"
+    },
+    {
+      "id": "refuse/a-non-ascii-space-after-the-code",
+      "name": "a non-ASCII space after the code",
+      "input": "pipeadlvvgabqkyqvn6vjp7nhslea45a5yls6pnkmizfv4bbu2hxa5iruaaauhlp2na-483920\u00a0",
+      "verdict": "code"
+    },
+    {
+      "id": "refuse/a-code-and-a-ticket-that-are-both-wrong",
+      "name": "a code and a ticket that are both wrong",
+      "input": "not-a-ticket-4839",
+      "verdict": "code"
+    },
+    {
+      "id": "refuse/two-codes",
+      "name": "two codes",
+      "input": "pipeadlvvgabqkyqvn6vjp7nhslea45a5yls6pnkmizfv4bbu2hxa5iruaaauhlp2na-483920-483920",
+      "verdict": "ticket-malformed"
+    },
+    {
+      "id": "refuse/whitespace-inside-the-string",
+      "name": "whitespace inside the string",
+      "input": "pipeadlvvgabqkyqvn6vjp7nhslea45a5yls6pnkmizfv4bbu2hxa5iruaaauhlp2na -483920",
+      "verdict": "ticket-malformed"
+    },
+    {
+      "id": "refuse/a-code-with-no-ticket-before-it",
+      "name": "a code with no ticket before it",
+      "input": "-483920",
+      "verdict": "ticket-malformed"
+    },
+    {
+      "id": "refuse/a-ticket-that-is-not-one",
+      "name": "a ticket that is not one",
+      "input": "not-a-ticket-483920",
+      "verdict": "ticket-malformed"
+    },
+    {
+      "id": "refuse/a-ticket-from-a-format-this-build-does-not-speak",
+      "name": "a ticket from a format this build does not speak",
+      "input": "pipeahlvvgabqkyqvn6vjp7nhslea45a5yls6pnkmizfv4bbu2hxa5iruaaauhlp2na-483920",
+      "verdict": "ticket-unsupported-version"
+    }
+  ]
+}

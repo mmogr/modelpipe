@@ -77,6 +77,12 @@ jobs:
       - name: Check the ticket vectors match the spec
         run: python3 scripts/ticket_vectors.py --check
 
+      # The same three-way agreement for the pairing string: the spec page,
+      # this reference, which imports the ticket reference rather than copying
+      # it, and the vectors the Rust tests hard-code.
+      - name: Check the pairing vectors match the spec
+        run: python3 scripts/pairing_vectors.py --check
+
   clippy:
     name: Clippy
     runs-on: ubuntu-latest

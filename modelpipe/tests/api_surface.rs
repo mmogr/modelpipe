@@ -22,8 +22,9 @@ use std::error::Error;
 use std::time::Duration;
 
 use modelpipe::{
-    CloseReason, ConnectError, ConnectHandle, ConnectOptions, NetworkMetrics, PeerView, PipeStatus,
-    ServeError, ServeHandle, ServeOptions, Ticket, TicketParseError, TokenPolicy,
+    CloseReason, ConnectError, ConnectHandle, ConnectOptions, NetworkMetrics, PairingCode,
+    PairingString, PairingStringError, PeerView, PipeStatus, ServeError, ServeHandle, ServeOptions,
+    Ticket, TicketParseError, TokenPolicy,
 };
 
 /// Every name the crate promises, reachable at the flat path it promises it
@@ -48,6 +49,9 @@ fn the_public_names_resolve_at_the_crate_root() {
     nameable::<CloseReason>();
     nameable::<PeerView>();
     nameable::<NetworkMetrics>();
+    nameable::<PairingString>();
+    nameable::<PairingCode>();
+    nameable::<PairingStringError>();
 
     // The two entry points. Passed as values rather than ascribed a type:
     // both are `async fn`, so their return is an opaque future no caller
@@ -508,4 +512,24 @@ fn a_dependents_dto_serializes_the_metrics_as_plain_numbers() {
         r#"{"transport":{"relay_connections":0,"relay_connections_failed":0,"relay_connections_ratelimited":0}}"#,
         "the field names are the identifiers a dashboard keys on"
     );
+}
+
+/// A pairing string is taken apart and put back together from outside the
+/// crate, and its `Debug` does not carry the code.
+#[test]
+fn a_dependent_can_take_a_pairing_string_apart_and_debug_keeps_the_code_out() {
+    let ticket = "pipeadlvvgabqkyqvn6vjp7nhslea45a5yls6pnkmizfv4bbu2hxa5iruaaauhlp2na";
+    let pairing: PairingString = format!("{ticket}-483920").parse().expect("parses");
+
+    assert_eq!(pairing.ticket().to_string(), ticket);
+    assert_eq!(pairing.code().map(PairingCode::as_str), Some("483920"));
+    assert_eq!(pairing.to_string(), format!("{ticket}-483920"));
+    assert!(!format!("{pairing:?}").contains("483920"));
+
+    let refused = "  ".parse::<PairingString>().unwrap_err();
+    assert!(matches!(refused, PairingStringError::Empty));
+    assert!(refused.source().is_none());
+
+    let minted = PairingString::new(pairing.ticket().clone(), Some(PairingCode::mint()));
+    assert_eq!(minted.code().map(|code| code.as_str().len()), Some(6));
 }
