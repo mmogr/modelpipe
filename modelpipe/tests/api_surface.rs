@@ -23,8 +23,8 @@ use std::time::Duration;
 
 use modelpipe::{
     CloseReason, ConnectError, ConnectHandle, ConnectOptions, NetworkMetrics, PairingCode,
-    PairingString, PairingStringError, PeerView, PipeStatus, ServeError, ServeHandle, ServeOptions,
-    Ticket, TicketParseError, TokenPolicy,
+    PairingString, PairingStringError, PeerId, PeerIdParseError, PeerView, PipeStatus, ServeError,
+    ServeHandle, ServeOptions, Ticket, TicketParseError, TokenPolicy,
 };
 
 /// Every name the crate promises, reachable at the flat path it promises it
@@ -52,6 +52,8 @@ fn the_public_names_resolve_at_the_crate_root() {
     nameable::<PairingString>();
     nameable::<PairingCode>();
     nameable::<PairingStringError>();
+    nameable::<PeerId>();
+    nameable::<PeerIdParseError>();
 
     // The two entry points. Passed as values rather than ascribed a type:
     // both are `async fn`, so their return is an opaque future no caller
@@ -83,6 +85,7 @@ fn the_options_structs_are_constructible_from_outside() {
     connect_opts.relay = Some("https://relay.example.com/".to_owned());
     connect_opts.port_mapping = false;
     connect_opts.discovery = false;
+    connect_opts.identity = Some(std::path::PathBuf::from("connect_identity"));
     connect_opts.relay_only = true;
 
     assert!(connect_opts.bind.is_some());
@@ -534,4 +537,19 @@ fn a_dependent_can_take_a_pairing_string_apart_and_debug_keeps_the_code_out() {
 
     let minted = PairingString::new(pairing.ticket().clone(), Some(PairingCode::mint()));
     assert_eq!(minted.code().map(|code| code.as_str().len()), Some(6));
+}
+
+/// A peer id is kept as text from outside the crate, and its fingerprint is
+/// the front of what it prints.
+#[test]
+fn a_dependent_can_keep_a_peer_id_as_text() {
+    let printed = "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a";
+    let id: PeerId = printed.parse().expect("sixty-four hex characters");
+    assert_eq!(id.to_string(), printed);
+    assert_eq!(id.fingerprint(), &printed[..12]);
+    assert_eq!(PeerId::from_bytes(id.to_bytes()), id);
+
+    let refused: PeerIdParseError = "d75a".parse::<PeerId>().unwrap_err();
+    assert!(!refused.to_string().is_empty());
+    let _: fn(&ConnectHandle) -> PeerId = ConnectHandle::peer_id;
 }

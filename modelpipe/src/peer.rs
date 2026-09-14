@@ -40,6 +40,7 @@ use std::time::Duration;
 
 use crate::ConnectError;
 use crate::connect::ConnectOptions;
+use crate::identity;
 use crate::lifecycle::{Lifecycle, aggregate};
 use crate::path_watch::{self, Reading};
 use crate::status::PipeStatus;
@@ -87,15 +88,13 @@ impl Peer {
     /// [`connect`](fn@crate::connect) still reports through its `Result`.
     pub(crate) async fn bind(ticket: &Ticket, opts: &ConnectOptions) -> Result<Self, ConnectError> {
         let addr = transport::addr_from(ticket)?;
-        // No stored key on this side: nothing dials *us*, so this
-        // endpoint's identity is never in anybody's ticket and has nothing
-        // to outlive. The serve side's `--identity` is the mirror of this.
+        let key = identity::stored(opts.identity.as_deref())?;
         let net = transport::NetOptions {
             port_mapping: opts.port_mapping,
             discovery: opts.discovery,
             relay_only: opts.relay_only,
         };
-        let endpoint = transport::bind(opts.relay.as_deref(), None, net).await?;
+        let endpoint = transport::bind(opts.relay.as_deref(), key, net).await?;
         Ok(Self {
             endpoint,
             addr,
