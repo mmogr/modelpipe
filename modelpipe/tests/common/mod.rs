@@ -12,8 +12,32 @@ use std::fmt::Write as _;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use modelpipe::{ConnectOptions, ServeOptions};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
+
+/// Serve options with discovery and port mapping off.
+///
+/// What every integration test starts from unless it is about those two
+/// settings. A pipe between two endpoints on one machine needs neither: the
+/// ticket carries its paths. So the suite publishes nothing to a discovery
+/// service and asks no router for a port. A listener still reaches the
+/// default relay.
+pub(crate) fn serve_options() -> ServeOptions {
+    let mut opts = ServeOptions::default();
+    opts.port_mapping = false;
+    opts.discovery = false;
+    opts
+}
+
+/// Connect options with discovery and port mapping off, for the reason
+/// [`serve_options`] gives: the ticket's own paths are the only ones dialled.
+pub(crate) fn connect_options() -> ConnectOptions {
+    let mut opts = ConnectOptions::default();
+    opts.port_mapping = false;
+    opts.discovery = false;
+    opts
+}
 
 /// A stand-in for the model server, speaking hand-written HTTP/1.1.
 ///

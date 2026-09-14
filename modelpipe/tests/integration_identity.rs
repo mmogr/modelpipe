@@ -11,25 +11,21 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use common::{MockBackend, Scratch, request, within};
-use modelpipe::{ConnectOptions, PeerId, ServeHandle, ServeOptions, TokenPolicy};
+use modelpipe::{ConnectOptions, PeerId, ServeHandle, TokenPolicy};
 
 const OK_BODY: &str = r#"{"object":"list","data":[]}"#;
 
 /// Connect options that contact nothing but the ticket's own paths.
 fn hermetic(identity: Option<PathBuf>) -> ConnectOptions {
-    let mut opts = ConnectOptions::default();
-    opts.port_mapping = false;
-    opts.discovery = false;
+    let mut opts = common::connect_options();
     opts.identity = identity;
     opts
 }
 
 /// A listener over `backend`, with discovery and port mapping off.
 async fn listening(backend: &MockBackend) -> ServeHandle {
-    let mut opts = ServeOptions::default();
+    let mut opts = common::serve_options();
     opts.auth = TokenPolicy::Generate;
-    opts.port_mapping = false;
-    opts.discovery = false;
     within(
         "serve must bind",
         Box::pin(modelpipe::serve(&backend.url, opts)),
@@ -128,10 +124,8 @@ async fn a_connect_identity_others_can_read_is_refused() {
 async fn a_token_pinned_to_one_connect_side_is_refused_from_another() {
     const KEY: &str = "sk-zzq-the-laptops-key";
     let backend = MockBackend::json(200, OK_BODY).await;
-    let mut opts = ServeOptions::default();
+    let mut opts = common::serve_options();
     opts.auth = TokenPolicy::Named;
-    opts.port_mapping = false;
-    opts.discovery = false;
     let serving = within(
         "serve must bind",
         Box::pin(modelpipe::serve(&backend.url, opts)),

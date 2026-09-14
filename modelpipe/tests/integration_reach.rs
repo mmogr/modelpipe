@@ -10,18 +10,15 @@ use std::time::Duration;
 
 use common::{MockBackend, within};
 use modelpipe::{
-    CloseReason, ConnectHandle, ConnectOptions, PipeStatus, ServeHandle, ServeOptions, Ticket,
-    TokenPolicy, Unreached,
+    CloseReason, ConnectHandle, PipeStatus, ServeHandle, Ticket, TokenPolicy, Unreached,
 };
 
 const OK_BODY: &str = r#"{"object":"list","data":[]}"#;
 
 /// A listener over `backend`, with discovery and port mapping off.
 async fn listening(backend: &MockBackend) -> ServeHandle {
-    let mut opts = ServeOptions::default();
+    let mut opts = common::serve_options();
     opts.auth = TokenPolicy::Generate;
-    opts.port_mapping = false;
-    opts.discovery = false;
     within(
         "serve must bind",
         Box::pin(modelpipe::serve(&backend.url, opts)),
@@ -32,9 +29,7 @@ async fn listening(backend: &MockBackend) -> ServeHandle {
 
 /// A connect side dialling `ticket`, with discovery and port mapping off.
 async fn dialling(ticket: &Ticket) -> ConnectHandle {
-    let mut opts = ConnectOptions::default();
-    opts.port_mapping = false;
-    opts.discovery = false;
+    let opts = common::connect_options();
     within(
         "connect must bind",
         Box::pin(modelpipe::connect(ticket, opts)),
