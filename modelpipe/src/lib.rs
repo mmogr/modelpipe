@@ -100,6 +100,8 @@ mod connect;
 mod connect_handle;
 mod connect_reach;
 mod network;
+mod pair;
+mod pair_wire;
 mod serve;
 mod serve_error;
 mod serve_grace;
@@ -117,6 +119,7 @@ pub use connect_handle::ConnectHandle;
 pub use connect_reach::Unreached;
 pub use invite::{Invite, InviteHandle, InviteOptions, InviteOutcome, InviteRefusal, PAIR_PATH};
 pub use network::NetworkMetrics;
+pub use pair::{PairError, Paired, pair};
 pub use pairing_string::{PairingCode, PairingString, PairingStringError};
 pub use peer_id::{PeerId, PeerIdParseError};
 pub use serve::serve;
@@ -155,6 +158,9 @@ const fn auto_trait_promises() {
     assert::<InviteOptions>();
     assert::<InviteOutcome>();
     assert::<InviteRefusal>();
+    // A device pairs on one task and hands the result to another.
+    assert::<Paired>();
+    assert::<PairError>();
     assert::<TicketParseError>();
     // A pairing string is parsed on one task and dialled on another, and
     // its error rides through `anyhow` like the ticket's.
@@ -211,6 +217,7 @@ fn future_promises(
     connect_side: &ConnectHandle,
     ticket: &Ticket,
     invite: &InviteHandle,
+    pairing: &PairingString,
 ) {
     fn assert_send(_: impl Send) {}
     assert_send(serve("", ServeOptions::default()));
@@ -224,6 +231,12 @@ fn future_promises(
     assert_send(connect_side.status_changed_since(PipeStatus::Idle));
     assert_send(connect_side.wait_reachable(Duration::from_secs(0)));
     assert_send(invite.outcome());
+    assert_send(pair(
+        pairing,
+        None,
+        ConnectOptions::default(),
+        Duration::from_secs(0),
+    ));
     assert_send(connect_side.notify_network_change());
     assert_send(connect_side.shutdown());
     assert_send(connect_side.shutdown_timeout(Duration::from_secs(0)));

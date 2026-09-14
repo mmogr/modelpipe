@@ -23,9 +23,9 @@ use std::time::Duration;
 
 use modelpipe::{
     CloseReason, ConnectError, ConnectHandle, ConnectOptions, Invite, InviteHandle, InviteOptions,
-    InviteOutcome, InviteRefusal, NetworkMetrics, PairingCode, PairingString, PairingStringError,
-    PeerId, PeerIdParseError, PeerView, PipeStatus, ServeError, ServeHandle, ServeOptions, Ticket,
-    TicketParseError, TokenPolicy, Unreached,
+    InviteOutcome, InviteRefusal, NetworkMetrics, PairError, Paired, PairingCode, PairingString,
+    PairingStringError, PeerId, PeerIdParseError, PeerView, PipeStatus, ServeError, ServeHandle,
+    ServeOptions, Ticket, TicketParseError, TokenPolicy, Unreached,
 };
 
 /// Every name the crate promises, reachable at the flat path it promises it
@@ -61,6 +61,8 @@ fn the_public_names_resolve_at_the_crate_root() {
     nameable::<InviteOptions>();
     nameable::<InviteOutcome>();
     nameable::<InviteRefusal>();
+    nameable::<Paired>();
+    nameable::<PairError>();
 
     // The two entry points. Passed as values rather than ascribed a type:
     // both are `async fn`, so their return is an opaque future no caller
@@ -68,6 +70,7 @@ fn the_public_names_resolve_at_the_crate_root() {
     // enough to fail if either path stops resolving.
     takes_any(modelpipe::serve);
     takes_any(modelpipe::connect);
+    takes_any(modelpipe::pair);
 }
 
 /// `#[non_exhaustive]` forbids a struct literal across a crate boundary, so
