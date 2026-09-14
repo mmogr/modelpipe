@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use common::{MockBackend, within};
-use modelpipe::{ConnectOptions, ServeOptions, TokenPolicy};
+use modelpipe::TokenPolicy;
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use tokio::net::TcpStream;
 
@@ -59,10 +59,8 @@ async fn a_client_that_stops_reading_is_logged_as_gone_and_not_as_a_failure() {
     .expect("the only subscriber in this binary");
 
     let (backend, _) = MockBackend::endless_stream().await;
-    let mut serve_opts = ServeOptions::default();
+    let mut serve_opts = common::serve_options();
     serve_opts.auth = TokenPolicy::Generate;
-    serve_opts.port_mapping = false;
-    serve_opts.discovery = false;
     let serving = within(
         "serve must bind",
         Box::pin(modelpipe::serve(&backend.url, serve_opts)),
@@ -70,9 +68,7 @@ async fn a_client_that_stops_reading_is_logged_as_gone_and_not_as_a_failure() {
     .await
     .expect("serve");
     let token = serving.token().expect("a generated token");
-    let mut connect_opts = ConnectOptions::default();
-    connect_opts.port_mapping = false;
-    connect_opts.discovery = false;
+    let connect_opts = common::connect_options();
     let connected = within(
         "connect must bind",
         Box::pin(modelpipe::connect(&serving.ticket(), connect_opts)),

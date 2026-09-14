@@ -10,23 +10,18 @@ use std::time::Duration;
 use common::{MockBackend, request, within};
 use modelpipe::{
     ConnectOptions, InviteOptions, InviteOutcome, PairError, PairingString, ServeHandle,
-    ServeOptions, TokenPolicy, Unreached,
+    TokenPolicy, Unreached,
 };
 
 const OK_BODY: &str = r#"{"object":"list","data":[]}"#;
 
 fn hermetic() -> ConnectOptions {
-    let mut opts = ConnectOptions::default();
-    opts.port_mapping = false;
-    opts.discovery = false;
-    opts
+    common::connect_options()
 }
 
 async fn listening(backend: &MockBackend) -> ServeHandle {
-    let mut opts = ServeOptions::default();
+    let mut opts = common::serve_options();
     opts.auth = TokenPolicy::Named;
-    opts.port_mapping = false;
-    opts.discovery = false;
     within(
         "serve must bind",
         Box::pin(modelpipe::serve(&backend.url, opts)),

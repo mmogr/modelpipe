@@ -9,6 +9,10 @@
 //! is built on — that restarting the listener rotates the ticket while
 //! rotating the token leaves every pairing intact — because it is a
 //! statement about two live sides, not about either one.
+//!
+//! Every test here builds its options from `common::serve_options` and
+//! `common::connect_options`, with discovery and port mapping off, except the
+//! two that are about those settings. The relay is still reached.
 
 mod common;
 
@@ -27,7 +31,7 @@ async fn paired(
     backend: &MockBackend,
     auth: TokenPolicy,
 ) -> (modelpipe::ServeHandle, modelpipe::ConnectHandle, String) {
-    let mut serve_opts = ServeOptions::default();
+    let mut serve_opts = common::serve_options();
     serve_opts.auth = auth;
     // Boxed: binding an iroh endpoint is a large future, and holding one
     // inline in a test that also holds the connect side pushes the whole
@@ -42,7 +46,7 @@ async fn paired(
     let ticket = serving.ticket();
     let connected = within(
         "connect must bind its local port",
-        Box::pin(modelpipe::connect(&ticket, ConnectOptions::default())),
+        Box::pin(modelpipe::connect(&ticket, common::connect_options())),
     )
     .await
     .expect("connect");
@@ -159,7 +163,7 @@ async fn connect_binds_its_port_without_waiting_for_a_peer_that_is_not_there() {
     let backend = MockBackend::json(200, OK_BODY).await;
     let serving = within(
         "serve",
-        Box::pin(modelpipe::serve(&backend.url, ServeOptions::default())),
+        Box::pin(modelpipe::serve(&backend.url, common::serve_options())),
     )
     .await
     .expect("serve");
@@ -171,7 +175,7 @@ async fn connect_binds_its_port_without_waiting_for_a_peer_that_is_not_there() {
     // and no amount of slow machine turns thirty into five.
     let connected = tokio::time::timeout(
         Duration::from_secs(5),
-        Box::pin(modelpipe::connect(&ticket, ConnectOptions::default())),
+        Box::pin(modelpipe::connect(&ticket, common::connect_options())),
     )
     .await
     .expect("connect must not wait on a dial that will not land")
@@ -467,10 +471,9 @@ async fn each_named_token_admits_and_removing_one_refuses_only_that_device() {
 #[tokio::test]
 async fn the_backend_is_handed_the_edges_bearer_through_a_live_pipe() {
     let backend = MockBackend::json(200, OK_BODY).await;
-    let mut opts = ServeOptions::default();
+    let mut opts = common::serve_options();
     opts.auth = TokenPolicy::Named;
     opts.backend_auth = Some("the-backends-own-key".to_owned());
-    opts.port_mapping = false;
     let serving = within("serve", Box::pin(modelpipe::serve(&backend.url, opts)))
         .await
         .expect("serve");
@@ -478,8 +481,7 @@ async fn the_backend_is_handed_the_edges_bearer_through_a_live_pipe() {
         .add_token("laptop", "sk-laptop".to_owned())
         .expect("a valid name and token");
     let ticket = serving.ticket();
-    let mut copts = ConnectOptions::default();
-    copts.port_mapping = false;
+    let copts = common::connect_options();
     let connected = within("connect", Box::pin(modelpipe::connect(&ticket, copts)))
         .await
         .expect("connect");
@@ -537,7 +539,7 @@ async fn restarting_the_listener_mints_a_ticket_the_old_one_cannot_impersonate()
 
     let first = within(
         "serve",
-        Box::pin(modelpipe::serve(&backend.url, ServeOptions::default())),
+        Box::pin(modelpipe::serve(&backend.url, common::serve_options())),
     )
     .await
     .expect("serve");
@@ -547,7 +549,7 @@ async fn restarting_the_listener_mints_a_ticket_the_old_one_cannot_impersonate()
 
     let second = within(
         "serve again",
-        Box::pin(modelpipe::serve(&backend.url, ServeOptions::default())),
+        Box::pin(modelpipe::serve(&backend.url, common::serve_options())),
     )
     .await
     .expect("serve");
@@ -1036,7 +1038,7 @@ async fn a_listener_restarted_with_a_stored_identity_keeps_its_ticket() {
     let scratch = Scratch::new("identity");
     let key = scratch.join("key");
 
-    let mut first = ServeOptions::default();
+    let mut first = common::serve_options();
     first.identity = Some(key.clone());
     let before = within(
         "serve must bind",
@@ -1047,7 +1049,7 @@ async fn a_listener_restarted_with_a_stored_identity_keeps_its_ticket() {
     let ticket_before = before.ticket();
     before.shutdown().await;
 
-    let mut second = ServeOptions::default();
+    let mut second = common::serve_options();
     second.identity = Some(key.clone());
     let after = within(
         "the restarted listener must bind",
@@ -1075,7 +1077,7 @@ async fn a_listener_restarted_without_one_is_a_different_peer_as_before() {
 
     let before = within(
         "serve must bind",
-        Box::pin(modelpipe::serve(&backend.url, ServeOptions::default())),
+        Box::pin(modelpipe::serve(&backend.url, common::serve_options())),
     )
     .await
     .expect("serve");
@@ -1084,7 +1086,7 @@ async fn a_listener_restarted_without_one_is_a_different_peer_as_before() {
 
     let after = within(
         "serve must bind again",
-        Box::pin(modelpipe::serve(&backend.url, ServeOptions::default())),
+        Box::pin(modelpipe::serve(&backend.url, common::serve_options())),
     )
     .await
     .expect("serve");
@@ -1108,7 +1110,7 @@ async fn an_unusable_identity_refuses_to_serve_at_all() {
     let key = scratch.join("key");
     std::fs::write(&key, "not a key\n").expect("write");
 
-    let mut opts = ServeOptions::default();
+    let mut opts = common::serve_options();
     opts.identity = Some(key);
     let refused = within(
         "serve must refuse rather than hang",
@@ -1741,7 +1743,7 @@ async fn each_side_counts_the_relay_connection_its_own_endpoint_could_not_make()
 #[tokio::test]
 async fn a_live_ticket_says_which_paths_it_carries() {
     let backend = MockBackend::json(200, OK_BODY).await;
-    let mut serve_opts = ServeOptions::default();
+    let mut serve_opts = common::serve_options();
     serve_opts.auth = TokenPolicy::Generate;
     serve_opts.wait_online = Some(Duration::from_secs(20));
     let serving = within(

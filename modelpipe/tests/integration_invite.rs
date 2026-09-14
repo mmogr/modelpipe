@@ -11,8 +11,8 @@ use std::time::Duration;
 
 use common::{MockBackend, request, within};
 use modelpipe::{
-    ConnectHandle, ConnectOptions, InviteOptions, InviteOutcome, InviteRefusal, PAIR_PATH,
-    ServeError, ServeHandle, ServeOptions, TokenPolicy,
+    ConnectHandle, InviteOptions, InviteOutcome, InviteRefusal, PAIR_PATH, ServeError, ServeHandle,
+    TokenPolicy,
 };
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 
@@ -20,10 +20,8 @@ const OK_BODY: &str = r#"{"object":"list","data":[]}"#;
 
 /// A listener over `backend` under `auth`, with discovery and port mapping off.
 async fn listening(backend: &MockBackend, auth: TokenPolicy) -> ServeHandle {
-    let mut opts = ServeOptions::default();
+    let mut opts = common::serve_options();
     opts.auth = auth;
-    opts.port_mapping = false;
-    opts.discovery = false;
     within(
         "serve must bind",
         Box::pin(modelpipe::serve(&backend.url, opts)),
@@ -35,9 +33,7 @@ async fn listening(backend: &MockBackend, auth: TokenPolicy) -> ServeHandle {
 /// A connect side that has reached `serving`, with discovery and port mapping
 /// off.
 async fn dialling(serving: &ServeHandle) -> ConnectHandle {
-    let mut opts = ConnectOptions::default();
-    opts.port_mapping = false;
-    opts.discovery = false;
+    let opts = common::connect_options();
     let connected = within(
         "connect must bind",
         Box::pin(modelpipe::connect(&serving.ticket(), opts)),
