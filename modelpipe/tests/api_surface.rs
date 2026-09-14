@@ -24,7 +24,7 @@ use std::time::Duration;
 use modelpipe::{
     CloseReason, ConnectError, ConnectHandle, ConnectOptions, NetworkMetrics, PairingCode,
     PairingString, PairingStringError, PeerId, PeerIdParseError, PeerView, PipeStatus, ServeError,
-    ServeHandle, ServeOptions, Ticket, TicketParseError, TokenPolicy,
+    ServeHandle, ServeOptions, Ticket, TicketParseError, TokenPolicy, Unreached,
 };
 
 /// Every name the crate promises, reachable at the flat path it promises it
@@ -54,6 +54,7 @@ fn the_public_names_resolve_at_the_crate_root() {
     nameable::<PairingStringError>();
     nameable::<PeerId>();
     nameable::<PeerIdParseError>();
+    nameable::<Unreached>();
 
     // The two entry points. Passed as values rather than ascribed a type:
     // both are `async fn`, so their return is an opaque future no caller
@@ -552,4 +553,15 @@ fn a_dependent_can_keep_a_peer_id_as_text() {
     let refused: PeerIdParseError = "d75a".parse::<PeerId>().unwrap_err();
     assert!(!refused.to_string().is_empty());
     let _: fn(&ConnectHandle) -> PeerId = ConnectHandle::peer_id;
+}
+
+/// A dependent can say why a wait for the serve side ended, and carry it
+/// as an error.
+#[test]
+fn a_dependent_can_read_why_a_wait_for_the_serve_side_ended() {
+    let timed_out = Unreached::TimedOut(Duration::from_secs(40));
+    assert!(timed_out.to_string().contains("40s"), "{timed_out}");
+    let closed = Unreached::Closed(Some(CloseReason::Shutdown));
+    assert!(closed.to_string().contains("shutdown"), "{closed}");
+    let _: &dyn Error = &closed;
 }

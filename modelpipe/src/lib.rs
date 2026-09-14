@@ -95,6 +95,7 @@ mod transport;
 // Orchestration: the two entry points, and the live pipes they return.
 mod connect;
 mod connect_handle;
+mod connect_reach;
 mod network;
 mod serve;
 mod serve_error;
@@ -110,6 +111,7 @@ mod serve_status;
 // this block is the one edit in the crate that cannot be walked back.
 pub use connect::{ConnectError, ConnectOptions, connect};
 pub use connect_handle::ConnectHandle;
+pub use connect_reach::Unreached;
 pub use network::NetworkMetrics;
 pub use pairing_string::{PairingCode, PairingString, PairingStringError};
 pub use peer_id::{PeerId, PeerIdParseError};
@@ -142,6 +144,7 @@ const fn auto_trait_promises() {
     assert::<PeerView>();
     assert::<ServeError>();
     assert::<ConnectError>();
+    assert::<Unreached>();
     assert::<TicketParseError>();
     // A pairing string is parsed on one task and dialled on another, and
     // its error rides through `anyhow` like the ticket's.
@@ -176,6 +179,7 @@ const fn auto_trait_promises() {
     assert_clone::<PairingString>();
     assert_copy_eq::<PipeStatus>();
     assert_copy_eq::<PeerId>();
+    assert_copy_eq::<Unreached>();
     // And the same pair for the metrics snapshot: `Copy` is what the doc
     // means by "holding one in a UI's state costs nothing", and `Eq` is
     // what lets a caller notice that two readings are identical rather
@@ -200,6 +204,7 @@ fn future_promises(serve_side: &ServeHandle, connect_side: &ConnectHandle, ticke
     assert_send(serve_side.shutdown_timeout(Duration::from_secs(0)));
     assert_send(connect_side.status_changed());
     assert_send(connect_side.status_changed_since(PipeStatus::Idle));
+    assert_send(connect_side.wait_reachable(Duration::from_secs(0)));
     assert_send(connect_side.notify_network_change());
     assert_send(connect_side.shutdown());
     assert_send(connect_side.shutdown_timeout(Duration::from_secs(0)));
