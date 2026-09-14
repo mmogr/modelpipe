@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0](https://github.com/mmogr/modelpipe/compare/v0.5.0...v0.6.0) - 2026-09-14
+
+### Added
+
+- *(serve)* a peer's view names its whole endpoint id
+- *(cli)* a device pairs from the command line
+- *(connect)* a device pairs in one call
+- *(serve)* an invite is answered at the edge
+- *(serve)* a named token can be pinned to one endpoint
+- *(serve)* a serve handle says why its listener closed
+- *(connect)* a connect handle can wait until it has reached the serve side
+- *(connect)* a connect side can keep its key, and says who it connects as
+- *(serve)* the listener's peer and connection caps are options
+- *(listener)* the listener bounds how many connections and how many peers it carries
+- *(pairing)* a pairing string has a spec, vectors and a type
+
+### Fixed
+
+- *(serve)* a client that hangs up is not a warning
+- *(body)* a trailer whose name this edge cannot read is dropped, as the comment always said
+- *(body)* the chunk size is trimmed of spaces and tabs only, as a content length is
+- *(http-head)* a folded header line is refused, and the parser is told so explicitly
+- *(http-head)* a request carrying two authorization headers is refused instead of half-read
+
+### Other
+
+- *(pipe)* the integration tests leave discovery and port mapping off
+- *(errors)* the codes the edge writes are published as data
+- *(serve)* [**breaking**] one-time grants are gone
+
 ## [0.5.0](https://github.com/mmogr/modelpipe/compare/v0.4.0...v0.5.0) - 2026-09-10
 
 ### Added
