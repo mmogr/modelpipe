@@ -36,7 +36,9 @@ use crate::framing;
 use crate::head_read;
 use crate::headers;
 use crate::http_head;
+use crate::invite::PAIR_PATH;
 use crate::outcome::Outcome;
+use crate::pair_route;
 use crate::request_body::{self, Carried};
 
 /// How long a peer may take to send a complete request head.
@@ -141,7 +143,9 @@ where
     // 1. The head, bounded. A ticket-holder can open a stream and type
     //    headers; without a bound that is an unbounded allocation for the
     //    price of a connection.
-    let asked = tokio::time::timeout(HEAD_TIMEOUT, head_read::request(stream, Vec::new())).await;
+    // One deadline for the head, and for a pairing request's body after it.
+    let deadline = tokio::time::Instant::now() + HEAD_TIMEOUT;
+    let asked = tokio::time::timeout_at(deadline, head_read::request(stream, Vec::new())).await;
     let Ok(asked) = asked else {
         // Nothing is written back. A peer that never finished asking is not
         // owed an answer, and a reply would only confirm that something is
@@ -168,6 +172,21 @@ where
     let Ok(request_framing) = framing::framing(&head.headers, false) else {
         return refusal::send(stream, refusal::bad_request(), Outcome::BadRequest).await;
     };
+
+    // The pairing route is the edge's own to answer, before admission, and the
+    // backend never sees it: see `pair_route`.
+    if head.target == PAIR_PATH {
+        return pair_route::answer(
+            stream,
+            &head,
+            leftover,
+            request_framing,
+            credential,
+            peer,
+            deadline,
+        )
+        .await;
+    }
 
     // 3. The credential. Still nothing has been sent anywhere.
     let Some(admitted) = credential.admits(http_head::authorization(&head.headers), peer.id) else {
@@ -205,28 +224,7 @@ where
         .await?;
     up_write.flush().await?;
 
-    // The client asked to be told before sending its body, and by here this
-    // edge has decided: the credential passed, the backend took the
-    // connection, and the head is upstream. Nothing left about the request
-    // can change that, so the interim answer is this edge's to give.
-    //
-    // Relaying the backend's own `100` instead would be the strict reading
-    // and the wrong one, because the edge already pushes the body without
-    // waiting for it — so the relay would arrive after the thing it was
-    // meant to unblock. Measured, the same 2 MB POST that curl sends with
-    // `Expect` (it adds the header itself over 1 MB): 1.015s through the
-    // pipe against 0.048s straight at the same backend. The whole second is
-    // curl waiting out its own timeout for a `100` that never came and then
-    // sending anyway.
-    //
-    // Written only on the admitted path, so a 401, a 400 or a 502 is still
-    // the *first* status the client sees. The backend's own interim head is
-    // still skipped by `request_body::final_response`, which is now correct
-    // rather than lossy: the client has already had its answer.
-    if expects_continue {
-        stream.write_all(b"HTTP/1.1 100 Continue\r\n\r\n").await?;
-        stream.flush().await?;
-    }
+    request_body::continue_if_expected(stream, expects_continue).await?;
 
     // 5. The request body out and the response head back, together. The
     //    response is then forwarded frame by frame: `UntilClose` is the

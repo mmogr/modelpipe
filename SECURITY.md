@@ -21,6 +21,19 @@ connect at all; the token gates who can make requests. The token is
 deliberately not inside the ticket, so a leaked ticket alone cannot make a
 request and a leaked token alone cannot reach the listener.
 
+**A pairing code is a one-request credential, answered at the edge.**
+`ServeHandle::invite` holds a new device's key, then a six-digit code that
+redeems for it once, after the embedder arms it. The edge answers
+`/modelpipe/pair` itself, and the backend never sees the request. The bounds
+are the code's whole defence: a code lives at most fifteen minutes, one
+endpoint gets at most ten wrong codes against an invite (three by default)
+before it is locked out of it, and a wrong code from a sixty-fifth endpoint
+ends every live invite. Endpoints are free to mint, so a guesser holding the
+ticket finds a code with a chance of about k(64w + 1)/10^6 per round of k
+invites, and can deny pairing with about 65 handshakes. An invite that burns is
+the sign to retire the address. Every refusal is the same 401, and the code,
+the key and the label are never logged.
+
 **A superseded token is another credential, and it is the loosest one.**
 `ServeHandle::set_token_with_grace` keeps the replaced token admitting requests
 for a window the operator chooses, so a rollout to several clients does not have

@@ -173,6 +173,19 @@ pub(crate) fn incomplete_request() -> Vec<u8> {
     )
 }
 
+/// The 401 for every refused pairing request, whichever step refused it.
+///
+/// One response for all of them, so a guesser cannot tell a wrong code from a
+/// locked-out endpoint, an unarmed code or no invite at all.
+pub(crate) fn pairing_refused() -> Vec<u8> {
+    refusal(
+        "HTTP/1.1 401 Unauthorized",
+        &["WWW-Authenticate: Bearer"],
+        "invalid_pairing_code",
+        "that pairing code was not accepted",
+    )
+}
+
 /// Write a locally synthesized response and return without touching the
 /// backend. Lives with the refusals it sends rather than in `exchange.rs`,
 /// which sits on the file-size budget and is two functions long already.

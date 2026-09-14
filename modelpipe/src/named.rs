@@ -176,6 +176,11 @@ impl Named {
         }
     }
 
+    /// Whether a token is pinned to `peer`.
+    pub(crate) fn pins(&self, peer: PeerId) -> bool {
+        self.read().iter().any(|held| held.pinned == Some(peer))
+    }
+
     /// How many tokens are held, for a `Debug` that reports state and not
     /// secrets.
     pub(crate) fn count(&self) -> usize {

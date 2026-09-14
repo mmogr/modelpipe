@@ -111,6 +111,15 @@ Already have a key you want enforced? `--token-file` and friends are in the
 table below. Tickets have no expiry and no revocation list yet, so treat
 them like keys, not invitations.
 
+Embedding the library and want a new device to *fetch* its key over the
+encrypted hop, instead of a person carrying it? `ServeHandle::invite` holds a
+key for the device and mints a six-digit code that redeems for it once, and
+the edge answers the device's `POST /modelpipe/pair` itself. Store the key,
+`arm` the invite, then show the pairing string, `<ticket>-<code>`. The
+invite's handle says when the code was redeemed, and from which endpoint. The
+exchange, and the odds a guesser has, are in
+[docs/pairing-v0.md](docs/pairing-v0.md).
+
 More than one paired device, and the wish to drop one without touching
 the rest? `TokenPolicy::Named` starts a listener with no token of its own,
 and `ServeHandle::add_token(name, token)` holds one per device; every

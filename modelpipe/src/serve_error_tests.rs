@@ -29,6 +29,7 @@ fn a_user_fixable_serve_error_is_not_retryable() {
             name: "Matt's iPhone".to_owned(),
             reason: NamedTokenRefusal::InvalidName,
         },
+        ServeError::Invite(crate::invite::InviteRefusal::TtlTooLong),
     ] {
         assert!(!e.is_retryable(), "{e} should not be retryable");
     }

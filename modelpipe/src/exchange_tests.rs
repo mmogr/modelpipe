@@ -32,6 +32,7 @@ fn caller() -> Caller {
     Caller {
         id: crate::peer_id::PeerId::from_bytes([0x3c; 32]),
         name: TEST_PEER.into(),
+        at: crate::peer_id::PeerId::from_bytes([0xd7; 32]),
     }
 }
 const OK_RESPONSE: &[u8] =
@@ -1996,4 +1997,67 @@ async fn the_backend_is_handed_the_upstream_bearer_and_never_the_devices() {
         1,
         "exactly one: {sent}"
     );
+}
+
+/// The pairing route is answered by the edge itself, so the backend is never
+/// contacted, and only its exact path is the route: anything else bearing a
+/// code goes through admission and counts no strike.
+#[tokio::test]
+async fn the_pairing_route_never_reaches_the_backend_and_only_its_exact_path_is_it() {
+    let (credential, _) = Credential::new(&TokenPolicy::Named).expect("a usable policy");
+    credential
+        .add_named("dev-0a1b2c3d", "sk-zzq-device-key".to_owned(), None)
+        .expect("held");
+    let registered = credential.invites().register(
+        "dev-0a1b2c3d".to_owned(),
+        "sk-zzq-device-key".to_owned(),
+        std::time::Instant::now() + std::time::Duration::from_mins(2),
+        1,
+    );
+    credential.invites().arm(registered.id);
+    let code = registered.code.as_str().to_owned();
+
+    for target in ["/modelpipe/pair?x=1", "/modelpipe/pair/", "/v1/models"] {
+        let backend = CountingBackend::new(OK_RESPONSE);
+        let seen = posted(&credential, &backend, target, &code).await;
+        assert!(seen.starts_with("HTTP/1.1 401"), "{target}: {seen}");
+        assert!(
+            seen.contains("invalid_api_key"),
+            "{target}: admission's own 401"
+        );
+        assert_eq!(backend.connects(), 0, "{target}");
+    }
+    let backend = CountingBackend::new(OK_RESPONSE);
+    let seen = posted(&credential, &backend, "/modelpipe/pair", &code).await;
+    assert!(seen.starts_with("HTTP/1.1 200"), "{seen}");
+    assert_eq!(backend.connects(), 0, "the route never touches the backend");
+    assert!(
+        matches!(
+            registered.outcome.borrow().clone(),
+            Some(crate::invite::InviteOutcome::Redeemed { .. })
+        ),
+        "and none of the other paths spent the one strike allowed"
+    );
+}
+
+/// `POST` to `target` with an empty body, bearing `code`, and what came back.
+async fn posted(
+    credential: &Credential,
+    backend: &CountingBackend,
+    target: &str,
+    code: &str,
+) -> String {
+    let request = format!(
+        "POST {target} HTTP/1.1\r\nHost: 127.0.0.1:8080\r\nAuthorization: Bearer {code}\r\nContent-Length: 0\r\n\r\n"
+    );
+    let (mut client, mut edge) = duplex(64 * 1024);
+    client.write_all(request.as_bytes()).await.unwrap();
+    client.shutdown().await.unwrap();
+    serve_exchange(&mut edge, credential, backend, &caller())
+        .await
+        .expect("no transport failure");
+    drop(edge);
+    let mut seen = Vec::new();
+    client.read_to_end(&mut seen).await.unwrap();
+    String::from_utf8_lossy(&seen).into_owned()
 }

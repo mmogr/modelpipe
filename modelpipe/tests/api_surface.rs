@@ -22,9 +22,10 @@ use std::error::Error;
 use std::time::Duration;
 
 use modelpipe::{
-    CloseReason, ConnectError, ConnectHandle, ConnectOptions, NetworkMetrics, PairingCode,
-    PairingString, PairingStringError, PeerId, PeerIdParseError, PeerView, PipeStatus, ServeError,
-    ServeHandle, ServeOptions, Ticket, TicketParseError, TokenPolicy, Unreached,
+    CloseReason, ConnectError, ConnectHandle, ConnectOptions, Invite, InviteHandle, InviteOptions,
+    InviteOutcome, InviteRefusal, NetworkMetrics, PairingCode, PairingString, PairingStringError,
+    PeerId, PeerIdParseError, PeerView, PipeStatus, ServeError, ServeHandle, ServeOptions, Ticket,
+    TicketParseError, TokenPolicy, Unreached,
 };
 
 /// Every name the crate promises, reachable at the flat path it promises it
@@ -55,6 +56,11 @@ fn the_public_names_resolve_at_the_crate_root() {
     nameable::<PeerId>();
     nameable::<PeerIdParseError>();
     nameable::<Unreached>();
+    nameable::<Invite>();
+    nameable::<InviteHandle>();
+    nameable::<InviteOptions>();
+    nameable::<InviteOutcome>();
+    nameable::<InviteRefusal>();
 
     // The two entry points. Passed as values rather than ascribed a type:
     // both are `async fn`, so their return is an opaque future no caller
@@ -565,4 +571,37 @@ fn both_handles_say_why_they_closed() {
 fn a_dependent_can_pin_a_token_to_one_endpoint() {
     let _: fn(&ServeHandle, &str, String, PeerId) -> Result<(), ServeError> =
         ServeHandle::add_token_pinned;
+}
+
+/// A device is invited from outside the crate: the options are set by
+/// assignment, the refusal is a permanent `ServeError`, and an outcome is
+/// matched with the arm `#[non_exhaustive]` demands.
+#[test]
+fn a_dependent_can_invite_a_device() {
+    fn how(outcome: &InviteOutcome) -> &'static str {
+        match outcome {
+            InviteOutcome::Redeemed { .. } => "redeemed",
+            InviteOutcome::Expired | InviteOutcome::Withdrawn | InviteOutcome::Burned => {
+                "unredeemed"
+            }
+            _ => "an ending this build does not know",
+        }
+    }
+    fn waited(handle: &InviteHandle) -> Option<InviteOutcome> {
+        handle.ended()
+    }
+
+    assert_eq!(modelpipe::PAIR_PATH, "/modelpipe/pair");
+    let mut opts = InviteOptions::default();
+    opts.ttl = Duration::from_mins(5);
+    opts.wrong_codes = std::num::NonZeroU8::new(5).expect("five is not zero");
+    opts.device = Some("laptop".to_owned());
+    assert!(opts.device.is_some());
+    let _: fn(&ServeHandle, InviteOptions) -> Result<Invite, ServeError> = ServeHandle::invite;
+    let _ = waited;
+
+    let refused = ServeError::Invite(InviteRefusal::TtlTooLong);
+    assert!(!refused.is_retryable());
+    assert!(refused.to_string().contains("fifteen minutes"), "{refused}");
+    assert_eq!(how(&InviteOutcome::Expired), "unredeemed");
 }

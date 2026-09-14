@@ -32,7 +32,7 @@ ticket "-" code
 - The first form says where a machine is. The second is for a first pairing:
   the code is spent once, with the machine the ticket names, for a
   credential of the pairing device's own. How it is spent is the redeem
-  exchange's to specify, not this string's.
+  exchange below.
 - Producers emit the ticket in lower case, as the ticket format requires,
   then `-` and the code.
 - A producer may upper-case the **whole** string for a QR code, for the
@@ -155,3 +155,68 @@ verdict, and asserts that this table lists the same set. The inputs are in
 This table pins the classification, not message text. A parser may attach
 the ticket's own error to a ticket refusal, as the reference implementation
 does.
+
+## The redeem exchange (normative)
+
+A code is spent with the machine the ticket names, through the pipe, in one
+request the serve side's edge answers itself. The backend never sees it.
+
+**Request.** `POST /modelpipe/pair`, with the code as the bearer:
+`Authorization: Bearer 483920`. The body is optional. It is the device's own
+label as UTF-8 text, at most 4096 bytes, framed by `Content-Length`. The
+target is matched exactly, in origin form, so `/modelpipe/pair?x=1` is not
+this route and goes through ordinary admission.
+
+**Order.** The edge takes these steps in this order, and refuses at the first
+that fails.
+
+1. The method is `POST`.
+2. The body is empty, or framed by a `Content-Length` of at most 4096.
+3. The bearer is not a credential the listener already holds, and the
+   connection's endpoint is not one a pinned token names. A device that has
+   paired has no business here, and its key never counts against a code.
+4. A client that asked with `Expect: 100-continue` is told to continue, and the
+   whole body is read. The head and the body share one deadline of thirty
+   seconds, and the body is UTF-8.
+5. The bearer is a live, armed code, and this endpoint is not locked out of
+   it.
+
+**Refusal.** Every refusal, at every step, is the same response: status
+`401 Unauthorized`, `WWW-Authenticate: Bearer`,
+`Content-Type: application/json`, `Connection: close`, and the body
+`{"error":{"message":"that pairing code was not accepted","code":"invalid_pairing_code"}}`.
+What a client can tell apart is when a refusal comes. Steps 1 to 3 refuse
+before any `100 Continue` and before the body is read, which says only whether
+the client's own bearer is a key the listener holds, or its own endpoint is
+pinned. Among the refusals at step 5, a wrong, unarmed, expired or spent code,
+an endpoint locked out, and no invite live, nothing differs.
+
+**Success.** Status `200 OK`, `Content-Type: application/json`,
+`Cache-Control: no-store`, `Connection: close`, and the body
+`{"api_key":"…","device_id":"…","peer":"…"}`. `api_key` is the device's
+credential from then on, presented as its bearer. `device_id` is the name the
+serve side holds it under, and `peer` is the serve side's endpoint id as
+sixty-four hex characters. Every value is from an alphabet that needs no
+escaping. The key is the device's secret, so nothing on either side logs it.
+
+**The label** has control characters and invisible formatting characters
+dropped: the bidirectional overrides and isolates, the zero-width characters,
+the line and paragraph separators and the byte-order mark. It is then cut to
+64 characters and trimmed, and an empty result is no label.
+
+**Strikes.** A wrong code counts one strike against the endpoint that
+presented it. An endpoint with as many strikes as an invite allows (three by
+default, at most ten) is locked out of that invite, and its presentations of
+that invite's code are refused without counting. A code whose invite is not
+armed yet is a wrong code. A request with no bearer, and a bearer on any other
+path, count nothing. The edge tracks 64 endpoints, and a wrong code from a
+sixty-fifth ends every live invite. Strikes are forgotten whenever no invite
+is live. An invite lives at most fifteen minutes.
+
+**The odds.** With `k` invites live and `w` wrong codes allowed, a guesser who
+mints a fresh endpoint whenever one is locked out finds a code before the
+invites burn with a chance of about k(64w + 1)/10^6 per round: 0.019% for one
+invite at the defaults, and 1 − (1 − p)^n over n rounds. Denying pairing costs
+about 65 handshakes. An invite that burns is the sign that someone holding the
+ticket is guessing, and retiring the serve side's identity, and with it the
+ticket, is the remedy.

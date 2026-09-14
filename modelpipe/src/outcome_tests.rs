@@ -18,6 +18,7 @@ const EVERY: &[Outcome] = &[
     Outcome::TimedOut,
     Outcome::BadGateway,
     Outcome::Unfinished,
+    Outcome::Paired,
 ];
 
 /// Two outcomes that log the same word are one outcome, as far as anyone
@@ -74,7 +75,8 @@ fn a_new_variant_cannot_be_added_without_visiting_this_file() {
             | Outcome::BadRequest
             | Outcome::TimedOut
             | Outcome::BadGateway
-            | Outcome::Unfinished => {}
+            | Outcome::Unfinished
+            | Outcome::Paired => {}
         }
     }
 }
