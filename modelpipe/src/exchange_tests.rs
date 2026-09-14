@@ -26,6 +26,14 @@ use crate::token_policy::TokenPolicy;
 const TOKEN: &str = "sk-zzq-the-credential";
 /// The fingerprint the listener would have derived for the peer.
 const TEST_PEER: &str = "3ca82708b995";
+
+/// The endpoint every exchange here arrives from, named `TEST_PEER`.
+fn caller() -> Caller {
+    Caller {
+        id: crate::peer_id::PeerId::from_bytes([0x3c; 32]),
+        name: TEST_PEER.into(),
+    }
+}
 const OK_RESPONSE: &[u8] =
     b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n{}";
 
@@ -124,7 +132,7 @@ async fn exchange(
     let (credential, _) = Credential::new(policy).expect("a usable policy");
     let outcome = tokio::time::timeout(
         std::time::Duration::from_secs(5),
-        serve_exchange(&mut edge, &credential, backend, TEST_PEER),
+        serve_exchange(&mut edge, &credential, backend, &caller()),
     )
     .await
     .expect("the exchange must not hang")
@@ -451,7 +459,7 @@ async fn a_streaming_response_reaches_the_client_frame_by_frame() {
     let fixed = Fixed(Mutex::new(Some(mine)));
     let (credential, _) = Credential::new(&supplied()).expect("a usable token");
     let pump = tokio::spawn(async move {
-        serve_exchange(&mut edge, &credential, &fixed, TEST_PEER)
+        serve_exchange(&mut edge, &credential, &fixed, &caller())
             .await
             .unwrap()
     });
@@ -530,7 +538,7 @@ async fn against_keepalive(request: &[u8], response: &'static str) -> (Outcome, 
     let (credential, _) = Credential::new(&supplied()).expect("a usable token");
     let outcome = tokio::time::timeout(
         std::time::Duration::from_secs(5),
-        serve_exchange(&mut edge, &credential, &backend, TEST_PEER),
+        serve_exchange(&mut edge, &credential, &backend, &caller()),
     )
     .await
     .expect("a keep-alive backend must not hang the exchange")
@@ -644,7 +652,7 @@ async fn a_backend_that_refuses_the_connection_is_reported_as_a_gateway_failure(
     client.shutdown().await.unwrap();
 
     let (credential, _) = Credential::new(&supplied()).expect("a usable token");
-    let outcome = serve_exchange(&mut edge, &credential, &Refusing, TEST_PEER)
+    let outcome = serve_exchange(&mut edge, &credential, &Refusing, &caller())
         .await
         .expect("a refused backend is an answer, not a transport failure");
     assert_eq!(outcome, Outcome::BadGateway);
@@ -752,7 +760,7 @@ async fn a_backend_that_answers_before_reading_the_body_is_still_heard() {
     let (credential, _) = Credential::new(&supplied()).expect("a usable token");
     let outcome = tokio::time::timeout(
         std::time::Duration::from_secs(5),
-        serve_exchange(&mut edge, &credential, &backend, TEST_PEER),
+        serve_exchange(&mut edge, &credential, &backend, &caller()),
     )
     .await
     .expect("the answer is already in hand; waiting on the body is waiting forever")
@@ -791,7 +799,7 @@ async fn a_peer_that_never_finishes_asking_is_timed_out() {
     // `start_paused` advances the clock only when everything is idle, so
     // this resolves the moment the timeout is the only thing left to wait
     // on — no real thirty seconds pass.
-    let outcome = serve_exchange(&mut edge, &credential, &backend, TEST_PEER)
+    let outcome = serve_exchange(&mut edge, &credential, &backend, &caller())
         .await
         .expect("a timeout is not a transport failure");
 
@@ -831,7 +839,7 @@ async fn a_slow_head_that_arrives_in_time_is_served_normally() {
     });
 
     let (credential, _) = Credential::new(&supplied()).expect("a usable token");
-    let outcome = serve_exchange(&mut edge, &credential, &backend, TEST_PEER)
+    let outcome = serve_exchange(&mut edge, &credential, &backend, &caller())
         .await
         .expect("no transport failure");
     assert_eq!(outcome, Outcome::Forwarded);
@@ -1024,7 +1032,7 @@ async fn drive<B: Backend + Sync>(
     let (credential, _) = Credential::new(&supplied()).expect("a usable token");
     let outcome = tokio::time::timeout(
         patience,
-        serve_exchange(&mut edge, &credential, backend, TEST_PEER),
+        serve_exchange(&mut edge, &credential, backend, &caller()),
     )
     .await
     .expect("the exchange must not hang")
@@ -1487,7 +1495,7 @@ async fn a_grant_that_admits_is_logged_without_the_grant() {
     let (mut client, mut edge) = duplex(64 * 1024);
     client.write_all(&request).await.unwrap();
     client.shutdown().await.unwrap();
-    let outcome = serve_exchange(&mut edge, &credential, &backend, TEST_PEER)
+    let outcome = serve_exchange(&mut edge, &credential, &backend, &caller())
         .await
         .expect("no transport failure");
     drop(edge);
@@ -1636,7 +1644,7 @@ async fn logged_failure<B: Backend + Sync>(
     let (credential, _) = Credential::new(&supplied()).expect("a usable token");
     let error = tokio::time::timeout(
         std::time::Duration::from_secs(5),
-        serve_exchange(&mut edge, &credential, backend, TEST_PEER),
+        serve_exchange(&mut edge, &credential, backend, &caller()),
     )
     .await
     .expect("the exchange must not hang")
@@ -1870,7 +1878,7 @@ async fn a_backend_that_was_never_reached_says_so_in_the_body() {
     client.write_all(&authed("GET")).await.unwrap();
     client.shutdown().await.unwrap();
     let (credential, _) = Credential::new(&supplied()).expect("a usable token");
-    let outcome = serve_exchange(&mut edge, &credential, &Refusing, TEST_PEER)
+    let outcome = serve_exchange(&mut edge, &credential, &Refusing, &caller())
         .await
         .unwrap();
     drop(edge);
@@ -1938,7 +1946,7 @@ async fn the_backend_is_told_which_named_token_admitted_and_nothing_when_none_di
     const LAPTOP: &str = "sk-zzq-laptop-sentinel";
     let (credential, _) = Credential::new(&supplied()).expect("a usable policy");
     credential
-        .add_named("laptop", LAPTOP.to_owned())
+        .add_named("laptop", LAPTOP.to_owned(), None)
         .expect("a valid name and token");
 
     for (bearer, expected) in [(LAPTOP, Some("laptop")), (TOKEN, None)] {
@@ -1950,7 +1958,7 @@ async fn the_backend_is_told_which_named_token_admitted_and_nothing_when_none_di
         let (mut client, mut edge) = duplex(64 * 1024);
         client.write_all(&req).await.unwrap();
         client.shutdown().await.unwrap();
-        let outcome = serve_exchange(&mut edge, &credential, &backend, TEST_PEER)
+        let outcome = serve_exchange(&mut edge, &credential, &backend, &caller())
             .await
             .expect("no transport failure");
         drop(edge);
@@ -1991,7 +1999,7 @@ async fn the_backend_is_handed_the_upstream_bearer_and_never_the_devices() {
     const UPSTREAM: &str = "sk-zzq-backend-sentinel";
     let (credential, _) = Credential::new(&TokenPolicy::Named).expect("a usable policy");
     credential
-        .add_named("laptop", LAPTOP.to_owned())
+        .add_named("laptop", LAPTOP.to_owned(), None)
         .expect("a valid name and token");
     assert!(credential.set_upstream(Some(UPSTREAM.to_owned())));
 
@@ -2002,7 +2010,7 @@ async fn the_backend_is_handed_the_upstream_bearer_and_never_the_devices() {
     let (mut client, mut edge) = duplex(64 * 1024);
     client.write_all(&req).await.unwrap();
     client.shutdown().await.unwrap();
-    let outcome = serve_exchange(&mut edge, &credential, &backend, TEST_PEER)
+    let outcome = serve_exchange(&mut edge, &credential, &backend, &caller())
         .await
         .expect("no transport failure");
     drop(edge);

@@ -14,6 +14,7 @@
 //! nothing until the first token is added.
 
 use crate::named::AddRefused;
+use crate::peer_id::PeerId;
 use crate::serve_error::{NamedTokenRefusal, ServeError};
 use crate::serve_handle::ServeHandle;
 
@@ -46,9 +47,43 @@ impl ServeHandle {
     /// # }
     /// ```
     pub fn add_token(&self, name: &str, token: String) -> Result<(), ServeError> {
+        self.hold(name, token, None)
+    }
+
+    /// [`add_token`](Self::add_token), except the token admits only on
+    /// connections from `peer`.
+    ///
+    /// A named token is a bearer credential: copied to another machine, it
+    /// admits from there too. Pinned, it is refused from any endpoint but
+    /// `peer`, as a wrong token would be, and the refusal is logged with the
+    /// name, so a copied key is no use on its own. The price is that the
+    /// device keeps one endpoint: its connect side needs
+    /// [`ConnectOptions::identity`](crate::ConnectOptions#structfield.identity),
+    /// or each restart is a new endpoint the pin refuses.
+    ///
+    /// `peer` is the id the device connects as, which it reads from
+    /// [`ConnectHandle::peer_id`](crate::ConnectHandle::peer_id). A pinned
+    /// token is removed with [`remove_token`](Self::remove_token) like any
+    /// other.
+    ///
+    /// # Errors
+    ///
+    /// The refusals [`add_token`](Self::add_token) makes, for the same
+    /// reasons.
+    pub fn add_token_pinned(
+        &self,
+        name: &str,
+        token: String,
+        peer: PeerId,
+    ) -> Result<(), ServeError> {
+        self.hold(name, token, Some(peer))
+    }
+
+    /// Hold `token` under `name`, pinned to `pinned` when it is given.
+    fn hold(&self, name: &str, token: String, pinned: Option<PeerId>) -> Result<(), ServeError> {
         self.state
             .credential
-            .add_named(name, token)
+            .add_named(name, token, pinned)
             .map_err(|refused| match refused {
                 AddRefused::UnpresentableToken => ServeError::InvalidToken,
                 AddRefused::InvalidName => named(name, NamedTokenRefusal::InvalidName),

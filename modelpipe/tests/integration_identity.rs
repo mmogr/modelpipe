@@ -10,7 +10,7 @@ mod common;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use common::{MockBackend, Scratch, within};
+use common::{MockBackend, Scratch, request, within};
 use modelpipe::{ConnectOptions, PeerId, ServeHandle, ServeOptions, TokenPolicy};
 
 const OK_BODY: &str = r#"{"object":"list","data":[]}"#;
@@ -119,5 +119,67 @@ async fn a_connect_identity_others_can_read_is_refused() {
         "{refused}"
     );
     assert!(!refused.is_retryable());
+    serving.shutdown().await;
+}
+
+/// A token pinned to one connect side admits that side, and is refused from
+/// another that presents the same key: a copied key is no use on its own.
+#[tokio::test]
+async fn a_token_pinned_to_one_connect_side_is_refused_from_another() {
+    const KEY: &str = "sk-zzq-the-laptops-key";
+    let backend = MockBackend::json(200, OK_BODY).await;
+    let mut opts = ServeOptions::default();
+    opts.auth = TokenPolicy::Named;
+    opts.port_mapping = false;
+    opts.discovery = false;
+    let serving = within(
+        "serve must bind",
+        Box::pin(modelpipe::serve(&backend.url, opts)),
+    )
+    .await
+    .expect("serve");
+    let scratch = Scratch::new("pinned-token");
+    let device = within(
+        "the device's connect must bind",
+        Box::pin(modelpipe::connect(
+            &serving.ticket(),
+            hermetic(Some(scratch.join("device"))),
+        )),
+    )
+    .await
+    .expect("connect");
+    let copied = within(
+        "the copy's connect must bind",
+        Box::pin(modelpipe::connect(&serving.ticket(), hermetic(None))),
+    )
+    .await
+    .expect("connect");
+    serving
+        .add_token_pinned("laptop", KEY.to_owned(), device.peer_id())
+        .expect("held");
+    for side in [&device, &copied] {
+        side.wait_reachable(Duration::from_secs(20))
+            .await
+            .expect("both sides reach the serve side");
+    }
+
+    let bearer = format!("Bearer {KEY}");
+    let admitted = within(
+        "the device's request",
+        request(&device.base_url(), "/v1/models", Some(&bearer)),
+    )
+    .await
+    .expect("request");
+    assert!(admitted.starts_with("HTTP/1.1 200"), "{admitted}");
+    let refused = within(
+        "the copy's request",
+        request(&copied.base_url(), "/v1/models", Some(&bearer)),
+    )
+    .await
+    .expect("request");
+    assert!(refused.starts_with("HTTP/1.1 401"), "{refused}");
+
+    device.shutdown().await;
+    copied.shutdown().await;
     serving.shutdown().await;
 }

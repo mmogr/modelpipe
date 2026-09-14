@@ -572,3 +572,10 @@ fn both_handles_say_why_they_closed() {
     let _: fn(&ServeHandle) -> Option<CloseReason> = ServeHandle::close_reason;
     let _: fn(&ConnectHandle) -> Option<CloseReason> = ConnectHandle::close_reason;
 }
+
+/// A token can be pinned to the endpoint a device connects as.
+#[test]
+fn a_dependent_can_pin_a_token_to_one_endpoint() {
+    let _: fn(&ServeHandle, &str, String, PeerId) -> Result<(), ServeError> =
+        ServeHandle::add_token_pinned;
+}
