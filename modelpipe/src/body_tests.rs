@@ -335,3 +335,41 @@ async fn an_ordinary_chunk_size_is_still_hexadecimal() {
         assert!(String::from_utf8(out).unwrap().contains(body), "{input:?}");
     }
 }
+
+/// A chunk size is trimmed of spaces and tabs only, the whitespace `framing`
+/// trims from a `Content-Length`.
+///
+/// `str::trim` is wider than that: NBSP, U+2028 and a bare LF padding a `5`
+/// framed a five-byte chunk here while the size line went to the next hop
+/// verbatim, for it to read its own way or refuse.
+#[tokio::test]
+async fn a_chunk_size_padded_with_unicode_whitespace_is_refused() {
+    for pad in ["\u{a0}", "\u{2028}", "\n"] {
+        for size in [format!("{pad}5"), format!("5{pad}")] {
+            let input = format!("{size}\r\nhello\r\n0\r\n\r\n");
+            let err = run(b"", input.as_bytes(), Framing::Chunked)
+                .await
+                .expect_err("must be refused");
+            assert!(
+                err.to_string().contains("hexadecimal"),
+                "{size:?} gave {err}"
+            );
+        }
+    }
+}
+
+/// The negative control: a space or a tab is whitespace this edge accepts
+/// around a chunk size, as it does around a `Content-Length`, and the line
+/// it pads still frames and goes on exactly as it came. The leniency is
+/// this edge's: RFC 9112 §7.1 allows it only between the size and a `;`.
+#[tokio::test]
+async fn a_chunk_size_with_a_tab_is_still_read() {
+    for size in ["5 ", " 5", "5 ;name=value", "5\t", "\t5", "5\t;name=value"] {
+        let input = format!("{size}\r\nhello\r\n0\r\n\r\n");
+        let (n, out) = run(b"", input.as_bytes(), Framing::Chunked)
+            .await
+            .unwrap_or_else(|e| panic!("{size:?} must frame: {e}"));
+        assert_eq!(n, 5, "{size:?}");
+        assert_eq!(out, input.as_bytes(), "{size:?} was rewritten");
+    }
+}
