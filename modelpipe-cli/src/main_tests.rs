@@ -7,7 +7,10 @@
 
 use clap::Parser as _;
 
-use super::{Cli, Ticket, TokenPolicy, qr, token_line, token_policy, undialable};
+use modelpipe::Ticket;
+
+use super::{Cli, TokenPolicy};
+use crate::serve_out::{qr, token_line, token_policy, undialable};
 
 /// Vector 1 from `docs/ticket-format-v0.md`: an endpoint id and no
 /// addresses at all — the shape `--relay-only` mints on a host that reached
@@ -352,4 +355,48 @@ fn the_token_line_aligns_with_the_ticket_line() {
         ticket.find('p'),
         "the value columns must agree: {token:?} vs {ticket:?}"
     );
+}
+
+/// `--invite` and `--devices` mean something only beside `--named`, and
+/// `--named` holds no token for everybody, so it refuses one.
+#[test]
+fn the_pairing_flags_need_named_and_named_refuses_a_token() {
+    const SERVE: [&str; 3] = ["modelpipe", "serve", "http://127.0.0.1:11434"];
+    for flags in [&["--invite"][..], &["--devices", "devices"][..]] {
+        let mut args = SERVE.to_vec();
+        args.extend_from_slice(flags);
+        assert!(
+            Cli::try_parse_from(&args).is_err(),
+            "{flags:?} without --named"
+        );
+        args.push("--named");
+        assert!(Cli::try_parse_from(&args).is_ok(), "{flags:?} with --named");
+    }
+    for flags in [
+        &["--token", "k"][..],
+        &["--token-file", "f"][..],
+        &["--insecure-no-auth"][..],
+    ] {
+        let mut args = SERVE.to_vec();
+        args.push("--named");
+        args.extend_from_slice(flags);
+        assert!(
+            Cli::try_parse_from(&args).is_err(),
+            "--named with {flags:?}"
+        );
+    }
+    let connect = Cli::try_parse_from([
+        "modelpipe",
+        "connect",
+        "pipeticket-483920",
+        "--name",
+        "Laptop",
+        "--identity",
+        "key",
+    ])
+    .expect("connect takes a label and an identity");
+    assert!(matches!(
+        connect.command,
+        super::Command::Connect { name: Some(ref n), identity: Some(_), .. } if n == "Laptop"
+    ));
 }

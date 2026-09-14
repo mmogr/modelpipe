@@ -72,6 +72,25 @@ pub(crate) enum Command {
         /// Read the bearer token from this file, trimming trailing newline
         #[arg(long, conflicts_with_all = ["insecure_no_auth", "token"])]
         token_file: Option<PathBuf>,
+        /// Hold a key per device instead of one token for everybody
+        ///
+        /// No token is generated or printed. Pair a device with --invite, and
+        /// keep paired devices across restarts with --devices.
+        #[arg(long, conflicts_with_all = ["insecure_no_auth", "token", "token_file"])]
+        named: bool,
+        /// Print a pairing string that a device redeems once for its own key
+        ///
+        /// The ticket, a dash and a six-digit code. The code works once, for
+        /// two minutes, and serve says on stderr how it ended. Needs --named.
+        #[arg(long, requires = "named")]
+        invite: bool,
+        /// Keep paired devices' keys in this file, so a restart admits them
+        ///
+        /// One device per line, its name and its key. Created on first use,
+        /// readable only by you, and refused if others can read it. Needs
+        /// --named.
+        #[arg(long, value_name = "FILE", requires = "named")]
+        devices: Option<PathBuf>,
         /// Accept a backend on a private (RFC 1918) address, not just loopback
         #[arg(long)]
         allow_private_backend: bool,
@@ -119,8 +138,18 @@ pub(crate) enum Command {
     },
     /// Bind a local port that is the remote server
     Connect {
-        /// Pairing ticket printed by `serve`
+        /// Pairing ticket printed by `serve`, or a pairing string to pair with
         ticket: String,
+        /// What this device calls itself when it pairs; the serve side shows it
+        #[arg(long, value_name = "LABEL")]
+        name: Option<String>,
+        /// Keep this side's endpoint key here, so the serve side sees the same device
+        ///
+        /// Created on first use, readable only by you. Without it a fresh key
+        /// is generated per run, and a serve side that pins a device's key to
+        /// its endpoint refuses the next one.
+        #[arg(long, value_name = "FILE")]
+        identity: Option<PathBuf>,
         /// Local bind address (default: a free loopback port)
         #[arg(long)]
         bind: Option<std::net::SocketAddr>,
