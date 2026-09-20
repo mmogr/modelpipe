@@ -129,6 +129,71 @@ fn a_file_of_the_wrong_length_is_refused() {
     );
 }
 
+/// An empty file says it is empty, and names what to delete (#103).
+///
+/// A version before 0.7.0 wrote the key in place, so a crash between the
+/// open and the bytes left nothing at a path that then existed. The old
+/// message for that state was "the identity file is not base32", which
+/// sends an operator looking for a corrupted key rather than an empty file.
+///
+/// **Refused rather than replaced**, which is the deliberate half. Minting
+/// over it would mean unlinking a path this process does not own, and two
+/// listeners recovering at once would race: the second would delete the
+/// valid key the first had just written, and the two would serve different
+/// identities. #103 asks for "replaced *or* refused with a message naming
+/// what to delete"; only the second avoids that.
+#[test]
+fn an_empty_identity_file_names_itself_and_the_remedy() {
+    let scratch = Scratch::new("empty");
+    let path = scratch.join("key");
+    fs::write(&path, "").expect("write the interrupted state");
+
+    let refused = load_or_mint(&path).expect_err("an empty file holds no key");
+
+    let said = refused.source.to_string();
+    assert!(said.contains("empty"), "it says what is wrong: {said}");
+    assert!(
+        said.contains(&path.display().to_string()),
+        "and names the file to delete: {said}"
+    );
+}
+
+/// The same for a file holding only whitespace.
+#[test]
+fn an_identity_file_of_only_whitespace_is_refused_the_same_way() {
+    let scratch = Scratch::new("blank");
+    let path = scratch.join("key");
+    fs::write(&path, "\n").expect("write");
+
+    let refused = load_or_mint(&path).expect_err("whitespace holds no key either");
+
+    assert!(refused.source.to_string().contains("empty"));
+}
+
+/// **Nothing here ever removes or replaces a file.** Every refusal leaves
+/// the path exactly as it was found, which is what lets two listeners
+/// start at once without one destroying the other's key.
+#[test]
+fn a_refused_identity_file_is_left_exactly_as_found() {
+    let scratch = Scratch::new("no-clobber");
+    for (name, content) in [
+        ("garbage", "not a key!!!\n"),
+        ("empty", ""),
+        ("blank", "\n"),
+    ] {
+        let path = scratch.join(name);
+        fs::write(&path, content).expect("write");
+
+        load_or_mint(&path).expect_err("refused");
+
+        assert_eq!(
+            fs::read_to_string(&path).expect("still there"),
+            content,
+            "{name} was modified"
+        );
+    }
+}
+
 /// A key others can read is not a secret, and a listener that starts on one
 /// is minting tickets anybody on the machine can mint too. The same refusal
 /// `ssh` makes, and the message says what to do about it.

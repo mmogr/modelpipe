@@ -46,6 +46,7 @@ use std::io;
 use std::path::Path;
 
 use crate::base32;
+use crate::private_file::{self, check_private};
 use crate::{ConnectError, ServeError};
 
 /// Bytes in an endpoint's secret key. Fixed by the curve, not by us.
@@ -66,11 +67,37 @@ pub(crate) const KEY_BYTES: usize = 32;
 /// operator, and retrying it fails the same way.
 pub(crate) fn load_or_mint(path: &Path) -> Result<[u8; KEY_BYTES], Unusable> {
     match fs::read_to_string(path) {
+        // A file with nothing in it holds no key, and now says so instead
+        // of failing as "not base32". This crate can no longer produce
+        // one — writes go through [`private_file::write_new`] — but a
+        // version before 0.7.0 wrote in place, and a crash between the
+        // open and the bytes left exactly this (#103).
+        //
+        // **Refused rather than replaced, deliberately.** Minting over it
+        // means unlinking a path this process does not own, and two
+        // listeners recovering at once would then race: the second
+        // `remove_file` would delete the *valid* key the first had just
+        // written, and the two would serve different identities from one
+        // file. That is precisely the failure [`private_file`] refuses a
+        // rename to avoid, and saving the operator one `rm` is not worth
+        // reintroducing it. So the refusal names the file and the remedy,
+        // which is the other half of what #103 asked for.
+        Ok(stored) if stored.trim().is_empty() => Err(unusable(
+            path,
+            io::Error::other(format!(
+                "the identity file is empty, so it holds no key — delete {} and start again",
+                path.display()
+            )),
+        )),
         Ok(stored) => check_private(path)
             .and_then(|()| parse(&stored))
             .map_err(|why| unusable(path, why)),
         Err(e) if e.kind() == io::ErrorKind::NotFound => {
             let minted = mint();
+            // Atomic, and refuses a file that exists — so two listeners
+            // starting at once resolve the way they always did: one wins,
+            // and the other is told the path is taken rather than quietly
+            // serving a ticket that names a peer nobody is.
             store(path, minted).map_err(|why| unusable(path, why))?;
             Ok(minted)
         }
@@ -105,96 +132,16 @@ fn parse(stored: &str) -> Result<[u8; KEY_BYTES], io::Error> {
     })
 }
 
-/// Write `key` where only this user can read it.
+/// Write `key` where only this user can read it, atomically.
+///
+/// The permissions, the atomicity and the refusal to replace an existing
+/// file all belong to [`private_file::write_new`], which documents why the
+/// last of those rules out a rename.
 fn store(path: &Path, key: [u8; KEY_BYTES]) -> Result<(), io::Error> {
-    use std::io::Write as _;
-
-    let mut file = create_private(path)?;
-    writeln!(file, "{}", base32::encode(&key).to_ascii_lowercase())?;
-    file.flush()
-}
-
-/// Create the file with the key already unreadable to anyone else.
-///
-/// `create_new`, so a race between two listeners starting at once is an
-/// error rather than one of them silently overwriting the other's key —
-/// which would leave the loser serving a ticket nobody holds.
-///
-/// The mode is set **at creation** rather than afterwards. Creating a
-/// world-readable file and then tightening it leaves a window in which the
-/// key is on disk and readable, and a key that was briefly readable is a key
-/// that leaked.
-#[cfg(unix)]
-fn create_private(path: &Path) -> Result<fs::File, io::Error> {
-    use std::os::unix::fs::OpenOptionsExt as _;
-
-    fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .open(path)
-}
-
-/// The same, on a platform with no mode to set.
-///
-/// The file lands with whatever the directory grants, and this crate has no
-/// way to narrow it. Said plainly in `SECURITY.md` rather than papered over:
-/// on Windows, choose a directory only you can read.
-#[cfg(not(unix))]
-fn create_private(path: &Path) -> Result<fs::File, io::Error> {
-    fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(path)
-}
-
-/// Refuse a key anyone else on this machine can read.
-///
-/// The check `ssh` makes on a private key, for the reason it makes it: a
-/// key is only a secret while it is one, and a file that has become
-/// group-readable — restored from a backup, copied with the wrong umask,
-/// left in a shared directory — is a ticket somebody else can mint at any
-/// time, silently, for as long as the file lives.
-///
-/// Refusing is the safe direction and the message says what to do. Unix
-/// only, because there is no mode to inspect elsewhere; see
-/// [`create_private`].
-#[cfg(unix)]
-fn check_private(path: &Path) -> Result<(), io::Error> {
-    use std::os::unix::fs::PermissionsExt as _;
-
-    let mode = fs::metadata(path)?.permissions().mode();
-    // Clippy prefers `trailing_zeros() >= 6` here, and it is the same
-    // predicate. It is also unreadable: `0o077` is the group and other bits
-    // written the way every chmod manual and every reader of this function
-    // writes them, and a bit count is a fact about the number rather than
-    // about the permission. The lint is right that the mask is verbose and
-    // wrong that verbosity is the cost worth cutting.
-    #[expect(clippy::verbose_bit_mask, reason = "0o077 names what it checks")]
-    let private = mode & 0o077 == 0;
-    if private {
-        return Ok(());
-    }
-    Err(io::Error::other(format!(
-        "the identity file is readable by others (mode {:04o}) — chmod 600 it",
-        mode & 0o7777
-    )))
-}
-
-/// The same, where there is no mode to inspect.
-///
-/// The signature is its unix twin's rather than its own: the caller chains
-/// this into a `Result`, and a stub that returned `()` here would make the
-/// call site itself `#[cfg]`-dependent — which is how the two platforms
-/// stop being the same code with one function swapped.
-#[expect(
-    clippy::unnecessary_wraps,
-    clippy::missing_const_for_fn,
-    reason = "the signature belongs to the unix twin, not to this body"
-)]
-#[cfg(not(unix))]
-fn check_private(_path: &Path) -> Result<(), io::Error> {
-    Ok(())
+    private_file::write_new(
+        path,
+        &format!("{}\n", base32::encode(&key).to_ascii_lowercase()),
+    )
 }
 
 /// Thirty-two bytes from the operating system's CSPRNG.
