@@ -35,7 +35,7 @@ pub(crate) struct ConnectState {
 /// Bind the local listener and this side's p2p endpoint.
 ///
 /// **Nothing is dialled here.** Reaching the serve side is
-/// [`crate::peer::keep_connected`]'s, first attempt included, so what comes
+/// [`crate::peer_redial::keep_connected`]'s, first attempt included, so what comes
 /// back is everything `connect` needs to hand out a handle with a port
 /// already answering and no connection behind it yet. A dial at a peer that
 /// is not there takes iroh about thirty seconds to give up on, and that is

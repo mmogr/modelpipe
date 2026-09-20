@@ -82,6 +82,7 @@ mod pairing_string;
 mod path_watch;
 mod peer;
 mod peer_id;
+mod peer_redial;
 mod peers;
 mod private_file;
 mod refusal;

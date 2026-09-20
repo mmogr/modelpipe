@@ -9,7 +9,6 @@ use std::net::SocketAddr;
 
 use crate::connect_handle::ConnectHandle;
 use crate::dialer;
-use crate::peer;
 use crate::ticket::Ticket;
 use crate::transport;
 
@@ -257,7 +256,9 @@ pub async fn connect(ticket: &Ticket, opts: ConnectOptions) -> Result<ConnectHan
     // The dial lives in here, first attempt included. Spawning it rather
     // than awaiting it is the whole of this function's contract: the handle
     // below is handed out with a port already answering.
-    tokio::spawn(async move { peer::keep_connected(&watching.peer, &watching.lifecycle).await });
+    tokio::spawn(async move {
+        crate::peer_redial::keep_connected(&watching.peer, &watching.lifecycle).await;
+    });
     Ok(ConnectHandle::new(state))
 }
 
