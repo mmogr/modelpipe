@@ -7,6 +7,8 @@
 
 use std::time::Duration;
 
+use tokio::time::Instant;
+
 use crate::lifecycle::{Lifecycle, aggregate};
 use crate::path_watch;
 use crate::peer::Peer;
@@ -50,8 +52,9 @@ const RETRY_CEILING: Duration = Duration::from_secs(30);
 /// attempts. It is set for the case where dialling *fails fast*, and the
 /// ceiling is what keeps a peer off for the night from being dialled
 /// thousands of times either way.
-pub(crate) async fn keep_connected(peer: &Peer, lifecycle: &Lifecycle) {
+pub(crate) async fn keep_connected(peer: &Peer, lifecycle: &Lifecycle, nudge: Option<Duration>) {
     let mut backoff = FIRST_RETRY;
+    let mut nudge = Nudge::every(nudge, Instant::now());
     // One line per episode of having nobody, not one per attempt. The first
     // dial's failure is why a freshly returned handle reads `Idle`, and
     // without saying so nothing at default verbosity does — but a serve
@@ -113,6 +116,72 @@ pub(crate) async fn keep_connected(peer: &Peer, lifecycle: &Lifecycle) {
             () = tokio::time::sleep(backoff) => {}
         }
         backoff = (backoff * 2).min(RETRY_CEILING);
+        // After the sleep rather than before the dial, so the very first
+        // attempt — the one a freshly bound handle makes — is never
+        // delayed by it. Only ever reached while there is no connection.
+        if nudge.due(Instant::now()) {
+            tracing::debug!("telling the endpoint the network may have changed");
+            // Raced against the close like every other await in this loop:
+            // iroh's rebind is not instant, and a shutdown arriving during
+            // one would otherwise go unobserved until it returned.
+            tokio::select! {
+                biased;
+                () = lifecycle.wait_until_closed() => return,
+                () = crate::network::notify(&peer.endpoint) => {}
+            }
+        }
+    }
+}
+
+/// When the endpoint is next due to be told the network may have changed.
+///
+/// Its own value rather than two locals in the loop, because it is the
+/// only *policy* here and a policy nothing can exercise is a comment with
+/// a timer attached. Nothing in it touches an endpoint, so its whole
+/// behaviour — including the two ends of the range a caller may set — is
+/// checkable without binding one.
+struct Nudge {
+    every: Option<Duration>,
+    due: Option<Instant>,
+}
+
+impl Nudge {
+    /// Due one interval after `now`, or never when there is no interval.
+    ///
+    /// `now` is an argument rather than a clock read, so the whole of this
+    /// is deterministic in a test.
+    ///
+    /// **`checked_add`, because the interval is a caller's.**
+    /// [`ConnectOptions::idle_network_nudge`](crate::ConnectOptions#structfield.idle_network_nudge)
+    /// is a public field of arbitrary `Duration`, and `Instant + Duration`
+    /// panics on overflow — so `Some(Duration::MAX)`, the obvious spelling
+    /// of "effectively never", would have killed this task before its
+    /// first dial, leaving a pipe that is `Idle` for ever with nothing
+    /// dialling and no error anywhere. An interval that cannot be added is
+    /// treated as the "never" it was reaching for.
+    fn every(every: Option<Duration>, now: Instant) -> Self {
+        Self {
+            every,
+            due: every.and_then(|every| now.checked_add(every)),
+        }
+    }
+
+    /// Whether the endpoint is due to be told, re-arming if it is.
+    ///
+    /// Re-anchored on `now` rather than on the deadline it passed: this is
+    /// polled once per re-dial round, and a round against a peer that is
+    /// simply gone takes as long as iroh needs to give up. Anchoring on
+    /// the deadline would try to catch up on rounds that never had a
+    /// chance to happen.
+    fn due(&mut self, now: Instant) -> bool {
+        let Some(due) = self.due else {
+            return false;
+        };
+        if now < due {
+            return false;
+        }
+        self.due = self.every.and_then(|every| now.checked_add(every));
+        true
     }
 }
 

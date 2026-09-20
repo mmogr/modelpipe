@@ -21,7 +21,10 @@
     )
 )]
 
+use std::time::Duration;
+
 use tokio::sync::watch;
+use tokio::time::Instant;
 
 use crate::status::{CloseReason, PipeStatus};
 
@@ -53,6 +56,14 @@ pub(crate) struct Lifecycle {
     /// anything waits on it: the reason is read after `Closed` has been
     /// observed, never awaited on its own.
     close_reason: watch::Sender<Option<CloseReason>>,
+    /// When the pipe last became [`PipeStatus::Idle`], or `None` when it is
+    /// not — reached, or closed. Read through
+    /// [`ConnectHandle::idle_for`](crate::ConnectHandle::idle_for), whose
+    /// doc states the contract; ADR 0004 argues for it.
+    ///
+    /// A plain `Mutex` because nothing waits on it, and a
+    /// [`tokio::time::Instant`] so a paused-time test can advance it.
+    idle_since: std::sync::Mutex<Option<Instant>>,
 }
 
 /// Held for as long as one exchange is running.
@@ -79,7 +90,21 @@ impl Lifecycle {
             torn_down: watch::Sender::new(false),
             in_flight: watch::Sender::new(0),
             close_reason: watch::Sender::new(None),
+            // Set here, not only in `set_status`: the status above starts
+            // `Idle` by assignment rather than by transition, so a clock
+            // moved only by `set_status` would read `None` for the whole
+            // life of a pipe that never reached its peer.
+            idle_since: std::sync::Mutex::new(Some(Instant::now())),
         }
+    }
+
+    /// How long the pipe has been [`PipeStatus::Idle`], or `None` when it
+    /// is not — reached, or closed.
+    pub(crate) fn idle_for(&self) -> Option<Duration> {
+        self.idle_since
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .map(|since| since.elapsed())
     }
 
     /// Register an exchange as running until the returned guard is dropped.
@@ -125,6 +150,15 @@ impl Lifecycle {
                 false
             } else {
                 *current = next;
+                // Inside the closure, so the clock moves with the status
+                // and only on a *real* transition: a peer that is gone is
+                // re-dialled for ever, and an `Idle` republished over an
+                // `Idle` must not put off the moment it counts as away.
+                *self
+                    .idle_since
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner) =
+                    (next == PipeStatus::Idle).then(Instant::now);
                 true
             }
         });

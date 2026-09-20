@@ -101,6 +101,7 @@ mod transport;
 // Orchestration: the two entry points, and the live pipes they return.
 mod connect;
 mod connect_handle;
+mod connect_idle;
 mod connect_reach;
 mod network;
 mod pair;

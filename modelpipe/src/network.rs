@@ -162,7 +162,7 @@ impl ConnectHandle {
 /// Push the notice in. Written once rather than twice because the two
 /// handles owe the identical promise, and prose that is stated twice is
 /// prose that drifts — the argument [`crate::lifecycle`] opens with.
-async fn notify(endpoint: &Endpoint) {
+pub(crate) async fn notify(endpoint: &Endpoint) {
     endpoint.network_change().await;
 }
 

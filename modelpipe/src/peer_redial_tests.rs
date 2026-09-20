@@ -84,7 +84,7 @@ async fn the_reconnect_loop_makes_the_first_connection_too() {
     // this rather than the loop finishing.
     tokio::time::timeout(PATIENCE, async {
         tokio::select! {
-            () = keep_connected(&peer, &lifecycle) => {}
+            () = keep_connected(&peer, &lifecycle, None) => {}
             () = async {
                 while lifecycle.status() == PipeStatus::Idle {
                     tokio::time::sleep(Duration::from_millis(10)).await;
@@ -126,7 +126,7 @@ async fn a_live_connection_keeps_being_read_by_the_reconnect_loop() {
 
     tokio::time::timeout(PATIENCE, async {
         tokio::select! {
-            () = keep_connected(&peer, &lifecycle) => {}
+            () = keep_connected(&peer, &lifecycle, None) => {}
             () = async {
                 while lifecycle.status() == PipeStatus::Idle {
                     tokio::time::sleep(Duration::from_millis(10)).await;
@@ -141,4 +141,82 @@ async fn a_live_connection_keeps_being_read_by_the_reconnect_loop() {
     })
     .await
     .expect("a live connection must be re-read, not sampled once");
+}
+
+// ── The nudge's pacing ───────────────────────────────────────────────────
+
+/// **The interval is a caller's, so it may be anything.**
+///
+/// `ConnectOptions::idle_network_nudge` is a public field of arbitrary
+/// `Duration`, and `Instant + Duration` panics on overflow. `Duration::MAX`
+/// is the obvious spelling of "effectively never", and before this was
+/// guarded it panicked the reconnect task at construction — before the
+/// first dial, after `connect` had already returned `Ok`. The pipe would
+/// sit `Idle` for ever with nothing dialling it and no error anywhere.
+#[test]
+fn an_interval_too_large_to_add_is_the_never_it_was_reaching_for() {
+    let now = Instant::now();
+    let mut nudge = Nudge::every(Some(Duration::MAX), now);
+
+    assert!(!nudge.due(now), "and it never comes due");
+}
+
+/// No interval is never due, which is what `None` promises a caller that
+/// watches a real path monitor instead.
+#[test]
+fn no_interval_is_never_due() {
+    let now = Instant::now();
+    let mut nudge = Nudge::every(None, now);
+
+    assert!(!nudge.due(now));
+    assert!(!nudge.due(now + Duration::from_mins(59)), "nor much later");
+}
+
+/// Due after the interval and not before, then re-armed for another one.
+#[test]
+fn an_interval_comes_due_once_per_interval() {
+    let start = Instant::now();
+    let mut nudge = Nudge::every(Some(Duration::from_mins(1)), start);
+
+    assert!(!nudge.due(start), "not immediately");
+    assert!(!nudge.due(start + Duration::from_secs(59)), "not early");
+    assert!(nudge.due(start + Duration::from_mins(1)), "due");
+    assert!(
+        !nudge.due(start + Duration::from_secs(61)),
+        "and re-armed rather than staying due"
+    );
+    assert!(nudge.due(start + Duration::from_mins(2)), "due again");
+}
+
+/// **Re-anchored on the moment it fired, not on the deadline it passed.**
+///
+/// This is polled once per re-dial round, and a round against a peer that
+/// is simply gone takes as long as iroh needs to give up — tens of
+/// seconds. Anchoring on the missed deadline would make it due again
+/// immediately, trying to catch up on rounds that never had a chance to
+/// happen.
+#[test]
+fn a_long_round_does_not_make_the_nudge_fire_twice_to_catch_up() {
+    let start = Instant::now();
+    let mut nudge = Nudge::every(Some(Duration::from_mins(1)), start);
+
+    // One round took five minutes, so the deadline passed four times over.
+    assert!(nudge.due(start + Duration::from_mins(5)));
+    assert!(
+        !nudge.due(start + Duration::from_secs(301)),
+        "the backlog is not worked through"
+    );
+    assert!(nudge.due(start + Duration::from_mins(6)), "one interval on");
+}
+
+/// A zero interval is due every round. Bounded by the backoff sleep above
+/// it rather than spinning, but worth pinning as what it does rather than
+/// leaving a caller to find out.
+#[test]
+fn a_zero_interval_is_due_every_round() {
+    let now = Instant::now();
+    let mut nudge = Nudge::every(Some(Duration::ZERO), now);
+
+    assert!(nudge.due(now));
+    assert!(nudge.due(now), "and again, with no time passing");
 }
