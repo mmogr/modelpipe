@@ -72,6 +72,23 @@ pub enum PairError {
     Exchange(std::io::Error),
     /// The serve side answered with something that is not a pairing answer.
     Unexpected(&'static str),
+    /// The serve side answered the pairing request with an HTTP status that
+    /// is not one this exchange defines.
+    ///
+    /// Its own variant rather than an [`Unexpected`](Self::Unexpected)
+    /// sentence because it is the one refusal a caller acts on differently:
+    /// a serve side too old to know [`PAIR_PATH`](crate::PAIR_PATH) answers
+    /// here, and the remedy is to update the other machine rather than to
+    /// check the code. Both embedders were matching the sentence that used
+    /// to carry it, which is not a contract any crate should ask of anyone.
+    ///
+    /// The reason phrase beside the status is deliberately not carried: it
+    /// is text from the far end, and this crate does not hand such text to
+    /// a caller that may print it.
+    UnexpectedStatus {
+        /// The status the serve side answered with.
+        status: u16,
+    },
 }
 
 impl PairError {
@@ -80,7 +97,9 @@ impl PairError {
         match self {
             Self::Connect(e) => e.is_retryable(),
             Self::Unreached(_) | Self::Exchange(_) => true,
-            Self::NoCode | Self::Refused | Self::Unexpected(_) => false,
+            Self::NoCode | Self::Refused | Self::Unexpected(_) | Self::UnexpectedStatus { .. } => {
+                false
+            }
         }
     }
 }
@@ -97,6 +116,18 @@ impl fmt::Display for PairError {
             ),
             Self::Exchange(_) => f.write_str("the pairing code could not be presented, or its answer read"),
             Self::Unexpected(why) => write!(f, "the serve side's answer was not a pairing answer: {why}"),
+            // The remedy is offered for the status it fits and not for the
+            // rest: this arm catches a 503 from a proxy in front of a
+            // current serve side as readily as a 404 from an old one, and
+            // telling that operator to update a machine that is current
+            // sends them at the wrong thing.
+            Self::UnexpectedStatus { status: 404 } => f.write_str(
+                "the serve side answered the pairing request with HTTP 404, which is not a pairing answer: it is likely too old to pair, so update it",
+            ),
+            Self::UnexpectedStatus { status } => write!(
+                f,
+                "the serve side answered the pairing request with HTTP {status}, which is not a pairing answer",
+            ),
         }
     }
 }
@@ -107,7 +138,9 @@ impl std::error::Error for PairError {
             Self::Connect(e) => Some(e),
             Self::Unreached(e) => Some(e),
             Self::Exchange(e) => Some(e),
-            Self::NoCode | Self::Refused | Self::Unexpected(_) => None,
+            Self::NoCode | Self::Refused | Self::Unexpected(_) | Self::UnexpectedStatus { .. } => {
+                None
+            }
         }
     }
 }

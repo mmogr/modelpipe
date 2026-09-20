@@ -144,6 +144,32 @@ fn a_machine_failure_exposes_its_cause_and_nothing_of_the_transport() {
     assert!(e.source().is_none());
 }
 
+/// A pairing answer this exchange does not define is told apart by its
+/// status, from outside the crate and without reading a sentence.
+///
+/// This is the whole contract of the variant. A serve side too old to know
+/// `PAIR_PATH` answers `404`, and the remedy — update the other machine —
+/// differs from every other pairing refusal. Both embedders used to match
+/// the prose that carried it, so the test that matters is that a dependent
+/// can now match the number instead, and that the prose is free to change.
+#[test]
+fn a_dependent_tells_an_old_serve_side_apart_by_status_not_by_prose() {
+    let refused = PairError::UnexpectedStatus { status: 404 };
+
+    let status = match refused {
+        PairError::UnexpectedStatus { status } => status,
+        other => panic!("expected a status refusal, got {other:?}"),
+    };
+    assert_eq!(status, 404);
+
+    assert!(!refused.is_retryable(), "an old serve side is not a wait");
+    assert!(refused.source().is_none(), "there is no underlying failure");
+    assert!(
+        refused.to_string().contains("404"),
+        "and a person still reads the status: {refused}"
+    );
+}
+
 /// Retry classification is public API, not an internal detail — this is the
 /// call a dependent's backoff loop makes.
 #[test]
