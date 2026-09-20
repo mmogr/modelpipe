@@ -106,10 +106,10 @@ pub(crate) const fn admits(locality: Locality, allow_private: bool) -> bool {
         Locality::Loopback => true,
         // The operator's explicit decision, and only theirs.
         Locality::Private => allow_private,
-        // Never, whatever the flag says. `allow_private_backend` widens the
-        // rule to the operator's own network; it is not a general "trust me"
-        // switch, and reading it as one is how the metadata endpoint becomes
-        // reachable.
+        // Never, whatever the permission says. A `BackendUrl` that permits
+        // a private address widens the rule to the operator's own network;
+        // it is not a general "trust me" switch, and reading it as one is
+        // how the metadata endpoint becomes reachable.
         Locality::LinkLocal | Locality::Public | Locality::Unspecified => false,
     }
 }

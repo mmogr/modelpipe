@@ -28,7 +28,8 @@ pub enum ServeError {
     /// Separate from [`BackendNotLocal`](Self::BackendNotLocal), which is a
     /// verdict about an *address*. Reporting these as "not a local address"
     /// was worse than imprecise: it pointed the operator at
-    /// `allow_private_backend`, which fixes none of them, and it said
+    /// [`BackendUrl::allow_private`](crate::BackendUrl::allow_private),
+    /// which fixes none of them, and it said
     /// `https://127.0.0.1:11434` was not local when the objection is the
     /// scheme. Only `http` is accepted, because the hop that matters is
     /// already encrypted by QUIC and accepting `https` would mean either
@@ -50,7 +51,9 @@ pub enum ServeError {
     },
     /// The backend URL resolved, and to no address this listener may dial.
     /// Loopback always passes; RFC 1918 / `fc00::/7` only with
-    /// [`ServeOptions::allow_private_backend`](crate::ServeOptions::allow_private_backend); link-local
+    /// [`BackendUrl::allow_private`](crate::BackendUrl::allow_private), or a
+    /// [`BackendUrl::at`](crate::BackendUrl::at) built from a bind address the
+    /// caller owns; link-local
     /// (`169.254.0.0/16`, `fe80::/10` — where cloud instance metadata
     /// lives) and public addresses, never. The check runs against the
     /// *resolved* address of every outbound connection, not the URL text,

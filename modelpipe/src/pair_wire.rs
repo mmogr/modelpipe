@@ -4,7 +4,7 @@
 //! Apart from [`pair`](fn@crate::pair), the call an embedder makes, and the
 //! errors it answers with. These are the parts a test drives without a pipe.
 
-use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
+use std::net::SocketAddr;
 
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use tokio::net::TcpStream;
@@ -20,19 +20,6 @@ const MAX_ANSWER: u64 = 64 * 1024;
 /// The most of a label this sends, cut at a character boundary. The edge
 /// keeps sixty-four characters of it.
 const MAX_LABEL_BYTES: usize = 4096;
-
-/// The local port as an address a client can dial: a wildcard bind is dialled
-/// on loopback.
-pub(crate) fn dialable(mut addr: SocketAddr) -> SocketAddr {
-    if addr.ip().is_unspecified() {
-        addr.set_ip(if addr.is_ipv4() {
-            Ipv4Addr::LOCALHOST.into()
-        } else {
-            Ipv6Addr::LOCALHOST.into()
-        });
-    }
-    addr
-}
 
 /// Send `request` to this side's local port, and read the whole answer.
 pub(crate) async fn exchange(local: SocketAddr, request: &[u8]) -> std::io::Result<Vec<u8>> {

@@ -54,6 +54,7 @@ use std::time::Duration;
 // Pure: no I/O, no async.
 mod admitted;
 mod backend;
+mod backend_url;
 mod base32;
 mod body;
 mod caller;
@@ -115,6 +116,7 @@ mod serve_status;
 // This block is the public API. Everything above is a private module,
 // free to be rearranged at will; every name below is versioned. Adding to
 // this block is the one edit in the crate that cannot be walked back.
+pub use backend_url::BackendUrl;
 pub use connect::{ConnectError, ConnectOptions, connect};
 pub use connect_handle::ConnectHandle;
 pub use connect_reach::Unreached;
@@ -184,6 +186,7 @@ const fn auto_trait_promises() {
     // effect: a credential source that cannot cross a thread boundary
     // would break every embedder holding the listener in a spawned task.
     assert::<ServeOptions>();
+    assert::<BackendUrl>();
     assert::<ConnectOptions>();
     assert::<TokenPolicy>();
 

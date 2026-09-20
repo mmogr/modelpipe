@@ -63,7 +63,6 @@ async fn main() -> anyhow::Result<()> {
             // `Supplied`, so this is the last point at which the CLI can
             // tell an operator's own credential from one minted here.
             let supplied = matches!(opts.auth, TokenPolicy::Supplied(_));
-            opts.allow_private_backend = allow_private_backend;
             opts.relay = relay;
             let ephemeral = identity.is_none();
             opts.identity = identity;
@@ -75,7 +74,8 @@ async fn main() -> anyhow::Result<()> {
             // To stderr, and before the wait rather than after it, so a
             // terminal that is about to sit still for a moment says why.
             eprintln!("finding a relay…");
-            let mut handle = modelpipe::serve(&backend_url, opts).await?;
+            let mut handle =
+                modelpipe::serve(backend(&backend_url, allow_private_backend), opts).await?;
             let ticket = handle.ticket();
             // Between minting the ticket and printing it, which is the only
             // place the check is worth anything: a person who reads the
@@ -157,3 +157,17 @@ async fn main() -> anyhow::Result<()> {
 #[cfg(test)]
 #[path = "main_tests.rs"]
 mod main_tests;
+
+/// The backend to serve, and whether the operator said it may be private.
+///
+/// The permission rides on the backend rather than on the options: a URL
+/// an operator typed is never self-permitting, so `--allow-private-backend`
+/// is this explicit call and nothing else grants it.
+fn backend(url: &str, allow_private: bool) -> modelpipe::BackendUrl {
+    let backend = modelpipe::BackendUrl::dial(url);
+    if allow_private {
+        backend.allow_private()
+    } else {
+        backend
+    }
+}

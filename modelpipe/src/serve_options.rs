@@ -18,17 +18,12 @@ use crate::token_policy::TokenPolicy;
 /// you need. `#[non_exhaustive]`, so a new option is not a breaking
 /// change for callers who construct it that way.
 #[non_exhaustive]
-// The lint's advice — a state machine, or two-variant enums — is for a
-// struct whose booleans interact. These do not: each one names a separate
-// thing the endpoint does or does not do on the network, they are legal in
-// all sixteen combinations, and the README documents them as four
-// independent switches. Collapsing them into an enum would invent
-// relationships the transport does not have, and every one of them is a
-// `bool` on the CLI too.
-#[expect(
-    clippy::struct_excessive_bools,
-    reason = "independent network switches, not a state machine"
-)]
+// The three remaining booleans do not interact: each names a separate
+// thing the endpoint does or does not do on the network, they are legal
+// in all eight combinations, and the README documents them as
+// independent switches. `struct_excessive_bools` used to fire here and
+// was allowed for that reason; the permission moving onto `BackendUrl`
+// took the fourth away, so the allowance went with it.
 pub struct ServeOptions {
     /// What the listener requires in `Authorization: Bearer …`.
     pub auth: TokenPolicy,
@@ -78,14 +73,6 @@ pub struct ServeOptions {
     /// readable only by its owner, and a listener refuses to start on one
     /// others can read.
     pub identity: Option<std::path::PathBuf>,
-    /// Widen the backend rule to accept a private address as well as
-    /// loopback. Off by default: pointing `serve` into the LAN is a
-    /// decision the operator should make explicitly.
-    ///
-    /// This moves exactly one class and nothing else — link-local and
-    /// public addresses are refused whatever it is set to. The full rule
-    /// is on [`ServeError::BackendNotLocal`](crate::ServeError::BackendNotLocal).
-    pub allow_private_backend: bool,
     /// Wait, up to this long, for the endpoint to reach a relay before
     /// [`serve`](fn@crate::serve) returns.
     ///
@@ -195,7 +182,6 @@ impl Default for ServeOptions {
             backend_auth: None,
             relay: None,
             identity: None,
-            allow_private_backend: false,
             wait_online: None,
             port_mapping: true,
             discovery: true,
@@ -221,7 +207,6 @@ impl fmt::Debug for ServeOptions {
             )
             .field("relay", &self.relay)
             .field("identity", &self.identity)
-            .field("allow_private_backend", &self.allow_private_backend)
             .field("wait_online", &self.wait_online)
             .field("port_mapping", &self.port_mapping)
             .field("discovery", &self.discovery)

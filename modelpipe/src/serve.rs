@@ -8,6 +8,7 @@
 use std::sync::Arc;
 
 use crate::backend::TcpBackend;
+use crate::backend_url::BackendUrl;
 use crate::credential::Credential;
 use crate::identity;
 use crate::listener::{ServeState, accept_loop};
@@ -16,8 +17,16 @@ use crate::serve_handle::ServeHandle;
 use crate::serve_options::ServeOptions;
 use crate::transport;
 
-/// Expose the OpenAI-compatible server at `backend_url` (e.g.
+/// Expose the OpenAI-compatible server at `backend` (e.g.
 /// `http://127.0.0.1:11434`) to holders of the returned handle's ticket.
+///
+/// `backend` is anything that converts into a [`BackendUrl`]. A `&str` or
+/// `String` converts as [`BackendUrl::dial`] does, which never permits a
+/// private address; a caller holding the *bind address* of a server it
+/// started should use [`BackendUrl::at`], which rewrites a wildcard to
+/// loopback and derives that permission. Note that the conversion happens
+/// at a generic parameter, so a type reaching it only by deref — a
+/// `&Cow<'_, str>`, say — needs `.as_ref()`.
 ///
 /// Enforces a bearer token per [`ServeOptions::auth`] — generated at
 /// listen time, or supplied by the caller — and rejects any incoming
@@ -67,7 +76,11 @@ use crate::transport;
 /// `no_run` throughout this crate: these compile, which is what proves the
 /// paths and the signatures, but running one would bind a real endpoint and
 /// contact a discovery service.
-pub async fn serve(backend_url: &str, opts: ServeOptions) -> Result<ServeHandle, ServeError> {
+pub async fn serve<B: Into<BackendUrl>>(
+    backend: B,
+    opts: ServeOptions,
+) -> Result<ServeHandle, ServeError> {
+    let backend = backend.into();
     // Order matters, and it is the order of what the operator can fix. The
     // relay value and the backend URL are theirs; binding an endpoint is the
     // machine's. Checking the cheap, user-fixable things first means a typo
@@ -93,7 +106,7 @@ pub async fn serve(backend_url: &str, opts: ServeOptions) -> Result<ServeHandle,
     // finding out after a listener is up would mean finding out as a ticket
     // that is not the one they expected.
     let key = identity::stored(opts.identity.as_deref())?;
-    let backend = TcpBackend::new(backend_url, opts.allow_private_backend).await?;
+    let backend = TcpBackend::new(backend.url(), backend.permits_private()).await?;
     let net = transport::NetOptions {
         port_mapping: opts.port_mapping,
         discovery: opts.discovery,
