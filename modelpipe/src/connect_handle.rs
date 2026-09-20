@@ -260,11 +260,9 @@ impl Drop for ConnectHandle {
 /// loopback, which is a place the client can actually reach. An IPv6 zone
 /// id is dropped rather than emitted, because no URL parser accepts one.
 pub(crate) fn base_url(addr: SocketAddr) -> String {
-    let host = match addr.ip() {
-        ip if ip.is_unspecified() => match ip {
-            IpAddr::V4(_) => "127.0.0.1".to_owned(),
-            IpAddr::V6(_) => "[::1]".to_owned(),
-        },
+    // The wildcard rewrite is `backend_url`'s, shared with the pairing
+    // exchange and with `BackendUrl::at`, so the three cannot drift.
+    let host = match crate::backend_url::dialable_ip(addr.ip()) {
         IpAddr::V4(v4) => v4.to_string(),
         // Formatting the address rather than the socket address is what
         // drops the zone: `SocketAddrV6`'s own `Display` would include it.

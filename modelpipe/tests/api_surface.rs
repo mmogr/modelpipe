@@ -22,10 +22,10 @@ use std::error::Error;
 use std::time::Duration;
 
 use modelpipe::{
-    CloseReason, ConnectError, ConnectHandle, ConnectOptions, Invite, InviteHandle, InviteOptions,
-    InviteOutcome, InviteRefusal, NetworkMetrics, PairError, Paired, PairingCode, PairingString,
-    PairingStringError, PeerId, PeerIdParseError, PeerView, PipeStatus, ServeError, ServeHandle,
-    ServeOptions, Ticket, TicketParseError, TokenPolicy, Unreached,
+    BackendUrl, CloseReason, ConnectError, ConnectHandle, ConnectOptions, Invite, InviteHandle,
+    InviteOptions, InviteOutcome, InviteRefusal, NetworkMetrics, PairError, Paired, PairingCode,
+    PairingString, PairingStringError, PeerId, PeerIdParseError, PeerView, PipeStatus, ServeError,
+    ServeHandle, ServeOptions, Ticket, TicketParseError, TokenPolicy, Unreached,
 };
 
 /// Every name the crate promises, reachable at the flat path it promises it
@@ -62,13 +62,17 @@ fn the_public_names_resolve_at_the_crate_root() {
     nameable::<InviteOutcome>();
     nameable::<InviteRefusal>();
     nameable::<Paired>();
+    nameable::<BackendUrl>();
     nameable::<PairError>();
 
     // The two entry points. Passed as values rather than ascribed a type:
     // both are `async fn`, so their return is an opaque future no caller
     // can spell, which is itself part of the contract. Naming them here is
     // enough to fail if either path stops resolving.
-    takes_any(modelpipe::serve);
+    // Turbofished because the backend is generic: a `&str` converts
+    // as a plain dial, which is what every existing call site passes.
+    takes_any(modelpipe::serve::<&str>);
+    takes_any(modelpipe::serve::<modelpipe::BackendUrl>);
     takes_any(modelpipe::connect);
     takes_any(modelpipe::pair);
 }
@@ -82,7 +86,6 @@ fn the_options_structs_are_constructible_from_outside() {
     let mut serve_opts = ServeOptions::default();
     serve_opts.auth = TokenPolicy::Supplied("a-token".to_owned());
     serve_opts.relay = Some("https://relay.example.com/".to_owned());
-    serve_opts.allow_private_backend = true;
 
     serve_opts.port_mapping = false;
     serve_opts.discovery = false;
@@ -99,7 +102,6 @@ fn the_options_structs_are_constructible_from_outside() {
     connect_opts.relay_only = true;
 
     assert!(connect_opts.bind.is_some());
-    assert!(serve_opts.allow_private_backend);
     assert!(!connect_opts.discovery && !serve_opts.discovery);
     assert!(connect_opts.relay_only && serve_opts.relay_only);
 }

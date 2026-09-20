@@ -206,22 +206,6 @@ fn the_request_carries_the_code_and_cuts_a_long_label_at_a_character_boundary() 
 }
 
 #[test]
-fn a_wildcard_bind_is_dialled_on_loopback() {
-    assert_eq!(
-        dialable("0.0.0.0:8080".parse().expect("v4")),
-        "127.0.0.1:8080".parse().expect("v4")
-    );
-    assert_eq!(
-        dialable("[::]:8080".parse().expect("v6")),
-        "[::1]:8080".parse().expect("v6")
-    );
-    assert_eq!(
-        dialable("192.168.1.5:8080".parse().expect("v4")),
-        "192.168.1.5:8080".parse().expect("v4")
-    );
-}
-
-#[test]
 fn the_messages_say_what_to_do() {
     assert!(PairError::NoCode.to_string().contains("invite"));
     assert!(PairError::Refused.to_string().contains("new one"));

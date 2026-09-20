@@ -13,10 +13,11 @@
 use std::fmt;
 use std::time::Duration;
 
+use crate::backend_url::dialable;
 use crate::connect::{ConnectError, ConnectOptions, connect};
 use crate::connect_handle::ConnectHandle;
 use crate::connect_reach::Unreached;
-use crate::pair_wire::{dialable, exchange, redeem_request, redeemed};
+use crate::pair_wire::{exchange, redeem_request, redeemed};
 use crate::pairing_string::PairingString;
 use crate::peer_id::PeerId;
 
