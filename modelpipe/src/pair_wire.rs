@@ -80,7 +80,10 @@ pub(crate) fn redeemed(answer: &[u8], serving: PeerId) -> Result<(String, String
                 "the pipe to the serve side dropped before the code arrived",
             )));
         }
-        _ => return Err(PairError::Unexpected("a status other than 200 or 401")),
+        // Carried as a number, not a sentence. A serve side too old to know
+        // this path answers here, and both embedders were matching the
+        // prose that used to say so.
+        other => return Err(PairError::UnexpectedStatus { status: other }),
     }
     let declared = head
         .headers

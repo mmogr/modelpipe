@@ -66,7 +66,6 @@ fn an_answer_that_is_not_a_pairing_answer_is_unexpected() {
             "200 OK",
             &format!("{{\"api_key\":\"K\",\"device_id\":\"d\u{7}\",\"peer\":\"{SERVING_HEX}\"}}"),
         ),
-        answer("404 Not Found", "{}"),
         b"not http at all\r\n\r\n".to_vec(),
     ];
     for case in cases {
@@ -75,6 +74,83 @@ fn an_answer_that_is_not_a_pairing_answer_is_unexpected() {
             matches!(got, Err(PairError::Unexpected(_))),
             "{:?} gave {got:?}",
             String::from_utf8_lossy(&case)
+        );
+    }
+}
+
+/// A status this exchange does not define is carried as a number.
+///
+/// `404` is the one that matters: it is what a serve side too old to know
+/// [`PAIR_PATH`](crate::PAIR_PATH) answers, and the remedy is to update
+/// that machine rather than to check the code. It used to arrive as
+/// `Unexpected("a status other than 200 or 401")`, and both embedders
+/// matched that sentence to tell the two apart.
+#[test]
+fn a_status_this_exchange_does_not_define_is_carried_as_a_number() {
+    for (status, expected) in [
+        ("404 Not Found", 404),
+        ("500 Internal", 500),
+        ("204 No", 204),
+    ] {
+        let got = redeemed(&answer(status, "{}"), serving());
+        assert!(
+            matches!(got, Err(PairError::UnexpectedStatus { status: s }) if s == expected),
+            "{status} gave {got:?}"
+        );
+    }
+}
+
+/// The three statuses this exchange *does* define keep their own answers,
+/// so the variant above cannot quietly swallow a refusal or a lost pipe.
+#[test]
+fn the_defined_statuses_are_not_reported_as_an_unexpected_status() {
+    assert!(matches!(
+        redeemed(&answer("401 Unauthorized", "{}"), serving()),
+        Err(PairError::Refused)
+    ));
+    assert!(matches!(
+        redeemed(&answer("502 Bad Gateway", "{}"), serving()),
+        Err(PairError::Exchange(_))
+    ));
+    // 200 reaches the body checks rather than any status refusal.
+    assert!(matches!(
+        redeemed(&answer("200 OK", "{}"), serving()),
+        Err(PairError::Unexpected(_))
+    ));
+}
+
+/// The status rides in the sentence a person reads, and — for 404 alone —
+/// so does the remedy. Nothing else in this crate will say it for them:
+/// `Display` here is the whole message, since the variant carries no
+/// source.
+///
+/// **The remedy is not offered for the other statuses**, which is the
+/// half worth pinning. This arm catches a 503 from a proxy in front of a
+/// perfectly current serve side just as readily as a 404 from an old one,
+/// and telling that operator to update the other machine sends them at
+/// something that is not wrong.
+#[test]
+fn only_a_404_is_told_to_update_the_other_machine() {
+    let old = redeemed(&answer("404 Not Found", "{}"), serving()).expect_err("refused");
+    let said = old.to_string();
+    assert!(said.contains("404"), "names the status: {said}");
+    assert!(said.contains("update"), "names the remedy: {said}");
+    assert!(
+        !old.is_retryable(),
+        "an old serve side is not a wait-and-retry"
+    );
+    assert!(std::error::Error::source(&old).is_none());
+
+    for status in ["500 Internal", "503 Unavailable", "504 Timeout"] {
+        let other = redeemed(&answer(status, "{}"), serving()).expect_err("refused");
+        let said = other.to_string();
+        assert!(
+            said.contains(&status[..3]),
+            "still names the status: {said}"
+        );
+        assert!(
+            !said.contains("update"),
+            "{status} must not be blamed on an old serve side: {said}"
         );
     }
 }
