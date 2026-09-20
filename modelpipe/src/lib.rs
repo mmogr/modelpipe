@@ -82,6 +82,7 @@ mod path_watch;
 mod peer;
 mod peer_id;
 mod peers;
+mod private_file;
 mod refusal;
 mod request_body;
 mod status;
