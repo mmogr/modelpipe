@@ -438,3 +438,81 @@ async fn a_panicking_exchange_still_releases_its_slot() {
     )
     .await;
 }
+
+// ── The idle clock ───────────────────────────────────────────────────────
+
+/// **A pipe is idle from birth, and the clock says so.**
+///
+/// The status starts `Idle` by assignment rather than by transition, so a
+/// clock set only inside `set_status` would read `None` for the whole life
+/// of a pipe that never reached its peer — which is the case the whole
+/// feature exists for: a daemon started while the far machine is asleep.
+///
+/// Paused time, so this asserts the clock *runs* rather than that a test
+/// machine was slow.
+#[tokio::test(start_paused = true)]
+async fn a_pipe_is_idle_from_birth_and_the_clock_runs() {
+    let life = Lifecycle::new();
+
+    assert_eq!(life.idle_for(), Some(Duration::ZERO), "idle from birth");
+    tokio::time::advance(Duration::from_secs(45)).await;
+    assert_eq!(life.idle_for(), Some(Duration::from_secs(45)));
+}
+
+/// Reaching the peer stops the clock; losing it starts a new one.
+#[tokio::test(start_paused = true)]
+async fn reaching_the_peer_stops_the_clock_and_losing_it_starts_another() {
+    let life = Lifecycle::new();
+    tokio::time::advance(Duration::from_secs(10)).await;
+
+    life.set_status(PipeStatus::Direct);
+    assert_eq!(life.idle_for(), None, "a reached peer is not idle");
+    tokio::time::advance(Duration::from_secs(10)).await;
+    assert_eq!(life.idle_for(), None, "and stays that way");
+
+    life.set_status(PipeStatus::Idle);
+    assert_eq!(life.idle_for(), Some(Duration::ZERO), "a fresh clock");
+    tokio::time::advance(Duration::from_secs(5)).await;
+    assert_eq!(life.idle_for(), Some(Duration::from_secs(5)));
+}
+
+/// **`Idle` republished over `Idle` does not restart the clock.**
+///
+/// A peer that is simply gone is re-dialled for ever, and the loop sets
+/// `Idle` again on each failure. A clock that restarted on every one would
+/// put off being called away indefinitely — which is exactly the bug a
+/// caller's timer is there to avoid.
+#[tokio::test(start_paused = true)]
+async fn a_failed_redial_does_not_restart_the_idle_clock() {
+    let life = Lifecycle::new();
+    tokio::time::advance(Duration::from_secs(20)).await;
+
+    for _ in 0..5 {
+        life.set_status(PipeStatus::Idle);
+        tokio::time::advance(Duration::from_secs(10)).await;
+    }
+
+    assert_eq!(
+        life.idle_for(),
+        Some(Duration::from_secs(70)),
+        "the clock measures the whole absence, not the last attempt"
+    );
+}
+
+/// A closed pipe keeps whatever the clock last said, because `set_status`
+/// refuses to move a closed pipe at all. Nothing reads it there — `Closed`
+/// is its own answer — but it must not panic or reset.
+#[tokio::test(start_paused = true)]
+async fn closing_leaves_the_clock_alone() {
+    let life = Lifecycle::new();
+    life.set_status(PipeStatus::Direct);
+    life.close(CloseReason::Shutdown);
+
+    assert_eq!(life.idle_for(), None);
+    life.set_status(PipeStatus::Idle);
+    assert_eq!(
+        life.idle_for(),
+        None,
+        "a closed pipe does not become idle again"
+    );
+}

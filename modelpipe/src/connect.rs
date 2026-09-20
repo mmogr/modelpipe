@@ -6,12 +6,18 @@
 
 use std::fmt;
 use std::net::SocketAddr;
+use std::time::Duration;
 
 use crate::connect_handle::ConnectHandle;
 use crate::dialer;
-use crate::peer;
 use crate::ticket::Ticket;
 use crate::transport;
+
+/// How often an idle pipe tells its endpoint the network may have changed.
+///
+/// A default rather than a rule: see
+/// [`ConnectOptions::idle_network_nudge`].
+const IDLE_NETWORK_NUDGE: Duration = Duration::from_mins(1);
 
 /// Why [`connect`] failed. Same contract as [`ServeError`](crate::ServeError): variants a
 /// retry policy can match on, transport details behind `source`.
@@ -166,6 +172,28 @@ pub struct ConnectOptions {
     /// as [`ConnectError::Identity`] when others can read it. Keep it apart
     /// from any listener's file, because one key is one endpoint.
     pub identity: Option<std::path::PathBuf>,
+    /// How often, while there is no connection, to tell this endpoint the
+    /// network may have changed. `None` never does.
+    ///
+    /// The re-dial loop does not need this: it keeps dialling on its own,
+    /// and finds a peer that comes back. What it does not fix is the
+    /// *socket underneath*, which a suspend can leave bound to an
+    /// interface that no longer exists — a laptop that changed network
+    /// while its lid was shut is the case. The endpoint rebinds when it
+    /// is told the network moved, and nothing else in this crate tells
+    /// it.
+    ///
+    /// Only ever while idle, so the cost is bounded by how long there is
+    /// nobody to talk to, and the call is harmless when nothing changed.
+    /// A caller that watches the real thing — `NWPathMonitor`,
+    /// `netlink` — should do that instead and set this to `None`; this is
+    /// the floor for a caller that watches nothing.
+    ///
+    /// Once a minute by default — and **a floor, not a period**: it is
+    /// checked once per re-dial round, and a round against a peer that is
+    /// gone lasts as long as the transport takes to give up, so a minute
+    /// means a nudge every minute *or more*.
+    pub idle_network_nudge: Option<Duration>,
 }
 
 impl Default for ConnectOptions {
@@ -173,6 +201,7 @@ impl Default for ConnectOptions {
         Self {
             bind: None,
             relay: None,
+            idle_network_nudge: Some(IDLE_NETWORK_NUDGE),
             port_mapping: true,
             discovery: true,
             relay_only: false,
@@ -247,6 +276,8 @@ pub async fn connect(ticket: &Ticket, opts: ConnectOptions) -> Result<ConnectHan
     if let Some(relay) = opts.relay.as_deref() {
         transport::validate_relay_for_connect(relay)?;
     }
+    // Read before `opts` is borrowed into the bind and then dropped.
+    let nudge = opts.idle_network_nudge;
     let (state, listener) = dialer::bind(ticket, &opts).await?;
     tokio::spawn(dialer::local_loop(state.clone(), listener));
     // The reconnect loop takes the two halves it needs by reference, so
@@ -257,7 +288,9 @@ pub async fn connect(ticket: &Ticket, opts: ConnectOptions) -> Result<ConnectHan
     // The dial lives in here, first attempt included. Spawning it rather
     // than awaiting it is the whole of this function's contract: the handle
     // below is handed out with a port already answering.
-    tokio::spawn(async move { peer::keep_connected(&watching.peer, &watching.lifecycle).await });
+    tokio::spawn(async move {
+        crate::peer_redial::keep_connected(&watching.peer, &watching.lifecycle, nudge).await;
+    });
     Ok(ConnectHandle::new(state))
 }
 

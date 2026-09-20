@@ -100,8 +100,13 @@ fn the_options_structs_are_constructible_from_outside() {
     connect_opts.discovery = false;
     connect_opts.identity = Some(std::path::PathBuf::from("connect_identity"));
     connect_opts.relay_only = true;
+    connect_opts.idle_network_nudge = Some(Duration::from_secs(30));
 
     assert!(connect_opts.bind.is_some());
+    assert_eq!(
+        connect_opts.idle_network_nudge,
+        Some(Duration::from_secs(30))
+    );
     assert!(!connect_opts.discovery && !serve_opts.discovery);
     assert!(connect_opts.relay_only && serve_opts.relay_only);
 }
@@ -120,6 +125,15 @@ fn the_default_options_keep_every_network_contact_on() {
     // measuring switch, and a default that forced every pipe through a
     // relay would be a performance regression nobody asked for.
     assert!(!serve_opts.relay_only && !connect_opts.relay_only);
+    // The one contact this crate makes on its own timer, and it is a
+    // local call rather than a network one — the endpoint decides whether
+    // anything leaves the machine. On by default because the case it
+    // fixes, a socket left on an interface a suspend removed, is silent
+    // and permanent for a caller that watches nothing.
+    assert_eq!(
+        connect_opts.idle_network_nudge,
+        Some(Duration::from_mins(1))
+    );
 }
 
 /// The opacity promise from the crate docs: a caller can walk to the
