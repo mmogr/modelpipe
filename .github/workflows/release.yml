@@ -298,11 +298,30 @@ jobs:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
         run: cargo publish --workspace --locked
 
+      # `--prerelease` for a tag that carries one. `gh release create`
+      # defaults it off, and omits `make_latest` from the request
+      # entirely unless `--latest` is passed — where the REST API then
+      # defaults it to true. So a candidate published without this flag
+      # would not merely be eligible for Latest; it would be put there,
+      # wearing the badge on the releases page and answering
+      # /releases/latest for both crates. `--prerelease` is what makes it
+      # ineligible: drafts and prereleases cannot be latest.
+      # (`--latest=false` would keep this one out too, but it declines
+      # the badge rather than saying what the tag is.) What it does not
+      # do is move the candidate down the releases page; that list is
+      # newest-first either way. The test is the hyphen semver puts
+      # before a prerelease, which is also what this workflow's second
+      # tag pattern matches on.
       - name: Create GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          prerelease=()
+          case "$GITHUB_REF_NAME" in
+            *-*) prerelease=(--prerelease) ;;
+          esac
           gh release create "$GITHUB_REF_NAME" \
             --title "$GITHUB_REF_NAME" \
             --generate-notes \
-            --verify-tag
+            --verify-tag \
+            "${prerelease[@]}"
