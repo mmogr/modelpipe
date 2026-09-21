@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0-rc.1](https://github.com/mmogr/modelpipe/compare/v0.6.0...v0.7.0-rc.1) - 2026-09-21
+
+### Added
+
+- *(connect)* how long a pipe has been idle, and a nudge while it is ([#110](https://github.com/mmogr/modelpipe/pull/110))
+- *(serve)* [**breaking**] the backend carries its own permission to be dialled ([#107](https://github.com/mmogr/modelpipe/pull/107))
+- *(pair)* [**breaking**] a pairing answer's unexpected status is a number, not a sentence ([#106](https://github.com/mmogr/modelpipe/pull/106))
+
+### Fixed
+
+- *(identity)* the endpoint key is written atomically, and an empty one says so ([#105](https://github.com/mmogr/modelpipe/pull/105))
+
+### Other
+
+- *(release)* the version is 0.7.0-rc.1 ([#111](https://github.com/mmogr/modelpipe/pull/111))
+
 ## [0.6.0](https://github.com/mmogr/modelpipe/compare/v0.5.0...v0.6.0) - 2026-09-14
 
 ### Added
