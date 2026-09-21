@@ -70,7 +70,7 @@ pub(crate) fn load_or_mint(path: &Path) -> Result<[u8; KEY_BYTES], Unusable> {
         // A file with nothing in it holds no key, and now says so instead
         // of failing as "not base32". This crate can no longer produce
         // one — writes go through [`private_file::write_new`] — but a
-        // version before 0.7.0 wrote in place, and a crash between the
+        // version before 0.7.0-rc.1 wrote in place, and a crash between the
         // open and the bytes left exactly this (#103).
         //
         // **Refused rather than replaced, deliberately.** Minting over it

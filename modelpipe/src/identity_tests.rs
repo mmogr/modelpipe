@@ -131,7 +131,7 @@ fn a_file_of_the_wrong_length_is_refused() {
 
 /// An empty file says it is empty, and names what to delete (#103).
 ///
-/// A version before 0.7.0 wrote the key in place, so a crash between the
+/// A version before 0.7.0-rc.1 wrote the key in place, so a crash between the
 /// open and the bytes left nothing at a path that then existed. The old
 /// message for that state was "the identity file is not base32", which
 /// sends an operator looking for a corrupted key rather than an empty file.
