@@ -55,7 +55,9 @@ features_always_increment_minor = true
 name = "modelpipe"
 # The one tag for the whole workspace. Both crates inherit
 # [workspace.package] version, so {{ version }} is THE version — and the
-# name matches release.yml's `v[0-9]+.[0-9]+.[0-9]+` trigger.
+# name matches release.yml's tag triggers: `v[0-9]+.[0-9]+.[0-9]+` for an
+# ordinary release, and `v[0-9]+.[0-9]+.[0-9]+-*` for a candidate, which
+# is the one the first pattern cannot match.
 git_tag_enable = true
 git_tag_name = "v{{ version }}"
 changelog_update = true
