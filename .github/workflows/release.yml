@@ -23,9 +23,44 @@
 #      version bump (both sites in Cargo.toml, so ci.yml's drift check stays
 #      green) and the changelog. For a deliberate jump release-plz will not
 #      make on its own (0.0.x → 0.1.0), run `make bump VERSION=0.1.0` in an
-#      ordinary PR first; release-plz respects the hand-set version
+#      ordinary PR first; release-plz carries a hand-set version through only
+#      while EVERY member of this workspace has moved since the last publish,
+#      which is rarer than it sounds — see the paragraph below
 #   2. release-plz pushes the vX.Y.Z tag, which starts this workflow
 #   3. approve the crates-io environment when the publish job asks
+#
+# At least two ordinary cases break that, and in both the tag is pushed by hand.
+# release-plz decides per package, comparing each one's packaged files against
+# what is on crates.io with the version normalised out — so a bumped manifest
+# does not make a package look changed. A package whose files match is recorded
+# `is_version_published: true`, and since both crates here inherit one
+# workspace version, one matching package carries the version up for both,
+# past whatever the manifest says. That is the behaviour it exists to have —
+# one tree published under two numbers is the thing being prevented — so the
+# answer is not to fight it.
+#
+# Measured with release-plz 0.3.160 against this repository while 0.7.0-rc.1
+# was published:
+#
+#   * promoting a candidate that needed no fixes. The release is that
+#     candidate with only its version changed, so both packages match: a hand
+#     bump to 0.7.0 came back 0.7.1, 0.8.0 came back 0.8.1, and 0.7.0-rc.2
+#     came back 0.7.0-rc.3
+#   * a change in the library alone, which is the ordinary shape of a release.
+#     modelpipe-cli still matches, so a hand bump to 0.9.0 came back 0.9.1;
+#     touching both crates and bumping to 0.9.0 came back 0.9.0
+#
+# So, whenever release-plz will not propose the version this workspace is on:
+#
+#   1. `make bump VERSION=X.Y.Z`, plus the changelog by hand, in an ordinary PR
+#   2. `git push origin vX.Y.Z` at that commit on main. Pushing it here rather
+#      than there skips nothing: release-plz only ever pushes the tag, and
+#      everything a tag is checked for happens below whoever pushed it — the
+#      gates in `verify`, and the environment approval on `publish`
+#   3. approve the crates-io environment, as always
+#
+# Leave release-plz's own PR alone throughout; it is a draft proposing the
+# next patch version, and it has nothing to say once the tag exists.
 #
 # Publishing is irreversible: a version can be yanked but never replaced, and
 # the name is claimed forever by the first publish. The `verify` job below is
@@ -63,6 +98,9 @@ jobs:
       # from publishing it. This does. (Pair it with a v* tag ruleset in the
       # repo settings — see the header of this file — so stray tags are
       # stopped at the push, not here.)
+      # "On main" means an ancestor of it, which also admits an intermediate
+      # commit of a merged branch — see the note further down about why the
+      # gates below are repeated rather than assumed.
       - name: Check the tag is on main
         if: github.event_name == 'push'
         run: |
@@ -83,23 +121,27 @@ jobs:
           cache-on-failure: true
 
       # ci.yml triggers on pushes to main and on pull requests, so a tag push
-      # runs none of it. Every gate ci.yml runs is repeated here, so a tag on
-      # a commit CI never saw is still checked; the only piece not repeated
-      # is the cross-OS matrix, which needs runners this job does not have.
+      # runs none of it, and the gates are repeated here so that a tag on a
+      # commit CI never saw is still checked. The cross-OS matrix is the one
+      # piece not repeated; it needs runners this job does not have.
       #
-      # That sentence was false for a while, which is worth recording where
-      # somebody might otherwise trim the list back: `cargo check -p
-      # modelpipe --locked` and the package check were both missing, and the
-      # first has no substitute anywhere else in this file — every other
-      # build here unifies features across the workspace and therefore
-      # cannot see a feature the library uses without declaring.
-      # (What binds the tag to a commit that actually PASSED ci.yml is the
-      # ancestry check above plus branch protection on main, not this job —
-      # and `--is-ancestor` accepts intermediate commits of a merged branch,
-      # which is precisely why the gates are repeated rather than assumed.)
-      # This job exists to be the last point at which nothing is true yet, and
-      # cargo publishes a crate full of `todo!()` exactly as happily as a
-      # working one. Publishing is irreversible; a grep is not.
+      # That has not always been true, and the list is worth checking against
+      # ci.yml rather than trusting this sentence. `cargo check -p modelpipe
+      # --locked` and the package check were both missing once. So, until the
+      # release this comment was rewritten on, was `cargo test -p modelpipe
+      # --all-features` — at that point the only command anywhere that RAN the
+      # library's feature-gated tests rather than merely compiling them, since
+      # clippy builds --all-features and type-checks them without executing
+      # any. Ten tests are behind `serde`, the workspace's only feature: eight
+      # in the lib binary and two in `tests/api_surface.rs`. All three gaps
+      # are closed below; the next one will not announce itself either. (What
+      # binds the tag to a commit that actually PASSED ci.yml is the ancestry
+      # check above plus branch protection on main, not this job — and
+      # `--is-ancestor` accepts intermediate commits of a merged branch, which
+      # is precisely why the gates are repeated rather than assumed.) This job
+      # exists to be the last point at which nothing is true yet, and cargo
+      # publishes a crate full of `todo!()` exactly as happily as a working
+      # one. Publishing is irreversible; a grep is not.
       - name: Refuse to publish unimplemented code
         run: |
           if grep -rn --include='*.rs' -E '\b(todo!|unimplemented!)\(' modelpipe/src modelpipe-cli/src; then
@@ -114,8 +156,9 @@ jobs:
       - name: Validate workflow YAML
         run: ./scripts/check_workflow_yaml.sh
 
-      # The architecture gates, which need no toolchain: the file-size budget
-      # and the ticket vectors. The second is the one that matters most here
+      # The architecture gates, which need no toolchain: the file-size budget,
+      # the ticket vectors, the pairing vectors and the published error codes
+      # — all four of `make enforce`. The vectors are what matter most here
       # — docs/ticket-format-v0.md ships in the published tarball as
       # normative surface that other languages implement against, and nothing
       # else on the path that publishes it checks the page against the
@@ -134,20 +177,33 @@ jobs:
       - name: Run clippy
         run: cargo clippy --all-targets --all-features --locked -- -D warnings
 
-      # The library on its OWN feature set. Every command either side of
-      # this one is `--workspace` or `--all-features`, and those unify
-      # features across members — so a feature the library uses but does not
-      # declare is supplied by modelpipe-cli and the gap stays invisible
-      # right up until somebody depends on `modelpipe` alone. ci.yml has run
-      # this since the day tokio's `rt` turned out to be arriving free from
-      # iroh; it was the one gate the header below claimed to repeat and did
-      # not, on the release that first publishes the library to strangers
-      # and where a wrong manifest cannot be fixed without a new version.
+      # The library alone, on its default features, bodies included. Most
+      # commands in this job are `--workspace` or `--all-features`, and those
+      # unify features across members — so a feature the library uses but does
+      # not declare is supplied by modelpipe-cli and the gap stays invisible
+      # right up until somebody depends on `modelpipe` alone.
+      #
+      # It is not the only step that would catch that, and writing it as
+      # though it were has now been falsified three times over. The publish
+      # dry run at the end of this job builds the packaged library standalone
+      # on default features, bodies and all — a superset, and the comment on
+      # the next step says the same of the packaging guard. What this step
+      # buys is order and cost: it runs early in the job and fails in seconds,
+      # as an ordinary compile error in the library's own code, rather than
+      # about half a job later inside a publish rehearsal. (No step count on
+      # purpose: the one that was here said seven, the neighbour below says
+      # seven of its own position, and only one of them could be right.)
+      #
+      # ci.yml has run this since the day tokio's `rt` turned out to be
+      # arriving free from iroh; it was one of the gates the header above
+      # claimed to repeat and did not, on a release where a wrong manifest
+      # cannot be fixed without burning a version. It was added then, and the
+      # feature-gated tests below were added the same way for the same reason.
       - name: Check the library builds on its own features
         run: cargo check -p modelpipe --locked
 
       # The publishable-metadata guard, also from ci.yml. `cargo publish
-      # --dry-run` below is a superset in practice, but it runs eleven steps
+      # --dry-run` below is a superset in practice, but it runs seven steps
       # later and this one costs seconds: a missing `version` on the path
       # dependency should fail here, with a message about manifests, rather
       # than inside a publish rehearsal.
@@ -156,6 +212,13 @@ jobs:
 
       - name: Run tests
         run: cargo test --workspace --locked --no-fail-fast
+
+      # The library's own features, which --workspace turns none of on. Added
+      # for this release: the header used to claim every gate ci.yml runs was
+      # repeated here, and this was the one that was not — so ten tests were
+      # compiled by clippy and executed by nothing on the path that publishes.
+      - name: Run the library's feature-gated tests
+        run: cargo test -p modelpipe --all-features --locked --no-fail-fast
 
       - name: Check rustdoc has no warnings
         env:

@@ -13,7 +13,17 @@
 #
 # One deliberate gap: release-plz never bumps 0.0.x beyond the patch digit.
 # The 0.0.x → 0.1.0 jump is a human decision — `make bump VERSION=0.1.0` in
-# an ordinary PR; release-plz respects the hand-set version and carries on.
+# an ordinary PR; release-plz carries the hand-set version through and goes
+# on.
+#
+# It carries it only while EVERY package here has moved, though, because it
+# decides per package and both inherit one workspace version: a package whose
+# packaged files match what is on crates.io carries the version up for both,
+# past the manifest. Promoting a release candidate is one such case, and a
+# change that touched one crate and not the other is a second — measured in
+# the library-changed direction; the mechanism is symmetric but the CLI-only
+# direction was not run. Nothing says there is not a third. release.yml's
+# header has the measurements and the hand-pushed tag those take instead.
 name: Release-plz
 
 on:
