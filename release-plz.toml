@@ -3,6 +3,12 @@
 # vX.Y.Z tag. Everything from the tag onward — verify, the crates-io
 # environment approval, cargo publish — belongs to release.yml, which is why
 # publishing and GitHub releases are switched off here.
+#
+# It owns that half only while it will propose the version this workspace
+# wants. When it will not — promoting a candidate, or releasing a change that
+# touched one crate and not the other, at least — the tag is pushed by hand
+# and this file's release PR is left alone. release.yml's header has the
+# measurements.
 
 [workspace]
 # release.yml publishes; release-plz must never run `cargo publish`.

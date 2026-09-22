@@ -1,5 +1,5 @@
 # Every target here is a command, not a file.
-.PHONY: help version build check check-lib test fmt fmt-check lint doc doc-check lock-check package-check enforce workflow-yaml bump dev pre-commit clean
+.PHONY: help version build check check-lib test test-features fmt fmt-check lint doc doc-check lock-check package-check enforce workflow-yaml bump dev pre-commit clean
 
 # Name rustup's shim explicitly rather than relying on PATH order. Sourcing
 # ~/.cargo/env is not sufficient on its own: that script only prepends
@@ -28,8 +28,16 @@ check: ## Check without producing artifacts (fastest feedback loop)
 check-lib: ## Check the library alone, exactly as CI does
 	@# Not redundant with `check`: --workspace unifies features across
 	@# members, so a feature the library uses but does not declare is
-	@# supplied by modelpipe-cli and the gap never shows. This is the only
-	@# command that sees what a downstream user of `modelpipe` alone gets.
+	@# supplied by modelpipe-cli and the gap never shows. This resolves the
+	@# library alone, on its default features, and compiles its bodies — which
+	@# is what a downstream user gets unless they ask for more. Other targets
+	@# overlap it: `test-features` builds the library alone with every feature
+	@# on, and `doc` and `doc-check` build it on the default set through
+	@# rustdoc, which does not type-check bodies. Read this as one place the
+	@# gap surfaces early, not the only one — every attempt to write it as a
+	@# uniqueness claim has been falsified by something else in this
+	@# repository, twice by a target in this file and once by the publish
+	@# dry run in release.yml.
 	$(CARGO) check -p modelpipe --locked
 
 clean: ## Remove build artifacts
@@ -51,6 +59,15 @@ lint: ## Run clippy with warnings denied
 
 test: ## Run tests
 	$(CARGO) test --workspace --no-fail-fast
+
+test-features: ## Run the library's feature-gated tests
+	@# Not redundant with `test`: --workspace unifies features across members
+	@# but turns none of the library's own on, so before this target existed a
+	@# test behind `serde` was compiled by clippy and run by nothing. Ten are
+	@# behind it today. Count them by listing the test binaries with and
+	@# without the features and subtracting — not by grepping for
+	@# `#[cfg(feature`, which has answered this wrong twice.
+	$(CARGO) test -p modelpipe --all-features --no-fail-fast
 
 doc: ## Build and open the library docs
 	$(CARGO) doc -p modelpipe --no-deps --document-private-items --open
@@ -93,8 +110,13 @@ workflow-yaml: ## Validate .github/workflows for duplicate keys
 
 bump: ## Bump the workspace version locally (make bump VERSION=0.1.0)
 	@# Routine bumps belong to release-plz; this is the manual tool for the
-	@# jumps it refuses to make (release-plz never turns 0.0.x into 0.1.0 on
-	@# its own). It does not commit or tag.
+	@# jumps it refuses to make. 0.0.x -> 0.1.0 is the best known and not the
+	@# only one: release-plz also declines to propose the version this
+	@# workspace is on whenever a package's packaged files already match what
+	@# is published, which covers at least promoting a release candidate and
+	@# releasing a change that touched one crate and not the other.
+	@# release.yml's header has the measurements and the hand-pushed tag those
+	@# take. This does not commit or tag.
 	@test -n "$(VERSION)" || { echo "usage: make bump VERSION=0.1.0"; exit 1; }
 	./scripts/bump_version.py "$(VERSION)"
 	$(CARGO) update --workspace
@@ -108,7 +130,7 @@ version: ## Print the current workspace version
 
 dev: fmt lint test ## Format, lint and test
 
-pre-commit: fmt-check lint check check-lib test doc-check lock-check package-check enforce workflow-yaml ## Run everything CI requires
+pre-commit: fmt-check lint check check-lib test test-features doc-check lock-check package-check enforce workflow-yaml ## Run everything CI requires
 	@# fmt-check, not fmt: a check must be able to fail, and must never
 	@# rewrite the tree it is checking. `make dev` is the rewriting loop.
 	@./scripts/bump_version.py --check > /dev/null
