@@ -1,11 +1,14 @@
 # ADR 0002 — A stored endpoint key, opt-in rather than on by default
 
-- **Status:** Accepted
+- **Status:** Accepted; the default it chose is superseded (see below)
 - **Date:** 2026-09-03
 - **Binding on:** the serve side's identity and revocation story
 - **Depends on:** nothing
 - **Supersedes:** nothing
-- **Superseded by:** nothing
+- **Superseded by:** [ADR 0005](0005-state-on-by-default.md), for the
+  default only. The file format, the `0600` creation and the refusal of a
+  readable file all stand; the first change criterion below was met, and
+  0005 records the reading.
 
 `Binding on` says what overturning this costs. Flipping the default later is
 a minor version and a paragraph in `SECURITY.md`; it is cheap in code and

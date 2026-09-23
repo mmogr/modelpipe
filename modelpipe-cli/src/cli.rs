@@ -146,27 +146,29 @@ pub(crate) struct ServeArgs {
     /// Self-hosted relay URL (default: iroh public relays)
     #[arg(long)]
     pub(crate) relay: Option<String>,
-    /// Keep the endpoint key here so the ticket survives a restart
+    /// Keep the endpoint key in this file instead of the state folder
     ///
-    /// Created on first use, readable only by you. Without it a fresh
-    /// key is generated per run, so every restart mints a new ticket
-    /// and every paired device has to be paired again. To revoke a
-    /// leaked ticket, delete this file and restart. Overrides the
-    /// identity in --state-dir.
+    /// Created on first use, readable only by you. To revoke a leaked
+    /// ticket, delete the file and restart: every device then pairs again.
     #[arg(long, value_name = "FILE")]
     pub(crate) identity: Option<PathBuf>,
     /// Keep everything that survives a restart in this folder
     ///
-    /// The endpoint key, and with --named the paired devices, in a folder
+    /// The endpoint key, and with --named the devices record, in a folder
     /// of their own per backend under DIR, created readable only by you.
-    /// One serve at a time holds a backend's folder. --identity and
-    /// --devices each override their file's place in it.
+    /// One serve at a time holds a backend's folder. Unless this says
+    /// otherwise the folder is $XDG_DATA_HOME/modelpipe, or
+    /// ~/.local/share/modelpipe (macOS: ~/Library/Application
+    /// Support/modelpipe). --identity and --devices each override their
+    /// file's place in it.
+    // Backtick-free like the rest: clap prints this verbatim.
+    #[expect(clippy::doc_markdown, reason = "clap help text, not rustdoc")]
     #[arg(long, value_name = "DIR", env = "MODELPIPE_STATE_DIR")]
     pub(crate) state_dir: Option<PathBuf>,
-    /// Keep nothing across restarts: a fresh ticket, and no devices file
+    /// Keep nothing across restarts: a fresh ticket, and no devices record
     ///
-    /// Today's default said out loud, so a script that relies on it keeps
-    /// working when the default changes.
+    /// Restarting is then revocation, as it was before 0.8: every ticket
+    /// handed out names a peer nobody is, and every device pairs again.
     #[arg(long, conflicts_with = "state_dir")]
     pub(crate) no_state: bool,
     /// Do not print a QR code for the ticket
