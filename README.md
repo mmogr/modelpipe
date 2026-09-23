@@ -66,8 +66,11 @@ and a six-digit code. On the device, `modelpipe connect` with the whole
 pairing string redeems the code for that device's own key, prints the base
 URL and then the key, once, and keeps the pipe up. After that, the device
 connects with the ticket alone and uses its key. The code works once, for two
-minutes. `--devices <file>` keeps paired devices' keys across a restart, and
-`--identity <file>` keeps the ticket they paired with.
+minutes. Both halves survive a restart: `serve` keeps its endpoint key and
+the devices record in a folder of its own for that backend, under your data
+directory unless `--state-dir` names another, so a restarted `serve` mints
+the same ticket and admits every device that paired. `--no-state` keeps
+neither.
 
 ### When it says no
 
@@ -111,16 +114,24 @@ reaches your backend. Ollama has no auth of its own
 modelpipe in front of it is the API key it never had. Running open takes a
 flag called `--insecure-no-auth`, and the name is the warning.
 
-Restarting `serve` mints a new ticket and everyone has to re-pair. That's
-revocation, and it's free. If you'd rather pair once, `--identity <file>`
-keeps the endpoint key, so the ticket survives restarts, and revoking it
-becomes `rm`. One catch: the stored key keeps the *name* in the ticket, but
-the addresses beside it still go stale, and finding the new ones is n0's
-discovery service's job — the same service the section on what modelpipe
-contacts is about. Measured with n0's DNS blocked: a restarted listener
-minted the identical ticket, a fresh ticket from it worked, and the old one
-could not reach it at all. The full trade is
-[ADR 0002](docs/adr/0002-a-stored-endpoint-key-opt-in.md).
+The ticket survives a restart. `serve` keeps its endpoint key in a folder of
+its own for the backend — `$XDG_DATA_HOME/modelpipe` or
+`~/.local/share/modelpipe`, `~/Library/Application Support/modelpipe` on
+macOS, and `--state-dir` to put it elsewhere — created readable only by
+you, and it prints `state: <folder>` so you know where. Revoking one device
+is taking its row out of the devices record there; revoking the ticket
+itself is deleting the folder's `identity` file and restarting, after which
+every device pairs again. `--no-state` gives back the old behaviour, where
+every restart mints a new ticket and restarting *is* the revocation; so
+does `--insecure-no-auth` on its own, because a ticket that is the only
+lock there is has no business outliving a restart unasked. One catch: the
+stored key keeps the *name* in the ticket, but the addresses beside it still
+go stale, and finding the new ones is n0's discovery service's job — the
+same service the section on what modelpipe contacts is about. Measured with
+n0's DNS blocked: a restarted listener minted the identical ticket, a fresh
+ticket from it worked, and the old one could not reach it at all. Why the
+default flipped is [ADR 0005](docs/adr/0005-state-on-by-default.md); the
+trade itself is [ADR 0002](docs/adr/0002-a-stored-endpoint-key-opt-in.md).
 
 Already have a key you want enforced? `--token-file` and friends are in the
 table below. Tickets have no expiry and no revocation list yet, so treat
@@ -177,9 +188,9 @@ the client.
 | `--named` | Hold a key per device instead of one token for everybody. Pair devices with `--invite`, and keep them with `--devices`. |
 | `--invite` | With `--named`: print a pairing string, the ticket, a dash and a six-digit code, that a device redeems once, within two minutes, for its own key. Says on stderr how it ended. |
 | `--devices <FILE>` | With `--named`: keep the devices record here, so a restart admits every device that paired. JSON, one row per device ever invited, with when it was invited, when it paired and from which endpoint; a row whose code was never redeemed stays, marked so, and its key is not held again. A file in the older `name key` form is read and rewritten. Created `0600`; refuses to start if others can read it. |
-| `--identity <FILE>` | Keep the endpoint key here so the ticket survives a restart. Created `0600`; refuses to start if others can read it. |
-| `--state-dir <DIR>` | Keep everything that survives a restart under here, in a folder per backend: the endpoint key, and with `--named` the devices file. Created `0700`; refuses a folder others can read into, and refuses to start while another `serve` holds the same backend's folder. Also read from `MODELPIPE_STATE_DIR`. `--identity` and `--devices` each override their file's place in it. |
-| `--no-state` | Keep nothing across restarts: a fresh ticket every run, and no devices file. What `serve` does with neither flag today, said out loud so a script can rely on it. |
+| `--identity <FILE>` | Keep the endpoint key in this file instead of the state folder. Created `0600`; refuses to start if others can read it. |
+| `--state-dir <DIR>` | Keep everything that survives a restart under here instead of the data directory, in a folder per backend: the endpoint key, and with `--named` the devices record. Created `0700`; refuses a folder others can read into, and refuses to start while another `serve` holds the same backend's folder. Also read from `MODELPIPE_STATE_DIR`. `--identity` and `--devices` each override their file's place in it. |
+| `--no-state` | Keep nothing across restarts: a fresh ticket every run, and no devices record. Restarting is then revocation, as it was before 0.8. |
 | `--allow-private-backend` | Accept a backend on a private (RFC 1918 / ULA) address, not only loopback. Link-local is never accepted. |
 | `--relay <URL>` | Use your own relay instead of the public ones. Does **not** disable discovery — see below. |
 | `--no-qr` | Don't print the QR code beside the ticket. |

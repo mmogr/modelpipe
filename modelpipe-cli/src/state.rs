@@ -4,8 +4,8 @@
 //! is handed. The CLI persists two — that key, and the devices file — and
 //! until now each needed its own flag, so a serve that remembered anything
 //! was a serve started with two paths typed by hand. This module is one
-//! folder for both, chosen once: `--state-dir` names it, and a later change
-//! picks a default for it.
+//! folder for both, chosen once: under the platform's data directory unless
+//! `--state-dir` names another, and `--no-state` keeps none.
 //!
 //! One folder per **backend**, under the root: two serves on one machine
 //! fronting two servers share nothing, and neither is refused for the
@@ -14,11 +14,52 @@
 //! serve one ticket from two places, which the library's own file rules go
 //! to some length to prevent.
 
+use std::ffi::OsString;
 use std::fs::{self, File, TryLockError};
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context as _, bail};
+
+/// The folder's own name under the platform's data directory.
+const APP: &str = "modelpipe";
+
+/// The platform's data directory for this program, read from the process's
+/// environment. See [`data_dir_from`] for what is read.
+pub(crate) fn data_dir() -> anyhow::Result<PathBuf> {
+    data_dir_from(|name| std::env::var_os(name))
+}
+
+/// [`data_dir`], with the environment handed in so the tests can say what
+/// is set without touching the process's own.
+///
+/// macOS: `$HOME/Library/Application Support/modelpipe`. Other Unix:
+/// `$XDG_DATA_HOME/modelpipe` when that is set and absolute — the XDG
+/// specification says a relative value is to be ignored — and otherwise
+/// `$HOME/.local/share/modelpipe`. A `HOME` that is unset or empty is an
+/// error rather than a folder relative to wherever this was started: an
+/// identity file inside a repository or a synced folder is the one place it
+/// must not land, and a supervisor that starts this with no `HOME` is
+/// exactly the case that would put it there.
+pub(crate) fn data_dir_from(get: impl Fn(&str) -> Option<OsString>) -> anyhow::Result<PathBuf> {
+    if !cfg!(unix) {
+        bail!("there is no default state folder on this platform: pass --state-dir or --no-state");
+    }
+    let home = match get("HOME") {
+        Some(home) if !home.is_empty() => PathBuf::from(home),
+        _ => bail!(
+            "HOME is not set, so there is nowhere to keep state: pass --state-dir or --no-state"
+        ),
+    };
+    if cfg!(target_os = "macos") {
+        return Ok(home.join("Library").join("Application Support").join(APP));
+    }
+    let base = match get("XDG_DATA_HOME").map(PathBuf::from) {
+        Some(xdg) if xdg.is_absolute() => xdg,
+        _ => home.join(".local").join("share"),
+    };
+    Ok(base.join(APP))
+}
 
 /// The folder name for `url`'s backend: its host and port, and nothing
 /// else, in characters every filesystem takes.

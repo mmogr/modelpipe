@@ -70,28 +70,34 @@ backend allows, not merely run inference. This inverts the usual framing of
 "put a key in front of it" — the key is total.
 
 **A leaked ticket has no expiry and no revocation list.** By default it
-works until the serve process restarts, and restarting is the only
-revocation. Treat tickets like keys, not like invitations. (The token,
-separately, rotates in place without re-pairing.)
+works until you delete the `identity` file in serve's state folder and
+restart, which re-pairs every device; with `--no-state`, or serving open
+with `--insecure-no-auth`, it works until the serve process restarts, and
+restarting is the only revocation. Treat tickets like keys, not like
+invitations. (The token, separately, rotates in place without re-pairing;
+a paired device is revoked on its own by taking its row out of the devices
+record.)
 
-**`--identity` trades that away deliberately, and you should know which
-half.** With a stored endpoint key the ticket survives a restart — which is
-the point, and is also true of a *leaked* ticket. Revocation becomes
-deleting the identity file and restarting, which costs exactly what
-restarting cost before: a re-pairing of every device. What it removes is
-revocation happening by *accident*, which is what a reboot used to be.
+**The endpoint key is on disk by default, and you should know which half
+of the trade that is.** With a stored key the ticket survives a restart —
+which is the point, and is also true of a *leaked* ticket. Revocation costs
+exactly what restarting cost before, a re-pairing of every device, plus one
+`rm`. What persistence removes is revocation happening by *accident*, which
+is what a reboot used to be.
 
-What it adds is a secret on disk, where there was none. modelpipe creates
-the file readable only by its owner and refuses to start on one others can
-read — the check `ssh` makes on a private key — but that is a floor, not a
-guarantee: backups, sync clients, shared home directories and container
-images all copy files that mode bits do not stop. **On Windows there is no
-mode to set or inspect**, so the file lands with whatever the directory
-grants and this crate cannot narrow it; put it somewhere only you can read.
-Why the flag exists and why it is off by default is
-[ADR 0002](docs/adr/0002-a-stored-endpoint-key-opt-in.md).
+What it adds is a secret on disk, where there was none. modelpipe keeps it
+in a folder created readable only by its owner, refuses a folder others can
+read into, and refuses an identity file others can read — the check `ssh`
+makes on a private key — but that is a floor, not a guarantee: backups,
+sync clients, shared home directories and container images all copy files
+that mode bits do not stop. **On Windows there is no mode to set or
+inspect**, so nothing is kept there unless `--state-dir` or `--identity`
+asks for it, and then the file lands with whatever the directory grants and
+this crate cannot narrow it; put it somewhere only you can read. Why the
+default is what it is: [ADR 0005](docs/adr/0005-state-on-by-default.md);
+the trade itself: [ADR 0002](docs/adr/0002-a-stored-endpoint-key-opt-in.md).
 
-One thing `--identity` does *not* buy on its own: reachability. The stored
+One thing a stored key does *not* buy on its own: reachability. The stored
 key fixes the name in the ticket, while the addresses beside it are a
 snapshot of the ports the old process held, so finding the restarted
 listener is discovery's job. Where discovery is unreachable, an old ticket
