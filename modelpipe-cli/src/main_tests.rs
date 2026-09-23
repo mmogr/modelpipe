@@ -401,3 +401,38 @@ fn the_pairing_flags_need_named_and_named_refuses_a_token() {
         super::Command::Connect { name: Some(ref n), identity: Some(_), .. } if n == "Laptop"
     ));
 }
+
+/// One folder or none: the two flags contradict, and the folder is also
+/// read from the environment so a service file can set it once.
+#[test]
+fn the_state_flags_contradict_and_the_folder_is_read_from_the_environment() {
+    use clap::CommandFactory as _;
+    const SERVE: [&str; 3] = ["modelpipe", "serve", "http://127.0.0.1:11434"];
+    let both = [&SERVE[..], &["--state-dir", "s", "--no-state"][..]].concat();
+    assert!(
+        Cli::try_parse_from(&both).is_err(),
+        "--state-dir with --no-state"
+    );
+    let dir =
+        Cli::try_parse_from([&SERVE[..], &["--state-dir", "s"][..]].concat()).expect("a folder");
+    assert!(matches!(
+        dir.command,
+        super::Command::Serve(ServeArgs { state_dir: Some(ref d), no_state: false, .. })
+            if d == std::path::Path::new("s")
+    ));
+    let none = Cli::try_parse_from([&SERVE[..], &["--no-state"][..]].concat()).expect("none");
+    assert!(matches!(
+        none.command,
+        super::Command::Serve(ServeArgs {
+            state_dir: None,
+            no_state: true,
+            ..
+        })
+    ));
+    let help = Cli::command()
+        .find_subcommand_mut("serve")
+        .expect("serve")
+        .render_long_help()
+        .to_string();
+    assert!(help.contains("MODELPIPE_STATE_DIR"), "{help}");
+}
