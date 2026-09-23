@@ -40,6 +40,12 @@ pub(crate) struct Cli {
 pub(crate) enum Command {
     /// Expose a local OpenAI-compatible server; prints a pairing ticket + token
     Serve(ServeArgs),
+    /// Put the Ollama on this machine on your other devices: one word, no flags
+    ///
+    /// serve with a key per device and everything kept across restarts. The
+    /// first run shows a code for your first device; after that, i in the
+    /// window offers a code for one more, l lists them and f forgets one.
+    Ollama(OllamaArgs),
     /// Bind a local port that is the remote server
     Connect {
         /// Pairing ticket printed by `serve`, or a pairing string to pair with
@@ -135,6 +141,10 @@ pub(crate) struct ServeArgs {
     /// time; l lists the devices and f forgets one.
     #[arg(long, requires = "named")]
     pub(crate) invite: bool,
+    /// Offer a code at startup when no device has ever paired: what
+    /// `ollama` means by a first run. Not a flag; `serve` has --invite.
+    #[arg(skip)]
+    pub(crate) invite_if_none: bool,
     /// Keep the devices record in this file, so a restart admits them
     ///
     /// JSON, one row per device ever invited: its key, when it was invited,
@@ -203,4 +213,57 @@ pub(crate) struct ServeArgs {
     /// print rather than hand you a ticket nobody could dial.
     #[arg(long)]
     pub(crate) relay_only: bool,
+}
+
+/// What `ollama` takes: the few things worth choosing when the backend is
+/// Ollama at its usual address and the rest is decided.
+#[derive(clap::Args)]
+pub(crate) struct OllamaArgs {
+    /// Where Ollama listens, if not its default
+    #[arg(long, value_name = "URL", default_value = "http://127.0.0.1:11434")]
+    pub(crate) backend: String,
+    /// Keep the endpoint key and the devices record under this folder
+    ///
+    /// Otherwise the data directory: see modelpipe serve --help.
+    #[arg(long, value_name = "DIR", env = "MODELPIPE_STATE_DIR")]
+    pub(crate) state_dir: Option<PathBuf>,
+    /// Do not print a QR code for the pairing string
+    #[arg(long)]
+    pub(crate) no_qr: bool,
+    /// Self-hosted relay URL (default: iroh public relays)
+    #[arg(long)]
+    pub(crate) relay: Option<String>,
+    /// Do not ask the router for a UPnP/NAT-PMP port mapping
+    #[arg(long)]
+    pub(crate) no_portmap: bool,
+    /// Do not publish this endpoint to, or resolve peers through, n0's
+    /// discovery service
+    #[arg(long)]
+    pub(crate) no_discovery: bool,
+}
+
+impl OllamaArgs {
+    /// The `serve` this stands for: a key per device, the state kept, and a
+    /// code offered at startup when no device has ever paired.
+    pub(crate) fn into_serve(self) -> ServeArgs {
+        ServeArgs {
+            backend_url: self.backend,
+            insecure_no_auth: false,
+            token: None,
+            token_file: None,
+            named: true,
+            invite: false,
+            invite_if_none: true,
+            devices: None,
+            allow_private_backend: false,
+            relay: self.relay,
+            identity: None,
+            state_dir: self.state_dir,
+            no_state: false,
+            no_qr: self.no_qr,
+            no_portmap: self.no_portmap,
+            no_discovery: self.no_discovery,
+            relay_only: false,
+        }
+    }
 }

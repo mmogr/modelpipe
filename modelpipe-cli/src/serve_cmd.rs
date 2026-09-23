@@ -36,6 +36,7 @@ pub(crate) async fn run(args: ServeArgs, interrupt: &mut Interrupt) -> anyhow::R
         relay_only,
         named,
         invite,
+        invite_if_none,
         devices,
         state_dir,
         no_state,
@@ -118,7 +119,7 @@ pub(crate) async fn run(args: ServeArgs, interrupt: &mut Interrupt) -> anyhow::R
     };
     let invited = if named {
         // A key per device, so no token for everybody to print.
-        match pairing::start(&handle, invite, devices.as_deref(), how) {
+        match pairing::start(&handle, invite, invite_if_none, devices.as_deref(), how) {
             Ok(invited) => invited,
             Err(e) => {
                 handle.shutdown().await;
