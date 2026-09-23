@@ -6,6 +6,7 @@
 //! devices file kept in step with each invite, and the lines a person reads.
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use modelpipe::{
     ConnectHandle, ConnectOptions, Invite, InviteHandle, InviteOptions, InviteOutcome, Paired,
@@ -18,7 +19,7 @@ use crate::park::{FIRST_CONTACT, first_contact};
 /// Hold the devices file's keys, and invite one device more when asked. The
 /// pairing string to show, when there is an invite.
 pub(crate) fn start(
-    handle: &ServeHandle,
+    handle: &Arc<ServeHandle>,
     invite: bool,
     file: Option<&Path>,
 ) -> anyhow::Result<Option<String>> {
@@ -45,6 +46,7 @@ pub(crate) fn start(
          pairing string on the device"
     );
     tokio::spawn(watch(
+        Arc::clone(handle),
         invited.handle(),
         invited.device().to_owned(),
         file.map(Path::to_path_buf),
@@ -78,13 +80,25 @@ pub(crate) fn invite_one(handle: &ServeHandle, file: Option<&Path>) -> anyhow::R
 }
 
 /// Say on stderr how the invite ended, and take the key of a device that never
-/// redeemed it back out of the file.
-pub(crate) async fn watch(invite: InviteHandle, device: String, file: Option<PathBuf>) {
+/// redeemed it back out of the listener and out of the file.
+///
+/// The listener first. Withdrawing an invite leaves its key held — the
+/// library says so, and `remove_token` is the call that retires it — so a
+/// watcher that only tidied the file left every expired code's key admitting
+/// until serve restarted, which is a key on record nowhere and a device
+/// nobody can `forget`.
+pub(crate) async fn watch(
+    handle: Arc<ServeHandle>,
+    invite: InviteHandle,
+    device: String,
+    file: Option<PathBuf>,
+) {
     let outcome = invite.outcome().await;
     eprintln!("{}", ended(&outcome));
     if matches!(outcome, InviteOutcome::Redeemed { .. }) {
         return;
     }
+    handle.remove_token(&device);
     if let Some(path) = file
         && let Err(e) = devices::forget(&path, &device)
     {

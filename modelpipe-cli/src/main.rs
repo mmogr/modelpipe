@@ -1,6 +1,8 @@
 //! `modelpipe` CLI: thin face over the library crate. All behavior lives
 //! in `modelpipe`; this file parses arguments and prints.
 
+use std::sync::Arc;
+
 use clap::Parser as _;
 use modelpipe::{ConnectOptions, ServeOptions, TokenPolicy};
 
@@ -74,8 +76,14 @@ async fn main() -> anyhow::Result<()> {
             // To stderr, and before the wait rather than after it, so a
             // terminal that is about to sit still for a moment says why.
             eprintln!("finding a relay…");
-            let mut handle =
-                modelpipe::serve(backend(&backend_url, allow_private_backend), opts).await?;
+            // Shared rather than owned from here on: an invite's watcher
+            // outlives this function's straight line — it ends when the
+            // code does, minutes later, on a task of its own — and it needs
+            // the listener to take the key back. Every call it makes takes
+            // `&self`, so nothing but the sharing changes.
+            let handle = Arc::new(
+                modelpipe::serve(backend(&backend_url, allow_private_backend), opts).await?,
+            );
             let ticket = handle.ticket();
             // Between minting the ticket and printing it, which is the only
             // place the check is worth anything: a person who reads the
@@ -115,7 +123,7 @@ async fn main() -> anyhow::Result<()> {
             if !no_qr && let Some(code) = invited.as_deref().map_or_else(|| qr(&ticket), qr_of) {
                 println!("\n{code}");
             }
-            park(&mut handle, &mut interrupt).await?;
+            park(&*handle, &mut interrupt).await?;
             shut_down(handle.shutdown(), &mut interrupt).await;
         }
         Command::Connect {
