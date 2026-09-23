@@ -133,11 +133,11 @@ pub(crate) struct ServeArgs {
     /// two minutes, and serve says on stderr how it ended. Needs --named.
     #[arg(long, requires = "named")]
     pub(crate) invite: bool,
-    /// Keep paired devices' keys in this file, so a restart admits them
+    /// Keep the devices record in this file, so a restart admits them
     ///
-    /// One device per line, its name and its key. Created on first use,
-    /// readable only by you, and refused if others can read it. Needs
-    /// --named.
+    /// JSON, one row per device ever invited: its key, when it was invited,
+    /// when it paired and from where. Created on first use, readable only
+    /// by you, and refused if others can read it. Needs --named.
     #[arg(long, value_name = "FILE", requires = "named")]
     pub(crate) devices: Option<PathBuf>,
     /// Accept a backend on a private (RFC 1918) address, not just loopback

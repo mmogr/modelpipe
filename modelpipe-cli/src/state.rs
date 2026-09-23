@@ -145,9 +145,9 @@ impl StateDir {
         self.dir.join("identity")
     }
 
-    /// Where paired devices' keys are kept.
+    /// Where the devices record is kept.
     pub(crate) fn devices(&self) -> PathBuf {
-        self.dir.join("devices")
+        self.dir.join("devices.json")
     }
 }
 
