@@ -20,7 +20,7 @@ workspace = true
 
 [dependencies]
 modelpipe = { workspace = true }
-tokio = { workspace = true, features = ["rt-multi-thread", "macros", "signal"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "signal", "sync", "time"] }
 anyhow = { workspace = true }
 clap = { version = "4", features = ["derive", "env"] }
 # The subscriber behind `-v`. The library emits events and installs nothing,
@@ -52,6 +52,18 @@ qrcode = { version = "0.14", default-features = false }
 # crate needs telling: nothing here needs more than a file's worth.
 serde = { version = "1", default-features = false, features = ["derive", "std"] }
 serde_json = { version = "1", default-features = false, features = ["std"] }
+# Reading one key from the terminal while serve runs, so a device can be
+# invited, listed or forgotten from the window without restarting. Putting
+# the terminal in cbreak — a key per read, no echo — is `tcsetattr`, and
+# this is the safe wrapper for it: the workspace denies `unsafe`, and
+# `console`, the other candidate, turns signals off for the read and
+# raises SIGINT by hand afterwards, which leaves the terminal raw when a
+# SIGTERM lands mid-read. Here ISIG stays on, so Ctrl-C is a signal as it
+# always was, and the mode is put back on every way out but SIGKILL.
+#
+# **New compilation**, and the only new compilation in the state work.
+# `termios` is the one module used; `std` is what its `BorrowedFd` needs.
+rustix = { version = "1", default-features = false, features = ["std", "termios"] }
 
 [dev-dependencies]
 # `Targets::would_enable` — the one honest way to ask a filter what it lets

@@ -140,7 +140,7 @@ fn report(out: &mut impl Write, status: PipeStatus, metrics: NetworkMetrics, rep
 ///
 /// The value column is the one `ticket:`, `token:` and `status:` use, so
 /// all four line up when they reach the same terminal.
-fn throttle_line(reported: u64, metrics: NetworkMetrics) -> Option<String> {
+pub(crate) fn throttle_line(reported: u64, metrics: NetworkMetrics) -> Option<String> {
     let throttled = metrics.relay_connections_ratelimited;
     if throttled <= reported {
         return None;

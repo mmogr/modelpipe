@@ -28,7 +28,7 @@ fn how_an_invite_ended_is_said_and_a_label_is_escaped() {
         !paired.contains('\u{1b}'),
         "the label reached the terminal raw: {paired}"
     );
-    assert!(ended(&InviteOutcome::Expired).contains("--invite"));
+    assert!(ended(&InviteOutcome::Expired).contains("expired"));
     assert!(ended(&InviteOutcome::Burned).contains("guessing"));
 }
 

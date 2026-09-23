@@ -175,6 +175,18 @@ pub(crate) fn update(
     Ok(true)
 }
 
+/// Take the row named `name` out. Whether there was one.
+pub(crate) fn remove(path: &Path, name: &str) -> anyhow::Result<bool> {
+    let mut devices = load(path)?.devices;
+    let before = devices.len();
+    devices.retain(|d| d.name != name);
+    if devices.len() == before {
+        return Ok(false);
+    }
+    save(path, &devices)?;
+    Ok(true)
+}
+
 #[cfg(test)]
 #[path = "store_tests.rs"]
 mod store_tests;
