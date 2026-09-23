@@ -14,7 +14,7 @@ use crate::interrupt::Interrupt;
 use crate::pairing;
 use crate::park::{park, shut_down};
 use crate::serve_out::{WAIT_ONLINE, print_token, qr, qr_of, token_policy, undialable};
-use crate::state::{StateDir, backend_key};
+use crate::state::{self, StateDir, backend_key};
 
 /// Serve as asked, and stay parked on the pipe until told to stop.
 pub(crate) async fn run(args: ServeArgs, interrupt: &mut Interrupt) -> anyhow::Result<()> {
@@ -34,13 +34,21 @@ pub(crate) async fn run(args: ServeArgs, interrupt: &mut Interrupt) -> anyhow::R
         invite,
         devices,
         state_dir,
-        no_state: _,
+        no_state,
     } = args;
     // Held to the end of this function, which is the life of the lock: a
     // second serve on the same backend is refused while this one runs.
+    let key = backend_key(&backend_url);
     let state = match state_dir {
-        Some(root) => Some(StateDir::open(&root, &backend_key(&backend_url))?),
-        None => None,
+        _ if no_state => None,
+        Some(root) => Some(StateDir::open(&root, &key)?),
+        // Serving open, a ticket is the only lock there is, and one that
+        // survives a restart is a credential with no expiry and nothing
+        // behind it; keeping it is asked for with --state-dir, not
+        // defaulted. Off Unix nothing here can keep the folder private, so
+        // the same applies.
+        None if insecure_no_auth || !cfg!(unix) => None,
+        None => Some(StateDir::open(&state::data_dir()?, &key)?),
     };
     // A flag names a file; the folder names the rest. Each file's flag
     // wins over its place in the folder, so an operator with a key
@@ -108,7 +116,7 @@ pub(crate) async fn run(args: ServeArgs, interrupt: &mut Interrupt) -> anyhow::R
         print_token(supplied, handle.token());
         None
     };
-    if ephemeral {
+    if ephemeral && !no_state {
         // Printed every time rather than once, and to stderr so it
         // never lands in whatever the ticket was piped into. The
         // flag is the only thing standing between a paired laptop
@@ -116,7 +124,7 @@ pub(crate) async fn run(args: ServeArgs, interrupt: &mut Interrupt) -> anyhow::R
         // hears about is a flag nobody uses.
         eprintln!(
             "note: this ticket dies when serve restarts — \
-             pass --state-dir <dir> to keep it across restarts"
+             pass --state-dir <dir> to keep it across restarts, or --no-state to say so"
         );
     }
     // The pairing string's code when there is an invite: a device

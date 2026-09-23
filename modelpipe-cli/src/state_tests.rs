@@ -1,10 +1,12 @@
 //! Tests for the state folder: where it goes, what a backend's folder is
 //! called, and that one serve at a time holds it.
 
+use std::collections::HashMap;
+use std::ffi::OsString;
 use std::fs;
 use std::path::PathBuf;
 
-use super::{StateDir, backend_key};
+use super::{StateDir, backend_key, data_dir_from};
 
 /// A fresh root for state folders, in a directory of its own.
 fn scratch(name: &str) -> PathBuf {
@@ -12,6 +14,53 @@ fn scratch(name: &str) -> PathBuf {
         std::env::temp_dir().join(format!("modelpipe-cli-state-{}-{name}", std::process::id()));
     let _ = fs::remove_dir_all(&dir);
     dir
+}
+
+fn env(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Option<OsString> {
+    let map: HashMap<String, OsString> = pairs
+        .iter()
+        .map(|(k, v)| ((*k).to_owned(), OsString::from(v)))
+        .collect();
+    move |name| map.get(name).cloned()
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+#[test]
+fn the_data_dir_follows_xdg_and_ignores_a_relative_value() {
+    assert_eq!(
+        data_dir_from(env(&[("HOME", "/home/matt")])).expect("a default"),
+        PathBuf::from("/home/matt/.local/share/modelpipe")
+    );
+    assert_eq!(
+        data_dir_from(env(&[("HOME", "/home/matt"), ("XDG_DATA_HOME", "/data")]))
+            .expect("an absolute XDG_DATA_HOME"),
+        PathBuf::from("/data/modelpipe")
+    );
+    assert_eq!(
+        data_dir_from(env(&[("HOME", "/home/matt"), ("XDG_DATA_HOME", "data")]))
+            .expect("a relative one is ignored"),
+        PathBuf::from("/home/matt/.local/share/modelpipe")
+    );
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn the_data_dir_is_under_application_support() {
+    assert_eq!(
+        data_dir_from(env(&[("HOME", "/Users/matt")])).expect("a default"),
+        PathBuf::from("/Users/matt/Library/Application Support/modelpipe")
+    );
+}
+
+/// Relative to the working directory is the one place an identity file
+/// must never land, so no `HOME` is an error and not a fallback.
+#[test]
+fn no_home_is_refused_with_the_flags_that_avoid_it() {
+    for pairs in [&[][..], &[("HOME", "")][..]] {
+        let refused = format!("{:#}", data_dir_from(env(pairs)).expect_err("no HOME"));
+        assert!(refused.contains("--state-dir"), "{refused}");
+        assert!(refused.contains("--no-state"), "{refused}");
+    }
 }
 
 #[test]
