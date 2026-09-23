@@ -16,13 +16,15 @@ use modelpipe::{
 use crate::park::{FIRST_CONTACT, first_contact};
 use crate::store::{self, Device};
 
-/// Hold the record's keys, and invite one device more when asked. The
-/// invite, when there is one, for the caller to show and to watch;
-/// `how` says how a device is invited later, for the warning when none can
-/// use the listener yet.
+/// Hold the record's keys, and invite one device more when asked — or when
+/// `if_none` and nothing is held, which is a first run. The invite, when
+/// there is one, for the caller to show and to watch; `how` says how a
+/// device is invited later, for the warning when none can use the listener
+/// yet.
 pub(crate) fn start(
     handle: &ServeHandle,
     invite: bool,
+    if_none: bool,
     file: Option<&Path>,
     how: &str,
 ) -> anyhow::Result<Option<Invite>> {
@@ -35,7 +37,8 @@ pub(crate) fn start(
         );
         0
     };
-    if !invite {
+    let first_run = if_none && held == 0;
+    if !invite && !first_run {
         if held == 0 {
             eprintln!("WARNING: no device can use this listener yet — {how}");
         }

@@ -15,18 +15,34 @@ server, over an end-to-end encrypted peer-to-peer connection. No port
 forwarding, no public IP, no VPN, no account with anyone.
 
 ```bash
-# On the machine with the models
-modelpipe serve http://127.0.0.1:11434
-# → prints a pairing ticket (and a QR code), plus a bearer token
+# On the machine running Ollama
+modelpipe ollama
+# → shows a pairing string and its QR code for your first device, and then
+#   takes keys: i offers a code for one more device, l lists them, f
+#   forgets one. Everything survives a restart.
 
-# On any other machine
-modelpipe connect <ticket> --bind 127.0.0.1:8080
-# → http://127.0.0.1:8080/v1 on this machine now *is* your model server
-#   (omit --bind and it picks a free loopback port, printing the URL)
+# On the device
+modelpipe connect <pairing string>
+# → http://127.0.0.1:<port>/v1 on this device now *is* your Ollama, and it
+#   prints the device's own key, once
 ```
 
-Point any OpenAI-compatible client at that URL, with the token as the API
-key. That's the whole product.
+Point any OpenAI-compatible client on the device at that URL, with the key
+as the API key. A phone app that scans the QR code pairs the same way.
+That's the whole product.
+
+Not Ollama? Any OpenAI-compatible server works the same way, one flag at a
+time:
+
+```bash
+# On the machine with the models
+modelpipe serve http://127.0.0.1:11434 --named
+# → prints a pairing ticket; i in the window offers a code for a device
+
+# Or a single bearer token for everybody, and no pairing at all
+modelpipe serve http://127.0.0.1:11434
+# → prints the ticket and a token; modelpipe connect <ticket> on the device
+```
 
 ## Install
 
@@ -60,9 +76,10 @@ which is the point of there being two.
 
 ### Pairing a device instead of carrying the token
 
-`serve --named --invite` holds a key per device instead of one token for
-everybody, and prints a pairing string beside the ticket: the ticket, a dash
-and a six-digit code. On the device, `modelpipe connect` with the whole
+`serve --named` holds a key per device instead of one token for everybody
+(`modelpipe ollama` is `serve --named` for Ollama, with a code offered on
+its first run). `--invite`, or `i` in the window, prints a pairing string
+beside the ticket: the ticket, a dash and a six-digit code. On the device, `modelpipe connect` with the whole
 pairing string redeems the code for that device's own key, prints the base
 URL and then the key, once, and keeps the pipe up. After that, the device
 connects with the ticket alone and uses its key. The code works once, for two

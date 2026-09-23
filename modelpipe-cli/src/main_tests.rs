@@ -10,7 +10,7 @@ use clap::Parser as _;
 use modelpipe::{Ticket, TokenPolicy};
 
 use super::Cli;
-use crate::cli::ServeArgs;
+use crate::cli::{OllamaArgs, ServeArgs};
 use crate::serve_out::{qr, token_line, token_policy, undialable};
 
 /// Vector 1 from `docs/ticket-format-v0.md`: an endpoint id and no
@@ -435,4 +435,56 @@ fn the_state_flags_contradict_and_the_folder_is_read_from_the_environment() {
         .render_long_help()
         .to_string();
     assert!(help.contains("MODELPIPE_STATE_DIR"), "{help}");
+}
+
+/// `ollama` is `serve` with the answers filled in: Ollama's own address, a
+/// key per device, the state kept, and a code at startup for a first run.
+#[test]
+fn ollama_is_serve_with_the_answers_filled_in() {
+    let plain = Cli::try_parse_from(["modelpipe", "ollama"]).expect("one word");
+    let super::Command::Ollama(args) = plain.command else {
+        panic!("not ollama");
+    };
+    let serve = args.into_serve();
+    assert_eq!(serve.backend_url, "http://127.0.0.1:11434");
+    assert!(serve.named && serve.invite_if_none && !serve.invite);
+    assert!(!serve.insecure_no_auth && serve.token.is_none() && !serve.no_state);
+    assert!(serve.state_dir.is_none() && serve.identity.is_none());
+
+    let chosen = Cli::try_parse_from([
+        "modelpipe",
+        "ollama",
+        "--backend",
+        "http://127.0.0.1:11435",
+        "--state-dir",
+        "s",
+        "--no-qr",
+        "--no-portmap",
+        "--no-discovery",
+        "--relay",
+        "https://relay.example.com/",
+    ])
+    .expect("the few flags");
+    let super::Command::Ollama(args) = chosen.command else {
+        panic!("not ollama");
+    };
+    let serve: ServeArgs = args.into_serve();
+    assert_eq!(serve.backend_url, "http://127.0.0.1:11435");
+    assert_eq!(serve.state_dir.as_deref(), Some(std::path::Path::new("s")));
+    assert!(serve.no_qr && serve.no_portmap && serve.no_discovery);
+    assert_eq!(serve.relay.as_deref(), Some("https://relay.example.com/"));
+
+    // `serve` itself never offers a code on a first run unasked: the field
+    // is not a flag, and parsing cannot set it.
+    let serve = Cli::try_parse_from(["modelpipe", "serve", "http://127.0.0.1:9", "--named"])
+        .expect("serve");
+    assert!(matches!(
+        serve.command,
+        super::Command::Serve(ServeArgs {
+            invite_if_none: false,
+            ..
+        })
+    ));
+    assert!(Cli::try_parse_from(["modelpipe", "ollama", "--invite"]).is_err());
+    let _: fn(OllamaArgs) -> ServeArgs = OllamaArgs::into_serve;
 }
