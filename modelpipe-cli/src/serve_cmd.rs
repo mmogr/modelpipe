@@ -14,6 +14,7 @@ use crate::interrupt::Interrupt;
 use crate::pairing;
 use crate::park::{park, shut_down};
 use crate::serve_out::{WAIT_ONLINE, print_token, qr, qr_of, token_policy, undialable};
+use crate::state::{StateDir, backend_key};
 
 /// Serve as asked, and stay parked on the pipe until told to stop.
 pub(crate) async fn run(args: ServeArgs, interrupt: &mut Interrupt) -> anyhow::Result<()> {
@@ -32,7 +33,25 @@ pub(crate) async fn run(args: ServeArgs, interrupt: &mut Interrupt) -> anyhow::R
         named,
         invite,
         devices,
+        state_dir,
+        no_state: _,
     } = args;
+    // Held to the end of this function, which is the life of the lock: a
+    // second serve on the same backend is refused while this one runs.
+    let state = match state_dir {
+        Some(root) => Some(StateDir::open(&root, &backend_key(&backend_url))?),
+        None => None,
+    };
+    // A flag names a file; the folder names the rest. Each file's flag
+    // wins over its place in the folder, so an operator with a key
+    // somewhere already can keep it there.
+    let identity = identity.or_else(|| state.as_ref().map(StateDir::identity));
+    let devices = devices.or_else(|| state.as_ref().map(StateDir::devices));
+    if let Some(state) = &state {
+        // Where a restart will look, said once so that a `forget` by hand,
+        // or a revocation by `rm`, knows the folder.
+        eprintln!("state: {}", state.path().display());
+    }
     // Mutation rather than a struct literal: the options structs
     // are #[non_exhaustive], so a literal cannot cross the crate
     // boundary — which is the point, new options must not break
@@ -97,7 +116,7 @@ pub(crate) async fn run(args: ServeArgs, interrupt: &mut Interrupt) -> anyhow::R
         // hears about is a flag nobody uses.
         eprintln!(
             "note: this ticket dies when serve restarts — \
-             pass --identity <file> to keep it across restarts"
+             pass --state-dir <dir> to keep it across restarts"
         );
     }
     // The pairing string's code when there is an invite: a device

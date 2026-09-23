@@ -178,6 +178,8 @@ the client.
 | `--invite` | With `--named`: print a pairing string, the ticket, a dash and a six-digit code, that a device redeems once, within two minutes, for its own key. Says on stderr how it ended. |
 | `--devices <FILE>` | With `--named`: keep paired devices' keys here, so a restart admits them. Created `0600`; refuses to start if others can read it. |
 | `--identity <FILE>` | Keep the endpoint key here so the ticket survives a restart. Created `0600`; refuses to start if others can read it. |
+| `--state-dir <DIR>` | Keep everything that survives a restart under here, in a folder per backend: the endpoint key, and with `--named` the devices file. Created `0700`; refuses a folder others can read into, and refuses to start while another `serve` holds the same backend's folder. Also read from `MODELPIPE_STATE_DIR`. `--identity` and `--devices` each override their file's place in it. |
+| `--no-state` | Keep nothing across restarts: a fresh ticket every run, and no devices file. What `serve` does with neither flag today, said out loud so a script can rely on it. |
 | `--allow-private-backend` | Accept a backend on a private (RFC 1918 / ULA) address, not only loopback. Link-local is never accepted. |
 | `--relay <URL>` | Use your own relay instead of the public ones. Does **not** disable discovery — see below. |
 | `--no-qr` | Don't print the QR code beside the ticket. |

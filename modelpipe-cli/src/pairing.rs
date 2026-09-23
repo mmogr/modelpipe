@@ -28,7 +28,7 @@ pub(crate) fn start(
     } else {
         eprintln!(
             "note: devices paired now are forgotten when serve stops — \
-             pass --devices <file> to keep them"
+             pass --state-dir <dir> to keep them"
         );
         0
     };

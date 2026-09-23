@@ -151,9 +151,24 @@ pub(crate) struct ServeArgs {
     /// Created on first use, readable only by you. Without it a fresh
     /// key is generated per run, so every restart mints a new ticket
     /// and every paired device has to be paired again. To revoke a
-    /// leaked ticket, delete this file and restart.
+    /// leaked ticket, delete this file and restart. Overrides the
+    /// identity in --state-dir.
     #[arg(long, value_name = "FILE")]
     pub(crate) identity: Option<PathBuf>,
+    /// Keep everything that survives a restart in this folder
+    ///
+    /// The endpoint key, and with --named the paired devices, in a folder
+    /// of their own per backend under DIR, created readable only by you.
+    /// One serve at a time holds a backend's folder. --identity and
+    /// --devices each override their file's place in it.
+    #[arg(long, value_name = "DIR", env = "MODELPIPE_STATE_DIR")]
+    pub(crate) state_dir: Option<PathBuf>,
+    /// Keep nothing across restarts: a fresh ticket, and no devices file
+    ///
+    /// Today's default said out loud, so a script that relies on it keeps
+    /// working when the default changes.
+    #[arg(long, conflicts_with = "state_dir")]
+    pub(crate) no_state: bool,
     /// Do not print a QR code for the ticket
     #[arg(long)]
     pub(crate) no_qr: bool,

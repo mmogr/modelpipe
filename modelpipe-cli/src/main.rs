@@ -12,6 +12,7 @@ mod pairing;
 mod park;
 mod serve_cmd;
 mod serve_out;
+mod state;
 
 use cli::{Cli, Command};
 use interrupt::Interrupt;
