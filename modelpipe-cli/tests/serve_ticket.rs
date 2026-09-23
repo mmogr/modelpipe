@@ -327,6 +327,14 @@ fn state_is_kept_under_the_data_directory_by_default() {
         "{:?}",
         run.stderr
     );
+    // Stdin is not a terminal here, so the keys are off and nothing says
+    // to press one: a supervised serve reads exactly as it did before.
+    assert!(!run.stderr.contains("press i"), "{:?}", run.stderr);
+    assert!(
+        run.stderr.contains("pass --invite to pair one"),
+        "{:?}",
+        run.stderr
+    );
     let _ = std::fs::remove_dir_all(&home);
 }
 
