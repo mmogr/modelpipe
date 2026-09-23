@@ -13,6 +13,7 @@ mod park;
 mod serve_cmd;
 mod serve_out;
 mod state;
+mod store;
 
 use cli::{Cli, Command};
 use interrupt::Interrupt;

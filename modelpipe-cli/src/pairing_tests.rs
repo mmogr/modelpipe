@@ -7,7 +7,7 @@ use std::time::Duration;
 use modelpipe::{ConnectOptions, InviteOutcome, PairingCode, ServeOptions, TokenPolicy};
 
 use super::{ended, hold, invite_one, parse, watch};
-use crate::devices;
+use crate::store;
 
 /// Vector 1 from `docs/ticket-format-v0.md`.
 const TICKET: &str = "pipeadlvvgabqkyqvn6vjp7nhslea45a5yls6pnkmizfv4bbu2hxa5iruaaauhlp2na";
@@ -49,16 +49,16 @@ fn named() -> ServeOptions {
     opts
 }
 
-/// A device that pairs stays in the file, an invite withdrawn unused is taken
-/// back out — of the file and of the listener — and a listener started later
-/// holds the device from the file.
+/// A device that pairs is recorded as such, an invite withdrawn unused keeps
+/// its row but loses its key at the listener, and a listener started later
+/// holds the device that paired and not the one that did not.
 #[tokio::test]
 async fn the_devices_file_keeps_a_paired_device_and_drops_an_unused_invite() {
     const BACKEND: &str = "http://127.0.0.1:9";
     let dir = std::env::temp_dir().join(format!("modelpipe-cli-pairing-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("a scratch directory");
-    let file = dir.join("devices");
+    let file = dir.join("devices.json");
     let serving = Arc::new(modelpipe::serve(BACKEND, named()).await.expect("serve"));
 
     let used = invite_one(&serving, Some(&file)).expect("an invite");
@@ -97,7 +97,7 @@ async fn the_devices_file_keeps_a_paired_device_and_drops_an_unused_invite() {
         .expect("the invite ends")
         .expect("the watch task");
 
-    let kept = devices::load(&file);
+    let kept = store::load(&file);
     // The withdrawn invite's key is gone from the live listener, not only
     // from the file: the device that paired is the one name still held.
     let still_held = serving.token_names();
@@ -111,10 +111,22 @@ async fn the_devices_file_keeps_a_paired_device_and_drops_an_unused_invite() {
     restarted.shutdown().await;
     let _ = std::fs::remove_dir_all(&dir);
 
-    assert_eq!(
-        kept.expect("the devices file"),
-        vec![(used.device().to_owned(), paired.api_key.clone())]
+    let kept = kept.expect("the devices record").devices;
+    assert_eq!(kept.len(), 2, "{kept:?}");
+    assert_eq!(kept[0].name, used.device());
+    assert_eq!(kept[0].key, paired.api_key);
+    assert!(kept[0].paired(), "{:?}", kept[0]);
+    assert_eq!(kept[0].label.as_deref(), Some("Laptop"));
+    let peer = kept[0]
+        .peer
+        .as_deref()
+        .expect("the endpoint that redeemed it");
+    assert!(
+        peer.len() == 64 && peer.bytes().all(|b| b.is_ascii_hexdigit()),
+        "{peer}"
     );
+    assert_eq!(kept[1].name, unused.device());
+    assert!(!kept[1].paired(), "{:?}", kept[1]);
     assert_eq!(still_held, vec![used.device().to_owned()]);
     assert_eq!(held.expect("held from the file"), 1);
     assert_eq!(names, vec![used.device().to_owned()]);

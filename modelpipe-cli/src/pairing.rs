@@ -3,7 +3,7 @@
 //! whose code it redeems.
 //!
 //! The library does the pairing. What lives here is what a terminal adds: the
-//! devices file kept in step with each invite, and the lines a person reads.
+//! devices record kept in step with each invite, and the lines a person reads.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -13,8 +13,8 @@ use modelpipe::{
     PairingString, ServeHandle, Ticket,
 };
 
-use crate::devices;
 use crate::park::{FIRST_CONTACT, first_contact};
+use crate::store::{self, Device};
 
 /// Hold the devices file's keys, and invite one device more when asked. The
 /// pairing string to show, when there is an invite.
@@ -54,39 +54,67 @@ pub(crate) fn start(
     Ok(Some(pairing))
 }
 
-/// Hold every device the file names, and say how many.
+/// Hold every device the record says paired, and say how many. A row whose
+/// invite was never redeemed is a key nobody received, and it is not held.
 pub(crate) fn hold(handle: &ServeHandle, path: &Path) -> anyhow::Result<usize> {
-    let held = devices::load(path)?;
-    for (name, key) in &held {
-        handle.add_token(name, key.clone()).map_err(|e| {
-            anyhow::anyhow!(
-                "{}: the device {name} could not be held: {e}",
-                path.display()
-            )
-        })?;
+    let loaded = store::load(path)?;
+    if loaded.legacy {
+        // Rewritten now rather than at the next change, so that a file the
+        // person reads after this run is in the one form serve writes.
+        store::save(path, &loaded.devices)?;
+        eprintln!("note: {} was rewritten as JSON", path.display());
     }
-    Ok(held.len())
+    let mut held = 0;
+    for device in loaded.devices.iter().filter(|d| d.paired()) {
+        handle
+            .add_token(&device.name, device.key.clone())
+            .map_err(|e| {
+                anyhow::anyhow!(
+                    "{}: the device {} could not be held: {e}",
+                    path.display(),
+                    device.name
+                )
+            })?;
+        held += 1;
+    }
+    Ok(held)
 }
 
-/// Invite a device: its key written to the file first, when there is one, and
-/// only then the code armed, so a device that redeems it is always on record.
+/// Invite a device: its row written to the record first, when there is one,
+/// and only then the code armed, so a device that redeems it is always on
+/// record.
 pub(crate) fn invite_one(handle: &ServeHandle, file: Option<&Path>) -> anyhow::Result<Invite> {
     let invite = handle.invite(InviteOptions::default())?;
     if let Some(path) = file {
-        devices::append(path, invite.device(), invite.api_key())?;
+        store::upsert(
+            path,
+            Device {
+                name: invite.device().to_owned(),
+                key: invite.api_key().to_owned(),
+                label: None,
+                invited_at: store::now(),
+                redeemed_at: None,
+                peer: None,
+            },
+        )?;
     }
     invite.arm();
     Ok(invite)
 }
 
-/// Say on stderr how the invite ended, and take the key of a device that never
-/// redeemed it back out of the listener and out of the file.
+/// Say on stderr how the invite ended, and keep the record in step: a device
+/// that paired is marked so, with when and from where, and the key of one
+/// that never did is taken back out of the listener.
 ///
 /// The listener first. Withdrawing an invite leaves its key held — the
 /// library says so, and `remove_token` is the call that retires it — so a
 /// watcher that only tidied the file left every expired code's key admitting
 /// until serve restarted, which is a key on record nowhere and a device
 /// nobody can `forget`.
+///
+/// The row stays, marked as never joined, rather than being swept: what this
+/// machine offered is always visible, and its key is not held again on a
+/// restart, so the row costs nothing but a line in a list.
 pub(crate) async fn watch(
     handle: Arc<ServeHandle>,
     invite: InviteHandle,
@@ -95,17 +123,21 @@ pub(crate) async fn watch(
 ) {
     let outcome = invite.outcome().await;
     eprintln!("{}", ended(&outcome));
-    if matches!(outcome, InviteOutcome::Redeemed { .. }) {
+    let InviteOutcome::Redeemed { peer, label, .. } = &outcome else {
+        handle.remove_token(&device);
         return;
-    }
-    handle.remove_token(&device);
-    if let Some(path) = file
-        && let Err(e) = devices::forget(&path, &device)
-    {
-        eprintln!(
-            "could not take {device} back out of {}: {e:#}",
-            path.display()
-        );
+    };
+    let Some(path) = file else {
+        return;
+    };
+    let (peer, label) = (peer.to_string(), label.clone());
+    let recorded = store::update(&path, &device, |row| {
+        row.redeemed_at = Some(store::now());
+        row.peer = Some(peer);
+        row.label = label;
+    });
+    if let Err(e) = recorded {
+        eprintln!("could not record that {device} paired: {e:#}");
     }
 }
 
