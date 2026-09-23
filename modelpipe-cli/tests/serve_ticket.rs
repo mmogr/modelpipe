@@ -76,28 +76,30 @@ struct Run {
 /// and running out of [`PATIENCE`] is neither.
 fn serve(extra: &[&str]) -> Run {
     let (run, _) = serve_with(
-        BACKEND,
+        &["serve", BACKEND],
         &["--insecure-no-auth", "--no-state"],
         extra,
         &[],
+        "ticket:",
         false,
     );
     run
 }
 
-/// [`serve`] with everything a test may want to choose: the backend, how it
-/// authenticates, the environment, and whether the child is left running
-/// for the caller to end — which the lock tests need, since the lock is
-/// held only while the process lives.
+/// [`serve`] with everything a test may want to choose: the command and
+/// its backend, how it authenticates, the environment, and whether the
+/// child is left running for the caller to end — which the lock tests
+/// need, since the lock is held only while the process lives.
 fn serve_with(
-    backend: &str,
+    command: &[&str],
     auth: &[&str],
     extra: &[&str],
     env: &[(&str, &Path)],
+    until: &str,
     keep: bool,
 ) -> (Run, Option<Child>) {
     let mut child = Command::new(BIN)
-        .args(["serve", backend])
+        .args(command)
         .args(auth)
         .args(["--no-qr", "--no-discovery", "--no-portmap"])
         .args(["--relay", DEAD_RELAY])
@@ -133,9 +135,9 @@ fn serve_with(
     loop {
         match incoming.recv_timeout(Duration::from_millis(100)) {
             Ok(line) => {
-                let ticket = line.starts_with("ticket:");
+                let enough = line.starts_with(until);
                 stdout.push(line);
-                if ticket {
+                if enough {
                     break;
                 }
             }
@@ -313,7 +315,14 @@ fn a_ticket_that_names_somewhere_is_printed() {
 fn state_is_kept_under_the_data_directory_by_default() {
     use std::os::unix::fs::PermissionsExt as _;
     let home = home("default");
-    let (run, _) = serve_with(BACKEND, &["--named"], &[], &at(&home), false);
+    let (run, _) = serve_with(
+        &["serve", BACKEND],
+        &["--named"],
+        &[],
+        &at(&home),
+        "ticket:",
+        false,
+    );
     assert_eq!(run.exit, None, "{:?} {:?}", run.stdout, run.stderr);
     let state = default_state(&home);
     assert!(
@@ -351,11 +360,25 @@ fn state_is_kept_under_the_data_directory_by_default() {
 #[test]
 fn one_serve_per_backend_holds_the_default_folder() {
     let home = home("lock");
-    let (first, child) = serve_with(BACKEND, &["--named"], &[], &at(&home), true);
+    let (first, child) = serve_with(
+        &["serve", BACKEND],
+        &["--named"],
+        &[],
+        &at(&home),
+        "ticket:",
+        true,
+    );
     let mut child = child.expect("the first is left running");
     assert_eq!(first.exit, None, "{:?}", first.stdout);
 
-    let (second, _) = serve_with(BACKEND, &["--named"], &[], &at(&home), false);
+    let (second, _) = serve_with(
+        &["serve", BACKEND],
+        &["--named"],
+        &[],
+        &at(&home),
+        "ticket:",
+        false,
+    );
     assert_eq!(
         second.exit,
         Some(false),
@@ -371,7 +394,14 @@ fn one_serve_per_backend_holds_the_default_folder() {
     );
     assert!(second.stdout.is_empty(), "{:?}", second.stdout);
 
-    let (other, _) = serve_with("http://127.0.0.1:10", &["--named"], &[], &at(&home), false);
+    let (other, _) = serve_with(
+        &["serve", "http://127.0.0.1:10"],
+        &["--named"],
+        &[],
+        &at(&home),
+        "ticket:",
+        false,
+    );
     assert_eq!(other.exit, None, "{:?} {:?}", other.stdout, other.stderr);
 
     let _ = child.kill();
@@ -386,9 +416,23 @@ fn one_serve_per_backend_holds_the_default_folder() {
 #[test]
 fn no_state_and_serving_open_leave_the_data_directory_alone() {
     let home = home("none");
-    let (named, _) = serve_with(BACKEND, &["--named", "--no-state"], &[], &at(&home), false);
+    let (named, _) = serve_with(
+        &["serve", BACKEND],
+        &["--named", "--no-state"],
+        &[],
+        &at(&home),
+        "ticket:",
+        false,
+    );
     assert_eq!(named.exit, None, "{:?} {:?}", named.stdout, named.stderr);
-    let (open, _) = serve_with(BACKEND, &["--insecure-no-auth"], &[], &at(&home), false);
+    let (open, _) = serve_with(
+        &["serve", BACKEND],
+        &["--insecure-no-auth"],
+        &[],
+        &at(&home),
+        "ticket:",
+        false,
+    );
     assert_eq!(open.exit, None, "{:?} {:?}", open.stdout, open.stderr);
     assert!(
         open.stderr.contains("dies when serve restarts"),
@@ -401,4 +445,39 @@ fn no_state_and_serving_open_leave_the_data_directory_alone() {
         default_state(&home).display()
     );
     let _ = std::fs::remove_dir_all(&home);
+}
+
+/// `modelpipe ollama` is one word: a first run prints a ticket and a code
+/// for the first device, keeps its state where it was told to, and — with
+/// no terminal on stdin — says nothing about keys. Nothing listens on
+/// Ollama's port here and nothing needs to; the address is only screened.
+#[test]
+fn ollama_offers_a_first_code_and_keeps_its_state() {
+    let state = std::env::temp_dir().join(format!("modelpipe-cli-ollama-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&state);
+    let (run, _) = serve_with(
+        &["ollama", "--backend", BACKEND],
+        &[],
+        &["--state-dir", state.to_str().expect("utf-8")],
+        &[],
+        "pairing:",
+        false,
+    );
+    assert_eq!(run.exit, None, "{:?} {:?}", run.stdout, run.stderr);
+    assert!(
+        run.stdout.iter().any(|line| line.starts_with("ticket:")),
+        "{:?}",
+        run.stdout
+    );
+    let pairing = run
+        .stdout
+        .iter()
+        .find(|line| line.starts_with("pairing:"))
+        .unwrap_or_else(|| panic!("no code for a first device: {:?}", run.stdout));
+    assert!(pairing.contains('-'), "{pairing}");
+    assert!(run.stderr.contains("state: "), "{:?}", run.stderr);
+    assert!(!run.stderr.contains("press i"), "{:?}", run.stderr);
+    assert!(!run.stderr.contains("WARNING"), "{:?}", run.stderr);
+    assert!(state.join("127.0.0.1_9").join("devices.json").is_file());
+    let _ = std::fs::remove_dir_all(&state);
 }
