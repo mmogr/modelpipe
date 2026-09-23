@@ -44,6 +44,14 @@ tracing-subscriber = { version = "0.3", default-features = false, features = ["s
 # promises a QR beside the ticket, and a phone reading one is the difference
 # between pairing in a second and retyping ninety-six characters.
 qrcode = { version = "0.14", default-features = false }
+# The devices file is JSON: a row per device with when it was invited, when
+# it paired and from where, which a line of "name key" had no room for.
+# Already compiled: the library's own `serde` feature and `iroh` both bring
+# `serde` with `derive`, and `serde_json` was in the lock as the library's
+# dev-dependency. `default-features = false` on both, plus `std` where the
+# crate needs telling: nothing here needs more than a file's worth.
+serde = { version = "1", default-features = false, features = ["derive", "std"] }
+serde_json = { version = "1", default-features = false, features = ["std"] }
 
 [dev-dependencies]
 # `Targets::would_enable` — the one honest way to ask a filter what it lets

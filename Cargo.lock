@@ -1777,6 +1777,8 @@ dependencies = [
  "clap",
  "modelpipe",
  "qrcode",
+ "serde",
+ "serde_json",
  "tokio",
  "tracing",
  "tracing-subscriber",

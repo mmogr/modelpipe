@@ -1,12 +1,15 @@
-//! The devices file: the keys `serve --named --devices` holds, kept across
-//! restarts.
+//! The devices file on disk: reading it, replacing it, and the form it had
+//! before it was JSON.
 //!
-//! One device per line: its name, a space, and its key. Names are the
-//! library's identifiers and keys carry no spaces, so nothing is quoted. Blank
-//! lines and lines starting with `#` are skipped, and kept when a device is
-//! forgotten. The keys are credentials, so the file is created readable only
-//! by its owner, one others can read is refused rather than used, and no error
-//! from here repeats a key.
+//! What the file *says* is `store.rs`'s business. This module owns how it is
+//! read and written: the keys are credentials, so the file is created
+//! readable only by its owner, one others can read is refused rather than
+//! used, a replacement lands whole or not at all, and no error from here
+//! repeats a key.
+//!
+//! Before 0.8 the file was one device per line — its name, a space, and its
+//! key — with blank lines and `#` lines skipped. [`parse_lines`] still reads
+//! that form, so a file an earlier serve kept is a file this one holds.
 
 use std::fs;
 use std::io::{self, Write as _};
@@ -14,12 +17,20 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context as _, bail};
 
-/// Every device the file names, in order. A file that does not exist names
-/// none.
-pub(crate) fn load(path: &Path) -> anyhow::Result<Vec<(String, String)>> {
-    let Some(text) = read(path)? else {
-        return Ok(Vec::new());
-    };
+/// The file's text, or `None` when there is no file.
+pub(crate) fn read(path: &Path) -> anyhow::Result<Option<String>> {
+    match fs::read_to_string(path) {
+        Ok(text) => {
+            refuse_if_shared(path)?;
+            Ok(Some(text))
+        }
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(e).with_context(|| format!("could not read {}", path.display())),
+    }
+}
+
+/// Every device a line-per-device file names, in order.
+pub(crate) fn parse_lines(path: &Path, text: &str) -> anyhow::Result<Vec<(String, String)>> {
     let mut devices = Vec::new();
     for (index, line) in text.lines().enumerate() {
         let line = line.trim();
@@ -39,30 +50,13 @@ pub(crate) fn load(path: &Path) -> anyhow::Result<Vec<(String, String)>> {
     Ok(devices)
 }
 
-/// Add a device at the end of the file, creating the file if there is none.
-pub(crate) fn append(path: &Path, name: &str, key: &str) -> anyhow::Result<()> {
-    let mut file = private_options()
-        .append(true)
-        .create(true)
-        .open(path)
-        .with_context(|| format!("could not open {}", path.display()))?;
-    refuse_if_shared(path)?;
-    writeln!(file, "{name} {key}")
-        .and_then(|()| file.sync_all())
-        .with_context(|| format!("could not write to {}", path.display()))
-}
-
-/// Take a device out of the file, leaving every other line as it was.
-pub(crate) fn forget(path: &Path, name: &str) -> anyhow::Result<()> {
-    let Some(text) = read(path)? else {
-        return Ok(());
-    };
-    let mut kept = String::with_capacity(text.len());
-    for line in text.lines() {
-        if line.trim_start().starts_with('#') || line.split_whitespace().next() != Some(name) {
-            kept.push_str(line);
-            kept.push('\n');
-        }
+/// Replace the file with `text`, whole: written beside it, synced, and
+/// renamed over it, so a crash leaves either the old file or the new.
+pub(crate) fn replace(path: &Path, text: &str) -> anyhow::Result<()> {
+    if let Some(dir) = path.parent()
+        && !dir.as_os_str().is_empty()
+    {
+        fs::create_dir_all(dir).with_context(|| format!("could not create {}", dir.display()))?;
     }
     let mut beside = path.as_os_str().to_owned();
     beside.push(".new");
@@ -80,23 +74,11 @@ pub(crate) fn forget(path: &Path, name: &str) -> anyhow::Result<()> {
         .create_new(true)
         .open(&beside)
         .and_then(|mut file| {
-            file.write_all(kept.as_bytes())?;
+            file.write_all(text.as_bytes())?;
             file.sync_all()
         })
         .and_then(|()| fs::rename(&beside, path));
     written.with_context(|| format!("could not rewrite {}", path.display()))
-}
-
-/// The file's text, or `None` when there is no file.
-fn read(path: &Path) -> anyhow::Result<Option<String>> {
-    match fs::read_to_string(path) {
-        Ok(text) => {
-            refuse_if_shared(path)?;
-            Ok(Some(text))
-        }
-        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
-        Err(e) => Err(e).with_context(|| format!("could not read {}", path.display())),
-    }
 }
 
 /// Open options that create a file readable only by its owner.
