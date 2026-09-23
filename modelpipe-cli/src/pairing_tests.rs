@@ -1,6 +1,7 @@
 //! Tests for [`super`]: the lines a person reads, and the devices file kept in
 //! step with an invite over a real listener.
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use modelpipe::{ConnectOptions, InviteOutcome, PairingCode, ServeOptions, TokenPolicy};
@@ -49,7 +50,8 @@ fn named() -> ServeOptions {
 }
 
 /// A device that pairs stays in the file, an invite withdrawn unused is taken
-/// back out, and a listener started later holds the device from the file.
+/// back out — of the file and of the listener — and a listener started later
+/// holds the device from the file.
 #[tokio::test]
 async fn the_devices_file_keeps_a_paired_device_and_drops_an_unused_invite() {
     const BACKEND: &str = "http://127.0.0.1:9";
@@ -57,10 +59,11 @@ async fn the_devices_file_keeps_a_paired_device_and_drops_an_unused_invite() {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("a scratch directory");
     let file = dir.join("devices");
-    let serving = modelpipe::serve(BACKEND, named()).await.expect("serve");
+    let serving = Arc::new(modelpipe::serve(BACKEND, named()).await.expect("serve"));
 
     let used = invite_one(&serving, Some(&file)).expect("an invite");
     let watching = tokio::spawn(watch(
+        Arc::clone(&serving),
         used.handle(),
         used.device().to_owned(),
         Some(file.clone()),
@@ -83,6 +86,7 @@ async fn the_devices_file_keeps_a_paired_device_and_drops_an_unused_invite() {
 
     let unused = invite_one(&serving, Some(&file)).expect("a second invite");
     let watching = tokio::spawn(watch(
+        Arc::clone(&serving),
         unused.handle(),
         unused.device().to_owned(),
         Some(file.clone()),
@@ -94,6 +98,9 @@ async fn the_devices_file_keeps_a_paired_device_and_drops_an_unused_invite() {
         .expect("the watch task");
 
     let kept = devices::load(&file);
+    // The withdrawn invite's key is gone from the live listener, not only
+    // from the file: the device that paired is the one name still held.
+    let still_held = serving.token_names();
     paired.handle.shutdown().await;
     serving.shutdown().await;
     let restarted = modelpipe::serve(BACKEND, named())
@@ -108,6 +115,7 @@ async fn the_devices_file_keeps_a_paired_device_and_drops_an_unused_invite() {
         kept.expect("the devices file"),
         vec![(used.device().to_owned(), paired.api_key.clone())]
     );
+    assert_eq!(still_held, vec![used.device().to_owned()]);
     assert_eq!(held.expect("held from the file"), 1);
     assert_eq!(names, vec![used.device().to_owned()]);
 }

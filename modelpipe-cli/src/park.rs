@@ -257,6 +257,23 @@ impl AsyncStatus for modelpipe::ConnectHandle {
     }
 }
 
+/// The serve side is shared with an invite's watcher, so `main` parks on a
+/// borrow of it. `status_changed` takes `&self`, which is what makes a
+/// shared reference enough here where the connect side needs `&mut`.
+impl AsyncStatus for &modelpipe::ServeHandle {
+    fn current(&self) -> PipeStatus {
+        self.status()
+    }
+
+    fn metrics(&self) -> NetworkMetrics {
+        self.network_metrics()
+    }
+
+    async fn changed(&mut self) -> PipeStatus {
+        self.status_changed().await
+    }
+}
+
 impl<T: AsyncStatus> AsyncStatus for &mut T {
     fn current(&self) -> PipeStatus {
         (**self).current()
