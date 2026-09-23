@@ -7,9 +7,10 @@
 
 use clap::Parser as _;
 
-use modelpipe::Ticket;
+use modelpipe::{Ticket, TokenPolicy};
 
-use super::{Cli, TokenPolicy};
+use super::Cli;
+use crate::cli::ServeArgs;
 use crate::serve_out::{qr, token_line, token_policy, undialable};
 
 /// Vector 1 from `docs/ticket-format-v0.md`: an endpoint id and no
@@ -101,12 +102,12 @@ fn the_network_flags_parse_on_both_subcommands() {
     .expect("serve accepts all three");
     assert!(matches!(
         serve.command,
-        super::Command::Serve {
+        super::Command::Serve(ServeArgs {
             no_portmap: true,
             no_discovery: true,
             relay_only: true,
             ..
-        }
+        })
     ));
 
     // `--relay` and `--relay-only` sit next to each other in the help and
@@ -144,12 +145,12 @@ fn the_network_flags_are_all_off_by_default() {
         Cli::try_parse_from(["modelpipe", "serve", "http://127.0.0.1:11434"]).expect("no flags");
     assert!(matches!(
         serve.command,
-        super::Command::Serve {
+        super::Command::Serve(ServeArgs {
             no_portmap: false,
             no_discovery: false,
             relay_only: false,
             ..
-        }
+        })
     ));
 }
 
