@@ -131,6 +131,8 @@ pub(crate) struct ServeArgs {
     ///
     /// The ticket, a dash and a six-digit code. The code works once, for
     /// two minutes, and serve says on stderr how it ended. Needs --named.
+    /// In a terminal, pressing i while serve runs does the same at any
+    /// time; l lists the devices and f forgets one.
     #[arg(long, requires = "named")]
     pub(crate) invite: bool,
     /// Keep the devices record in this file, so a restart admits them
