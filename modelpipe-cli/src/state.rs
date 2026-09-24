@@ -165,13 +165,7 @@ fn make_private(dir: &Path) -> anyhow::Result<()> {
             .with_context(|| format!("could not create {}", above.display()))?;
     }
     for folder in [ours, dir] {
-        let mut builder = fs::DirBuilder::new();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::DirBuilderExt as _;
-            builder.mode(0o700);
-        }
-        match builder.create(folder) {
+        match private_dir_builder().create(folder) {
             Ok(()) => {}
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
             Err(e) => {
@@ -180,6 +174,21 @@ fn make_private(dir: &Path) -> anyhow::Result<()> {
         }
     }
     Ok(())
+}
+
+/// A builder that makes a folder readable only by its owner.
+fn private_dir_builder() -> fs::DirBuilder {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt as _;
+        let mut builder = fs::DirBuilder::new();
+        builder.mode(0o700);
+        builder
+    }
+    #[cfg(not(unix))]
+    {
+        fs::DirBuilder::new()
+    }
 }
 
 /// Refuse a folder other users can read into: it holds the endpoint key and
