@@ -171,6 +171,11 @@ fn serve_with(
         );
     }
     if exit.is_none() {
+        // The ticket is not the last thing serve says at startup: the notes
+        // about pairing and about what survives a restart follow it on
+        // stderr, and the tests read them. A moment for those to land before
+        // the kill, or a fast runner sees the ticket and nothing after it.
+        std::thread::sleep(Duration::from_millis(500));
         let _ = child.kill();
         let _ = child.wait();
     }
@@ -326,6 +331,14 @@ fn state_is_kept_under_the_data_directory_by_default() {
     assert_eq!(mode, 0o700);
     assert!(
         !run.stderr.contains("dies when serve restarts"),
+        "{:?}",
+        run.stderr
+    );
+    // Stdin is not a terminal here, so the keys are off and nothing says
+    // to press one: a supervised serve reads exactly as it did before.
+    assert!(!run.stderr.contains("press i"), "{:?}", run.stderr);
+    assert!(
+        run.stderr.contains("pass --invite to pair one"),
         "{:?}",
         run.stderr
     );

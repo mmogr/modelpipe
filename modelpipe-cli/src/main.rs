@@ -5,13 +5,17 @@ use clap::Parser as _;
 use modelpipe::ConnectOptions;
 
 mod cli;
+mod controller;
 mod devices;
 mod diagnostics;
 mod interrupt;
+mod keys;
 mod pairing;
 mod park;
+mod screen;
 mod serve_cmd;
 mod serve_out;
+mod session;
 mod state;
 mod store;
 

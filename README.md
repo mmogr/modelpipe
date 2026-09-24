@@ -72,6 +72,15 @@ directory unless `--state-dir` names another, so a restarted `serve` mints
 the same ticket and admits every device that paired. `--no-state` keeps
 neither.
 
+While `serve --named` runs in a terminal, the window takes keys: **`i`**
+offers a code for one more device, with its QR and a countdown; **`l`**
+lists every device, paired or invited and never joined; **`f`** forgets
+one by its number or name, which retires its key at once. One code is on
+offer at a time, and `i` shows it again until it is spent. With stdin or
+stderr piped, or under a service manager, the keys are off and `serve`
+reads exactly as it did before they existed: `--invite` at startup is the
+one code it offers.
+
 ### When it says no
 
 modelpipe answers with a JSON error that names which machine to look at.
@@ -186,7 +195,7 @@ the client.
 | `--token-file <PATH>` | Read the token from a file, trimming the trailing newline every editor adds. |
 | `--insecure-no-auth` | Serve with no token at all. The name is the warning. |
 | `--named` | Hold a key per device instead of one token for everybody. Pair devices with `--invite`, and keep them with `--devices`. |
-| `--invite` | With `--named`: print a pairing string, the ticket, a dash and a six-digit code, that a device redeems once, within two minutes, for its own key. Says on stderr how it ended. |
+| `--invite` | With `--named`: print a pairing string, the ticket, a dash and a six-digit code, that a device redeems once, within two minutes, for its own key. Says on stderr how it ended. In a terminal, `i` does the same at any time. |
 | `--devices <FILE>` | With `--named`: keep the devices record here, so a restart admits every device that paired. JSON, one row per device ever invited, with when it was invited, when it paired and from which endpoint; a row whose code was never redeemed stays, marked so, and its key is not held again. A file in the older `name key` form is read and rewritten. Created `0600`; refuses to start if others can read it. |
 | `--identity <FILE>` | Keep the endpoint key in this file instead of the state folder. Created `0600`; refuses to start if others can read it. |
 | `--state-dir <DIR>` | Keep everything that survives a restart under here instead of the data directory, in a folder per backend: the endpoint key, and with `--named` the devices record. Created `0700`; refuses a folder others can read into, and refuses to start while another `serve` holds the same backend's folder. Also read from `MODELPIPE_STATE_DIR`. `--identity` and `--devices` each override their file's place in it. |

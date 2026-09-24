@@ -16,13 +16,16 @@ use modelpipe::{
 use crate::park::{FIRST_CONTACT, first_contact};
 use crate::store::{self, Device};
 
-/// Hold the devices file's keys, and invite one device more when asked. The
-/// pairing string to show, when there is an invite.
+/// Hold the record's keys, and invite one device more when asked. The
+/// invite, when there is one, for the caller to show and to watch;
+/// `how` says how a device is invited later, for the warning when none can
+/// use the listener yet.
 pub(crate) fn start(
-    handle: &Arc<ServeHandle>,
+    handle: &ServeHandle,
     invite: bool,
     file: Option<&Path>,
-) -> anyhow::Result<Option<String>> {
+    how: &str,
+) -> anyhow::Result<Option<Invite>> {
     let held = if let Some(path) = file {
         hold(handle, path)?
     } else {
@@ -34,24 +37,11 @@ pub(crate) fn start(
     };
     if !invite {
         if held == 0 {
-            eprintln!("WARNING: no device can use this listener yet — pass --invite to pair one");
+            eprintln!("WARNING: no device can use this listener yet — {how}");
         }
         return Ok(None);
     }
-    let invited = invite_one(handle, file)?;
-    let pairing = invited.pairing().to_string();
-    println!("pairing: {pairing}");
-    eprintln!(
-        "the code in it works once, for two minutes: run modelpipe connect with the whole \
-         pairing string on the device"
-    );
-    tokio::spawn(watch(
-        Arc::clone(handle),
-        invited.handle(),
-        invited.device().to_owned(),
-        file.map(Path::to_path_buf),
-    ));
-    Ok(Some(pairing))
+    invite_one(handle, file).map(Some)
 }
 
 /// Hold every device the record says paired, and say how many. A row whose
@@ -102,9 +92,20 @@ pub(crate) fn invite_one(handle: &ServeHandle, file: Option<&Path>) -> anyhow::R
     Ok(invite)
 }
 
-/// Say on stderr how the invite ended, and keep the record in step: a device
-/// that paired is marked so, with when and from where, and the key of one
-/// that never did is taken back out of the listener.
+/// Say on stderr how the invite ended, once it has.
+pub(crate) async fn watch(
+    handle: Arc<ServeHandle>,
+    invite: InviteHandle,
+    device: String,
+    file: Option<PathBuf>,
+) {
+    let outcome = invite.outcome().await;
+    eprintln!("{}", settle(&handle, &device, &outcome, file.as_deref()));
+}
+
+/// Keep the listener and the record in step with how an invite ended, and
+/// say how: a device that paired is marked so, with when and from where,
+/// and the key of one that never did is taken back out of the listener.
 ///
 /// The listener first. Withdrawing an invite leaves its key held — the
 /// library says so, and `remove_token` is the call that retires it — so a
@@ -115,30 +116,31 @@ pub(crate) fn invite_one(handle: &ServeHandle, file: Option<&Path>) -> anyhow::R
 /// The row stays, marked as never joined, rather than being swept: what this
 /// machine offered is always visible, and its key is not held again on a
 /// restart, so the row costs nothing but a line in a list.
-pub(crate) async fn watch(
-    handle: Arc<ServeHandle>,
-    invite: InviteHandle,
-    device: String,
-    file: Option<PathBuf>,
-) {
-    let outcome = invite.outcome().await;
-    eprintln!("{}", ended(&outcome));
-    let InviteOutcome::Redeemed { peer, label, .. } = &outcome else {
-        handle.remove_token(&device);
-        return;
+pub(crate) fn settle(
+    handle: &ServeHandle,
+    device: &str,
+    outcome: &InviteOutcome,
+    file: Option<&Path>,
+) -> String {
+    let mut said = ended(outcome);
+    let InviteOutcome::Redeemed { peer, label, .. } = outcome else {
+        handle.remove_token(device);
+        return said;
     };
     let Some(path) = file else {
-        return;
+        return said;
     };
     let (peer, label) = (peer.to_string(), label.clone());
-    let recorded = store::update(&path, &device, |row| {
+    let recorded = store::update(path, device, |row| {
         row.redeemed_at = Some(store::now());
         row.peer = Some(peer);
         row.label = label;
     });
     if let Err(e) = recorded {
-        eprintln!("could not record that {device} paired: {e:#}");
+        use std::fmt::Write as _;
+        let _ = write!(said, "\ncould not record that {device} paired: {e:#}");
     }
+    said
 }
 
 /// The line for how an invite ended. A device's label is text from a stranger
@@ -151,9 +153,7 @@ pub(crate) fn ended(outcome: &InviteOutcome) -> String {
             label: Some(label),
         } => format!("paired: {device}, from {peer}, which calls itself {label:?}"),
         InviteOutcome::Redeemed { device, peer, .. } => format!("paired: {device}, from {peer}"),
-        InviteOutcome::Expired => {
-            "the pairing code expired unused: restart serve with --invite for a new one".to_owned()
-        }
+        InviteOutcome::Expired => "the pairing code expired unused".to_owned(),
         InviteOutcome::Burned => "the pairing code was burned: someone holding this ticket is \
                                   guessing codes, and only a new ticket shuts them out"
             .to_owned(),
