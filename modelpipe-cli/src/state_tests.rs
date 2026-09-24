@@ -37,7 +37,7 @@ fn one_serve_at_a_time_holds_a_backend_folder() {
     let held = StateDir::open(&root, "127.0.0.1_11434").expect("the first");
     assert_eq!(held.path(), root.join("127.0.0.1_11434"));
     assert_eq!(held.identity(), held.path().join("identity"));
-    assert_eq!(held.devices(), held.path().join("devices"));
+    assert_eq!(held.devices(), held.path().join("devices.json"));
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt as _;
