@@ -18,9 +18,17 @@
 //!
 //! Each test costs the ten seconds `main` spends letting the endpoint look
 //! for the relay it will not find.
+//!
+//! **Nothing here touches the real data directory.** Every run either says
+//! `--no-state` or is given a `HOME` of its own under the temp directory, so
+//! a test never reads a developer's identity, never leaves one behind, and
+//! never finds the lock another test holds.
 
 use std::io::{BufRead as _, BufReader, Read as _};
-use std::process::{Command, Stdio};
+use std::path::Path;
+#[cfg(unix)]
+use std::path::PathBuf;
+use std::process::{Child, Command, Stdio};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
@@ -59,24 +67,47 @@ struct Run {
     exit: Option<bool>,
 }
 
-/// Run `serve` with `extra` until it prints a ticket or exits, whichever
-/// comes first, then take the process away.
+/// Run `serve` open and stateless with `extra` until it prints a ticket or
+/// exits, whichever comes first, then take the process away.
 ///
 /// Stopping at the first ticket line is what lets one helper serve both
 /// tests: a listener that printed one goes on to park forever, and a
 /// listener that refused one has already exited. Both endings are answers,
 /// and running out of [`PATIENCE`] is neither.
 fn serve(extra: &[&str]) -> Run {
+    let (run, _) = serve_with(
+        BACKEND,
+        &["--insecure-no-auth", "--no-state"],
+        extra,
+        &[],
+        false,
+    );
+    run
+}
+
+/// [`serve`] with everything a test may want to choose: the backend, how it
+/// authenticates, the environment, and whether the child is left running
+/// for the caller to end — which the lock tests need, since the lock is
+/// held only while the process lives.
+fn serve_with(
+    backend: &str,
+    auth: &[&str],
+    extra: &[&str],
+    env: &[(&str, &Path)],
+    keep: bool,
+) -> (Run, Option<Child>) {
     let mut child = Command::new(BIN)
-        .args(["serve", BACKEND])
-        .args([
-            "--insecure-no-auth",
-            "--no-qr",
-            "--no-discovery",
-            "--no-portmap",
-        ])
+        .args(["serve", backend])
+        .args(auth)
+        .args(["--no-qr", "--no-discovery", "--no-portmap"])
         .args(["--relay", DEAD_RELAY])
         .args(extra)
+        // Neither may leak in from the developer's shell: the first would
+        // move the default folder out from under `HOME`, the second would
+        // name a folder outright.
+        .env_remove("XDG_DATA_HOME")
+        .env_remove("MODELPIPE_STATE_DIR")
+        .envs(env.iter().map(|(k, v)| (*k, *v)))
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -126,6 +157,19 @@ fn serve(extra: &[&str]) -> Run {
         );
     }
 
+    if exit.is_none() && keep {
+        // Left running, with what it has said so far. The reader thread ends
+        // with the child, whenever the caller ends it.
+        drop(incoming);
+        return (
+            Run {
+                stdout,
+                stderr: String::new(),
+                exit,
+            },
+            Some(child),
+        );
+    }
     if exit.is_none() {
         let _ = child.kill();
         let _ = child.wait();
@@ -146,11 +190,44 @@ fn serve(extra: &[&str]) -> Run {
         .expect("piped above")
         .read_to_string(&mut stderr)
         .expect("stderr is not binary");
-    Run {
-        stdout,
-        stderr,
-        exit,
-    }
+    (
+        Run {
+            stdout,
+            stderr,
+            exit,
+        },
+        None,
+    )
+}
+
+#[cfg(unix)]
+/// A home of this test's own under the temp directory, so the default state
+/// folder lands there and nowhere near a person's.
+fn home(name: &str) -> PathBuf {
+    let dir =
+        std::env::temp_dir().join(format!("modelpipe-cli-home-{}-{name}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("a scratch home");
+    dir
+}
+
+#[cfg(unix)]
+/// Where the default state folder for [`BACKEND`] is, under `home`.
+fn default_state(home: &Path) -> PathBuf {
+    let data = if cfg!(target_os = "macos") {
+        home.join("Library").join("Application Support")
+    } else {
+        home.join(".local").join("share")
+    };
+    data.join("modelpipe").join("127.0.0.1_9")
+}
+
+#[cfg(unix)]
+/// The environment that puts the default state folder under `home`: `HOME`
+/// is what both macOS and the XDG fallback read, and [`serve_with`] clears
+/// `XDG_DATA_HOME` so a developer's own does not win over it.
+fn at(home: &Path) -> Vec<(&'static str, &Path)> {
+    vec![("HOME", home)]
 }
 
 /// `--relay-only` on a host that reached no relay mints a ticket with no
@@ -221,4 +298,94 @@ fn a_ticket_that_names_somewhere_is_printed() {
         ticket.contains("pipe"),
         "and it has to be a ticket: {ticket:?}"
     );
+}
+
+/// With `--named` and no flags about state, a serve keeps its endpoint key
+/// under the platform's data directory, in a folder readable only by its
+/// owner, and says where.
+#[cfg(unix)]
+#[test]
+fn state_is_kept_under_the_data_directory_by_default() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let home = home("default");
+    let (run, _) = serve_with(BACKEND, &["--named"], &[], &at(&home), false);
+    assert_eq!(run.exit, None, "{:?} {:?}", run.stdout, run.stderr);
+    let state = default_state(&home);
+    assert!(
+        run.stderr.contains(&format!("state: {}", state.display())),
+        "{:?}",
+        run.stderr
+    );
+    assert!(state.join("identity").is_file(), "{}", state.display());
+    assert!(state.join("lock").is_file(), "{}", state.display());
+    let mode = std::fs::metadata(&state)
+        .expect("the folder")
+        .permissions()
+        .mode()
+        & 0o777;
+    assert_eq!(mode, 0o700);
+    assert!(
+        !run.stderr.contains("dies when serve restarts"),
+        "{:?}",
+        run.stderr
+    );
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+/// A second serve on the same backend is refused while the first runs, and
+/// one on another backend comes up beside it.
+#[cfg(unix)]
+#[test]
+fn one_serve_per_backend_holds_the_default_folder() {
+    let home = home("lock");
+    let (first, child) = serve_with(BACKEND, &["--named"], &[], &at(&home), true);
+    let mut child = child.expect("the first is left running");
+    assert_eq!(first.exit, None, "{:?}", first.stdout);
+
+    let (second, _) = serve_with(BACKEND, &["--named"], &[], &at(&home), false);
+    assert_eq!(
+        second.exit,
+        Some(false),
+        "{:?} {:?}",
+        second.stdout,
+        second.stderr
+    );
+    assert!(
+        second.stderr.contains("another modelpipe serve is using")
+            && second.stderr.contains(&format!("pid {}", child.id())),
+        "{:?}",
+        second.stderr
+    );
+    assert!(second.stdout.is_empty(), "{:?}", second.stdout);
+
+    let (other, _) = serve_with("http://127.0.0.1:10", &["--named"], &[], &at(&home), false);
+    assert_eq!(other.exit, None, "{:?} {:?}", other.stdout, other.stderr);
+
+    let _ = child.kill();
+    let _ = child.wait();
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+/// `--no-state` keeps nothing, and serving open keeps nothing unless asked:
+/// a ticket that is the only lock there is has no business surviving a
+/// restart by default.
+#[cfg(unix)]
+#[test]
+fn no_state_and_serving_open_leave_the_data_directory_alone() {
+    let home = home("none");
+    let (named, _) = serve_with(BACKEND, &["--named", "--no-state"], &[], &at(&home), false);
+    assert_eq!(named.exit, None, "{:?} {:?}", named.stdout, named.stderr);
+    let (open, _) = serve_with(BACKEND, &["--insecure-no-auth"], &[], &at(&home), false);
+    assert_eq!(open.exit, None, "{:?} {:?}", open.stdout, open.stderr);
+    assert!(
+        open.stderr.contains("dies when serve restarts"),
+        "{:?}",
+        open.stderr
+    );
+    assert!(
+        !default_state(&home).exists(),
+        "{} was created",
+        default_state(&home).display()
+    );
+    let _ = std::fs::remove_dir_all(&home);
 }
