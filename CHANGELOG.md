@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0](https://github.com/mmogr/modelpipe/compare/v0.7.0...v0.8.0) - 2026-09-24
+
+### Added
+
+- *(cli)* add modelpipe ollama ([#126](https://github.com/mmogr/modelpipe/pull/126))
+- *(cli)* invite, list and forget devices from the serve window ([#125](https://github.com/mmogr/modelpipe/pull/125))
+- *(cli)* [**breaking**] keep serve's identity and devices across restarts by default ([#124](https://github.com/mmogr/modelpipe/pull/124))
+- *(cli)* record paired devices in devices.json ([#123](https://github.com/mmogr/modelpipe/pull/123))
+- *(cli)* keep serve's state in one private folder with --state-dir ([#122](https://github.com/mmogr/modelpipe/pull/122))
+
+### Fixed
+
+- *(cli)* take an unredeemed invite's key back out of the listener ([#114](https://github.com/mmogr/modelpipe/pull/114))
+
+### Other
+
+- *(cli)* move the serve flow out of main ([#121](https://github.com/mmogr/modelpipe/pull/121))
+
 ## [0.7.0](https://github.com/mmogr/modelpipe/compare/v0.6.0...v0.7.0) - 2026-09-22
 
 ### Added
