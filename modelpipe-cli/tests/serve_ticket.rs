@@ -25,7 +25,9 @@
 //! never finds the lock another test holds.
 
 use std::io::{BufRead as _, BufReader, Read as _};
-use std::path::{Path, PathBuf};
+use std::path::Path;
+#[cfg(unix)]
+use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
