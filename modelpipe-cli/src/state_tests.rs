@@ -45,8 +45,13 @@ fn one_serve_at_a_time_holds_a_backend_folder() {
             let mode = fs::metadata(dir).expect("made").permissions().mode() & 0o777;
             assert_eq!(mode, 0o700, "{}", dir.display());
         }
-        let lock = fs::metadata(held.path().join("lock")).expect("the lock file");
-        assert_eq!(lock.permissions().mode() & 0o777, 0o600);
+        for file in ["lock", "pid"] {
+            let mode = fs::metadata(held.path().join(file))
+                .expect(file)
+                .permissions()
+                .mode();
+            assert_eq!(mode & 0o777, 0o600, "{file}");
+        }
     }
 
     let refused = format!(

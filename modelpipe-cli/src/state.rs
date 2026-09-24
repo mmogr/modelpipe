@@ -98,20 +98,14 @@ impl StateDir {
         make_private(&dir)?;
         refuse_if_shared(&dir)?;
         let lock_path = dir.join("lock");
-        let mut options = File::options();
-        options.read(true).write(true).create(true).truncate(false);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt as _;
-            options.mode(0o600);
-        }
-        let mut lock = options
+        let pid_path = dir.join("pid");
+        let lock = private_file_options()
             .open(&lock_path)
             .with_context(|| format!("could not open {}", lock_path.display()))?;
         match lock.try_lock() {
             Ok(()) => {}
             Err(TryLockError::WouldBlock) => {
-                let holder = fs::read_to_string(&lock_path).unwrap_or_default();
+                let holder = fs::read_to_string(&pid_path).unwrap_or_default();
                 let holder = holder.trim();
                 let by = if holder.is_empty() {
                     String::new()
@@ -127,11 +121,16 @@ impl StateDir {
                 return Err(e).with_context(|| format!("could not lock {}", lock_path.display()));
             }
         }
-        // Who holds it, for the refusal above. Written after the lock is
-        // ours, so a loser never overwrites the winner's pid.
-        lock.set_len(0)
-            .and_then(|()| writeln!(lock, "{}", std::process::id()))
-            .with_context(|| format!("could not write {}", lock_path.display()))?;
+        // Who holds it, for the refusal above. A file of its own, because a
+        // locked file cannot be read on every platform; written after the
+        // lock is ours, so a loser never overwrites the winner's pid.
+        private_file_options()
+            .open(&pid_path)
+            .and_then(|mut pid| {
+                pid.set_len(0)?;
+                writeln!(pid, "{}", std::process::id())
+            })
+            .with_context(|| format!("could not write {}", pid_path.display()))?;
         Ok(Self { dir, _lock: lock })
     }
 
@@ -174,6 +173,19 @@ fn make_private(dir: &Path) -> anyhow::Result<()> {
         }
     }
     Ok(())
+}
+
+/// Options that open a file for reading and writing, creating it readable
+/// only by its owner, and keeping what it holds.
+fn private_file_options() -> fs::OpenOptions {
+    let mut options = File::options();
+    options.read(true).write(true).create(true).truncate(false);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.mode(0o600);
+    }
+    options
 }
 
 /// A builder that makes a folder readable only by its owner.
