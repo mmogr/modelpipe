@@ -39,6 +39,7 @@ async fn main() -> anyhow::Result<()> {
     let mut interrupt = Interrupt::new()?;
     match cli.command {
         Command::Serve(args) => serve_cmd::run(args, &mut interrupt).await?,
+        Command::Ollama(args) => serve_cmd::run(args.into_serve(), &mut interrupt).await?,
         Command::Connect {
             ticket,
             name,
