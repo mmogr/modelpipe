@@ -171,6 +171,11 @@ fn serve_with(
         );
     }
     if exit.is_none() {
+        // The ticket is not the last thing serve says at startup: the notes
+        // about pairing and about what survives a restart follow it on
+        // stderr, and the tests read them. A moment for those to land before
+        // the kill, or a fast runner sees the ticket and nothing after it.
+        std::thread::sleep(Duration::from_millis(500));
         let _ = child.kill();
         let _ = child.wait();
     }
