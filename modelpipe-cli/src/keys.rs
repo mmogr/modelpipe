@@ -103,8 +103,9 @@ impl Keys {
         })
     }
 
+    /// No keyboard off Unix: the terminal modes this needs are termios.
     #[cfg(not(unix))]
-    fn attach() -> Option<Self> {
+    const fn attach() -> Option<Self> {
         None
     }
 
