@@ -19,6 +19,7 @@ use crate::park::{park, shut_down};
 use crate::serve_out::{WAIT_ONLINE, print_token, qr, qr_of, token_policy, undialable};
 use crate::session::{self, HINT};
 use crate::state::{self, StateDir, backend_key};
+use crate::stdout;
 
 /// Serve as asked, and stay parked on the pipe until told to stop.
 pub(crate) async fn run(args: ServeArgs, interrupt: &mut Interrupt) -> anyhow::Result<()> {
@@ -107,7 +108,7 @@ pub(crate) async fn run(args: ServeArgs, interrupt: &mut Interrupt) -> anyhow::R
         handle.shutdown().await;
         anyhow::bail!("{refusal}");
     }
-    println!("ticket: {ticket}");
+    stdout::say(&format!("ticket: {ticket}"));
     // The keyboard, when a person is at one and there is something a key
     // can do: a listener with a key per device. A token for everybody has
     // nothing to invite into.
@@ -131,7 +132,7 @@ pub(crate) async fn run(args: ServeArgs, interrupt: &mut Interrupt) -> anyhow::R
         None
     };
     if let Some(invite) = &invited {
-        println!("pairing: {}", invite.pairing());
+        stdout::say(&format!("pairing: {}", invite.pairing()));
         eprintln!(
             "the code in it works once, for two minutes: run modelpipe connect with the whole \
              pairing string on the device"
@@ -152,7 +153,7 @@ pub(crate) async fn run(args: ServeArgs, interrupt: &mut Interrupt) -> anyhow::R
     // pairing from this screen needs the code as well as the ticket.
     let shown = invited.as_ref().map(|invite| invite.pairing().to_string());
     if !no_qr && let Some(code) = shown.as_deref().map_or_else(|| qr(&ticket), qr_of) {
-        println!("\n{code}");
+        stdout::say(&format!("\n{code}"));
     }
     attend(&handle, keys, devices, invited, interrupt).await?;
     shut_down(handle.shutdown(), interrupt).await;

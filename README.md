@@ -261,9 +261,10 @@ status: direct
 ```
 
 The first two lines are stdout, the rest is stderr, so
-`modelpipe serve … | head -1` still gives you just the ticket. No line ever
-carries your token, your ticket, a header, or a query string. `RUST_LOG`
-takes over entirely if you want to pick targets and levels yourself.
+`modelpipe serve … | head -1` still gives you just the ticket, and serve
+carries on after `head` has gone. No line ever carries your token, your
+ticket, a header, or a query string. `RUST_LOG` takes over entirely if you
+want to pick targets and levels yourself.
 
 The `path=` field on the span above is how that peer *arrived*. A
 connection commonly establishes through the relay and hole-punches to a

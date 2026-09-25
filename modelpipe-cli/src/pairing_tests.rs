@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use modelpipe::{ConnectOptions, InviteOutcome, PairingCode, ServeOptions, TokenPolicy};
 
-use super::{ended, hold, invite_one, parse, watch};
+use super::{ended, hold, invite_one, key_note, parse, watch};
 use crate::store;
 
 /// Vector 1 from `docs/ticket-format-v0.md`.
@@ -39,6 +39,20 @@ fn connect_takes_a_ticket_alone_or_a_pairing_string() {
     assert_eq!(given.code().map(PairingCode::as_str), Some("483920"));
     assert!(parse("pipenotaticket").is_err());
     assert!(parse(&format!("{TICKET}-4839")).is_err());
+}
+
+/// A key that reached stdout is the person's to keep. One that did not was
+/// printed nowhere else, so the note says to forget the device and pair
+/// again, and never that it was printed.
+#[test]
+fn a_printed_key_is_to_be_kept_and_an_unprinted_one_means_pairing_again() {
+    let kept = key_note(true, "dev-0a1b2c3d", "the serve side");
+    assert!(kept.contains("printed once, so keep it"), "{kept}");
+    assert!(!kept.contains("WARNING"), "{kept}");
+    let lost = key_note(false, "dev-0a1b2c3d", "the serve side");
+    assert!(lost.contains("the key was not printed"), "{lost}");
+    assert!(lost.contains("Forget dev-0a1b2c3d"), "{lost}");
+    assert!(!lost.contains("printed once"), "{lost}");
 }
 
 fn named() -> ServeOptions {
