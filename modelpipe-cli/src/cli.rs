@@ -55,7 +55,8 @@ pub(crate) enum Command {
         name: Option<String>,
         /// Keep this side's endpoint key here, so the serve side sees the same device
         ///
-        /// Created on first use, readable only by you. Without it a fresh key
+        /// Created on first use, readable only by you, and refused if it is a
+        /// symlink or anything else but a regular file. Without it a fresh key
         /// is generated per run, and a serve side that pins a device's key to
         /// its endpoint refuses the next one.
         #[arg(long, value_name = "FILE")]
@@ -149,7 +150,8 @@ pub(crate) struct ServeArgs {
     ///
     /// JSON, one row per device ever invited: its key, when it was invited,
     /// when it paired and from where. Created on first use, readable only
-    /// by you, and refused if others can read it. Needs --named.
+    /// by you, and refused if others can read it or if it is a symlink or
+    /// anything else but a regular file. Needs --named.
     #[arg(long, value_name = "FILE", requires = "named")]
     pub(crate) devices: Option<PathBuf>,
     /// Accept a backend on a private (RFC 1918) address, not just loopback
@@ -160,7 +162,8 @@ pub(crate) struct ServeArgs {
     pub(crate) relay: Option<String>,
     /// Keep the endpoint key in this file instead of the state folder
     ///
-    /// Created on first use, readable only by you. To revoke a leaked
+    /// Created on first use, readable only by you, and refused if it is a
+    /// symlink or anything else but a regular file. To revoke a leaked
     /// ticket, delete the file and restart: every device then pairs again.
     #[arg(long, value_name = "FILE")]
     pub(crate) identity: Option<PathBuf>,

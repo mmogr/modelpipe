@@ -158,6 +158,27 @@ fn unlinkable(path: &Path, why: io::Error) -> io::Error {
     )
 }
 
+/// Refuse a path that is not a regular file, before anything opens it.
+///
+/// Takes the path's own metadata, not its target's, so a symlink is
+/// refused even when it points at a regular file, and so is anything else
+/// that is not a regular file, a FIFO included. A caller runs this before
+/// its read, so a FIFO at the path is refused rather than opened. An absent
+/// path is the same [`io::ErrorKind::NotFound`] a read would return, so a
+/// caller keeps one arm for it.
+pub(crate) fn check_regular(path: &Path) -> Result<(), io::Error> {
+    let kind = fs::symlink_metadata(path)?.file_type();
+    if kind.is_file() {
+        return Ok(());
+    }
+    let what = if kind.is_symlink() {
+        "a symlink, and only a regular file is read: use the file it points to"
+    } else {
+        "not a regular file"
+    };
+    Err(io::Error::other(format!("{} is {what}", path.display())))
+}
+
 /// Refuse a file anyone else on this machine can read.
 ///
 /// The check `ssh` makes on a private key, for the reason it makes it: a

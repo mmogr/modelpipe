@@ -213,8 +213,8 @@ the client.
 | `--insecure-no-auth` | Serve with no token at all. The name is the warning. |
 | `--named` | Hold a key per device instead of one token for everybody. Pair devices with `--invite`, and keep them with `--devices`. |
 | `--invite` | With `--named`: print a pairing string, the ticket, a dash and a six-digit code, that a device redeems once, within two minutes, for its own key. Says on stderr how it ended. In a terminal, `i` does the same at any time. |
-| `--devices <FILE>` | With `--named`: keep the devices record here, so a restart admits every device that paired. JSON, one row per device ever invited, with when it was invited, when it paired and from which endpoint; a row whose code was never redeemed stays, marked so, and its key is not held again. A file in the older `name key` form is read and rewritten. Created `0600`; refuses to start if others can read it. |
-| `--identity <FILE>` | Keep the endpoint key in this file instead of the state folder. Created `0600`; refuses to start if others can read it. |
+| `--devices <FILE>` | With `--named`: keep the devices record here, so a restart admits every device that paired. JSON, one row per device ever invited, with when it was invited, when it paired and from which endpoint; a row whose code was never redeemed stays, marked so, and its key is not held again. A file in the older `name key` form is read and rewritten. Created `0600`; refuses to start if others can read it, or if it is a symlink or anything else but a regular file. |
+| `--identity <FILE>` | Keep the endpoint key in this file instead of the state folder. Created `0600`; refuses to start if others can read it, or if it is a symlink or anything else but a regular file. |
 | `--state-dir <DIR>` | Keep everything that survives a restart under here instead of the data directory, in a folder per backend: the endpoint key, and with `--named` the devices record. Created `0700`; refuses a folder others can read into, and refuses to start while another `serve` holds the same backend's folder. Also read from `MODELPIPE_STATE_DIR`. `--identity` and `--devices` each override their file's place in it. |
 | `--no-state` | Keep nothing across restarts: a fresh ticket every run, and no devices record. Restarting is then revocation, as it was before 0.8. |
 | `--allow-private-backend` | Accept a backend on a private (RFC 1918 / ULA) address, not only loopback. Link-local is never accepted. |
@@ -230,7 +230,7 @@ the client.
 |---|---|
 | `--bind <ADDR>` | Local address to listen on. Defaults to a free loopback port. Binding off loopback exposes the one hop with no encryption in front of it, and warns you. |
 | `--name <LABEL>` | What this device calls itself when it pairs. The serve side shows it. |
-| `--identity <FILE>` | Keep this side's endpoint key here, so the serve side sees the same device every time. Created `0600`. |
+| `--identity <FILE>` | Keep this side's endpoint key here, so the serve side sees the same device every time. Created `0600`; refused if others can read it, or if it is a symlink or anything else but a regular file. |
 | `--relay <URL>` | The relay *this* side registers with and falls back to. The serve side's relay is in the ticket and is dialled regardless. |
 | `--no-portmap` | As for `serve`. |
 | `--no-discovery` | Don't resolve the peer through n0; dial only the paths the ticket carries. |

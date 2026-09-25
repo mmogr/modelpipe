@@ -66,6 +66,72 @@ fn the_file_is_created_private_and_one_others_can_read_is_refused() {
     assert!(refused.contains("chmod 600"), "{refused}");
 }
 
+/// Run `f` on a thread and wait at most `bound` for it, so a call that
+/// blocks on the path fails the test instead of hanging the suite.
+#[cfg(unix)]
+fn within<T: Send + 'static>(
+    bound: std::time::Duration,
+    f: impl FnOnce() -> T + Send + 'static,
+) -> T {
+    let (sent, received) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = sent.send(f());
+    });
+    received
+        .recv_timeout(bound)
+        .expect("it returned rather than blocking on the path")
+}
+
+/// A FIFO at the devices path is refused before anything opens it, so the
+/// read returns instead of waiting for a writer, and the FIFO is left as
+/// found.
+#[cfg(unix)]
+#[test]
+fn a_fifo_at_the_devices_path_is_refused_without_blocking() {
+    let path = scratch("fifo");
+    let made = std::process::Command::new("mkfifo")
+        .arg(&path)
+        .status()
+        .expect("mkfifo runs");
+    assert!(made.success(), "mkfifo made {}", path.display());
+
+    let probe = path.clone();
+    let refused = within(std::time::Duration::from_secs(10), move || read(&probe))
+        .expect_err("a FIFO is not a devices file");
+
+    let said = format!("{refused:#}");
+    assert!(said.contains("not a regular file"), "{said}");
+    assert!(
+        std::os::unix::fs::FileTypeExt::is_fifo(
+            &fs::symlink_metadata(&path)
+                .expect("still there")
+                .file_type()
+        ),
+        "the FIFO was replaced"
+    );
+}
+
+/// A symlink at the devices path is refused even when it points at a
+/// devices file this module wrote and reads: the type checked is the
+/// link's own.
+#[cfg(unix)]
+#[test]
+fn a_symlink_to_a_devices_file_is_refused() {
+    let real = scratch("linked");
+    replace(&real, "laptop KEYONE\n").expect("replace");
+    let link = real.with_file_name("link");
+    std::os::unix::fs::symlink(&real, &link).expect("symlink");
+
+    let said = format!("{:#}", read(&link).expect_err("a symlink is refused"));
+
+    assert!(said.contains("it is a symlink"), "{said}");
+    assert!(!said.contains("KEYONE"), "{said}");
+    assert_eq!(
+        read(&real).expect("the target reads").as_deref(),
+        Some("laptop KEYONE\n")
+    );
+}
+
 /// A rewrite file an earlier run left behind, readable by others, does not
 /// make the devices file readable when it is replaced.
 #[cfg(unix)]

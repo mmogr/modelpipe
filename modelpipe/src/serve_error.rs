@@ -103,13 +103,14 @@ pub enum ServeError {
     /// public surface, so it arrives as `io::Error` and nothing more.
     Bind(std::io::Error),
     /// [`ServeOptions::identity`](crate::ServeOptions::identity) names a file this listener cannot use as
-    /// its endpoint key — unreadable, unwritable, not base32, the wrong
-    /// length, or readable by other users on the machine.
+    /// its endpoint key — unreadable, unwritable, not a regular file (a
+    /// symlink included), not base32, the wrong length, or readable by
+    /// other users on the machine.
     ///
     /// One variant for all of them because they are one verdict: the
     /// operator named this path, and retrying it fails identically. Which
     /// it was rides in [`source`](std::error::Error::source), the shape
-    /// [`Bind`](Self::Bind) uses, rather than in five variants a caller
+    /// [`Bind`](Self::Bind) uses, rather than in six variants a caller
     /// would match to reach one arm. The path is carried and the key is
     /// not, for the reason [`InvalidToken`](Self::InvalidToken) carries
     /// nothing.

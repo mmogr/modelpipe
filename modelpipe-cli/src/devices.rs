@@ -4,8 +4,9 @@
 //! What the file *says* is `store.rs`'s business. This module owns how it is
 //! read and written: the keys are credentials, so the file is created
 //! readable only by its owner, one others can read is refused rather than
-//! used, a replacement lands whole or not at all, and no error from here
-//! repeats a key.
+//! used, a path that is not a regular file is refused before it is read, a
+//! replacement lands whole or not at all, and no error from here repeats a
+//! key.
 //!
 //! Before 0.8 the file was one device per line — its name, a space, and its
 //! key — with blank lines and `#` lines skipped. [`parse_lines`] still reads
@@ -18,8 +19,11 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context as _, bail};
 
 /// The file's text, or `None` when there is no file.
+///
+/// A path that is not a regular file is refused before it is read, a
+/// symlink included even when it points at a devices file.
 pub(crate) fn read(path: &Path) -> anyhow::Result<Option<String>> {
-    match fs::read_to_string(path) {
+    match refuse_unless_regular(path).and_then(|()| fs::read_to_string(path)) {
         Ok(text) => {
             refuse_if_shared(path)?;
             Ok(Some(text))
@@ -27,6 +31,24 @@ pub(crate) fn read(path: &Path) -> anyhow::Result<Option<String>> {
         Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
         Err(e) => Err(e).with_context(|| format!("could not read {}", path.display())),
     }
+}
+
+/// Refuse a path that is not a regular file, before anything opens it.
+///
+/// Takes the path's own metadata, not its target's, so a symlink is refused
+/// even when it points at a regular file, and so is anything else that is
+/// not a regular file, a FIFO included. An absent path is the same
+/// `NotFound` the read would return.
+fn refuse_unless_regular(path: &Path) -> io::Result<()> {
+    let kind = fs::symlink_metadata(path)?.file_type();
+    if kind.is_file() {
+        return Ok(());
+    }
+    Err(io::Error::other(if kind.is_symlink() {
+        "it is a symlink, and only a regular file is read: use the file it points to"
+    } else {
+        "it is not a regular file"
+    }))
 }
 
 /// Every device a line-per-device file names, in order.

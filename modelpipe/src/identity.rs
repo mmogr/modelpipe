@@ -46,7 +46,7 @@ use std::io;
 use std::path::Path;
 
 use crate::base32;
-use crate::private_file::{self, check_private};
+use crate::private_file::{self, check_private, check_regular};
 use crate::{ConnectError, ServeError};
 
 /// Bytes in an endpoint's secret key. Fixed by the curve, not by us.
@@ -61,12 +61,16 @@ pub(crate) const KEY_BYTES: usize = 32;
 ///
 /// # Errors
 ///
-/// [`Unusable`] for a file that exists and is not a key this can use, or
-/// one it cannot read or write, which each side reports as its own error's
-/// `Identity` variant. All of them are permanent: the path came from the
-/// operator, and retrying it fails the same way.
+/// [`Unusable`] for a file that exists and is not a key this can use, one
+/// it cannot read or write, or a path that is not a regular file (a symlink
+/// is refused even when it points at a key), which each side reports as its
+/// own error's `Identity` variant. All of them are permanent: the path came
+/// from the operator, and retrying it fails the same way.
 pub(crate) fn load_or_mint(path: &Path) -> Result<[u8; KEY_BYTES], Unusable> {
-    match fs::read_to_string(path) {
+    // The file type is checked before the read, so a FIFO is refused and
+    // never opened. An absent path is `NotFound` from the check, which is
+    // the arm that mints.
+    match check_regular(path).and_then(|()| fs::read_to_string(path)) {
         // A file with nothing in it holds no key, and now says so instead
         // of failing as "not base32". This crate can no longer produce
         // one — writes go through [`private_file::write_new`] — but a

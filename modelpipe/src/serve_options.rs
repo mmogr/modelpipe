@@ -71,7 +71,8 @@ pub struct ServeOptions {
     /// deleting this file, and there is now a secret on disk where there
     /// was none — and is argued in full in ADR 0002. The file is created
     /// readable only by its owner, and a listener refuses to start on one
-    /// others can read.
+    /// others can read, or on a path that is not a regular file: a symlink
+    /// is refused even when it points at a key.
     pub identity: Option<std::path::PathBuf>,
     /// Wait, up to this long, for the endpoint to reach a relay before
     /// [`serve`](fn@crate::serve) returns.
