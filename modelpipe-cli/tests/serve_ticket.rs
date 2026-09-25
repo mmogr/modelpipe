@@ -4,7 +4,7 @@
 //! `main_tests.rs` pins what `undialable` decides and cannot pin that it is
 //! consulted: deleting the call in `main` leaves every unit test in this
 //! crate green. That is the failure mode this workspace has hit before —
-//! `integration_pipe.rs` exists for the library's half of it — so the two
+//! `integration_pipe.rs` exists for the library's half of it — so the
 //! tests here run the real binary and read the two streams a person reads.
 //!
 //! **Hermetic apart from one address.** The relay named below is a loopback
@@ -29,7 +29,7 @@ use std::path::Path;
 #[cfg(unix)]
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
-use std::sync::mpsc;
+use std::sync::{Mutex, PoisonError, mpsc};
 use std::time::{Duration, Instant};
 
 /// The binary cargo built for this test — not one found on `PATH`, which
@@ -53,6 +53,26 @@ const DEAD_RELAY: &str = "https://127.0.0.1:1/";
 /// it buys is a failure instead of a suite that hangs when neither thing
 /// happens.
 const PATIENCE: Duration = Duration::from_secs(40);
+
+/// Held across every spawn in this file, by [`spawn`].
+///
+/// On macOS, std makes a child's pipes with `pipe()` and marks both ends
+/// close-on-exec a moment later; Linux uses `pipe2(O_CLOEXEC)`, which does
+/// both at once. A child that another test thread spawns in that moment
+/// inherits both ends and holds them until it exits. A serve whose stdout
+/// reader this file dropped then still has a reader, in that other child,
+/// so its writes succeed; and a stream read to its end waits for the other
+/// child to end too. Pipes are made and children started inside `spawn`,
+/// so one spawn at a time leaves no such moment.
+static SPAWN: Mutex<()> = Mutex::new(());
+
+/// Spawn `command` while holding [`SPAWN`].
+fn spawn(command: &mut Command) -> Child {
+    let _spawning = SPAWN.lock().unwrap_or_else(PoisonError::into_inner);
+    command
+        .spawn()
+        .expect("the binary cargo just built has to run")
+}
 
 /// What one run of `modelpipe serve` said before it printed a ticket or
 /// ended.
@@ -98,23 +118,23 @@ fn serve_with(
     until: &str,
     keep: bool,
 ) -> (Run, Option<Child>) {
-    let mut child = Command::new(BIN)
-        .args(command)
-        .args(auth)
-        .args(["--no-qr", "--no-discovery", "--no-portmap"])
-        .args(["--relay", DEAD_RELAY])
-        .args(extra)
-        // Neither may leak in from the developer's shell: the first would
-        // move the default folder out from under `HOME`, the second would
-        // name a folder outright.
-        .env_remove("XDG_DATA_HOME")
-        .env_remove("MODELPIPE_STATE_DIR")
-        .envs(env.iter().map(|(k, v)| (*k, *v)))
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("the binary cargo just built has to run");
+    let mut child = spawn(
+        Command::new(BIN)
+            .args(command)
+            .args(auth)
+            .args(["--no-qr", "--no-discovery", "--no-portmap"])
+            .args(["--relay", DEAD_RELAY])
+            .args(extra)
+            // Neither may leak in from the developer's shell: the first would
+            // move the default folder out from under `HOME`, the second would
+            // name a folder outright.
+            .env_remove("XDG_DATA_HOME")
+            .env_remove("MODELPIPE_STATE_DIR")
+            .envs(env.iter().map(|(k, v)| (*k, *v)))
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped()),
+    );
 
     // A thread, because the line has to be seen *while* the child runs: the
     // interesting case is the one where it never ends on its own, so reading
@@ -480,4 +500,162 @@ fn ollama_offers_a_first_code_and_keeps_its_state() {
     assert!(!run.stderr.contains("WARNING"), "{:?}", run.stderr);
     assert!(state.join("127.0.0.1_9").join("devices.json").is_file());
     let _ = std::fs::remove_dir_all(&state);
+}
+
+/// Run `serve --no-state` with `auth`, its stdout's reader gone before the
+/// first line, and read stderr until it parks or ends. The child comes back
+/// still running if it parked, for the caller to look at and end.
+///
+/// Parked is the `status:` line. `park` prints it first, after every line
+/// `serve` writes at startup, so a child that has said it has already tried
+/// every stdout write it makes. The QR code is left on for that reason: it
+/// is the last of them.
+#[cfg(unix)]
+fn serve_unread(auth: &[&str]) -> (String, Child) {
+    let mut child = spawn(
+        Command::new(BIN)
+            .args(["serve", BACKEND, "--no-state"])
+            .args(auth)
+            .args(["--no-discovery", "--no-portmap", "--relay", DEAD_RELAY])
+            .env_remove("XDG_DATA_HOME")
+            .env_remove("MODELPIPE_STATE_DIR")
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped()),
+    );
+    // Before the first line by a wide margin: serve looks for the dead relay
+    // for ten seconds before it writes anything, so every write to stdout
+    // fails, the ticket's included.
+    drop(child.stdout.take());
+    let err = child.stderr.take().expect("piped above");
+    let (lines, incoming) = mpsc::channel();
+    std::thread::spawn(move || {
+        for line in BufReader::new(err).lines().map_while(Result::ok) {
+            if lines.send(line).is_err() {
+                break;
+            }
+        }
+    });
+    let deadline = Instant::now() + PATIENCE;
+    let mut said = String::new();
+    loop {
+        match incoming.recv_timeout(Duration::from_millis(100)) {
+            Ok(line) => {
+                let parked = line.starts_with("status:");
+                said.push_str(&line);
+                said.push('\n');
+                if parked {
+                    break;
+                }
+            }
+            // Stderr ended, which is the child ending.
+            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            Err(mpsc::RecvTimeoutError::Timeout) => assert!(
+                Instant::now() < deadline,
+                "serve neither parked nor ended within {PATIENCE:?}: {said:?}"
+            ),
+        }
+    }
+    (said, child)
+}
+
+/// `serve … | head -1` closes the pipe once `head` has the ticket, and serve
+/// carries on: a stdout nobody reads says nothing about a listener that is
+/// carrying requests. Harsher than `head` here, since the reader is gone
+/// before the ticket too.
+///
+/// Unix only, where a write to a pipe with no reader fails with EPIPE, which
+/// is what `head` leaves behind.
+#[cfg(unix)]
+#[test]
+fn serve_keeps_serving_after_the_reader_of_its_ticket_has_gone() {
+    let (said, mut child) = serve_unread(&["--named"]);
+    let running = child.try_wait().expect("the child is ours to wait on");
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(
+        said.contains("no device can use this listener yet") && said.contains("status:"),
+        "serve had to get past its ticket and park: {said:?}"
+    );
+    assert!(running.is_none(), "serve ended with {running:?}: {said:?}");
+}
+
+/// A generated token that reaches no reader reaches nobody, and serve says so
+/// on stderr — without the token, which stderr must never carry. A minted
+/// token is 52 characters of base32, and no other word serve writes to
+/// stderr is anything like that long.
+#[cfg(unix)]
+#[test]
+fn a_generated_token_nobody_read_is_reported_on_stderr_without_its_value() {
+    let (said, mut child) = serve_unread(&[]);
+    let running = child.try_wait().expect("the child is ours to wait on");
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(
+        said.contains("the token was not printed") && said.contains("status:"),
+        "{said:?}"
+    );
+    assert!(running.is_none(), "serve ended with {running:?}: {said:?}");
+    let base32 = |word: &str| {
+        word.len() >= 52
+            && word
+                .chars()
+                .all(|c| matches!(c.to_ascii_uppercase(), 'A'..='Z' | '2'..='7'))
+    };
+    assert!(
+        !said.split(|c: char| !c.is_ascii_alphanumeric()).any(base32),
+        "the token reached stderr: {said:?}"
+    );
+}
+
+/// A supplied token is the operator's own and is kept wherever they keep it,
+/// so a `token:` line nobody read loses nothing: stderr has no notice about
+/// it, and a restart would mint nothing anyway. Nor does it carry the token.
+#[cfg(unix)]
+#[test]
+fn a_supplied_token_nobody_read_draws_no_notice() {
+    const SUPPLIED: &str = "sk-supplied-for-this-test";
+    let (said, mut child) = serve_unread(&["--token", SUPPLIED]);
+    let running = child.try_wait().expect("the child is ours to wait on");
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(said.contains("status:"), "serve had to park: {said:?}");
+    assert!(running.is_none(), "serve ended with {running:?}: {said:?}");
+    assert!(
+        !said.contains("the token was not printed"),
+        "a supplied token drew the notice: {said:?}"
+    );
+    assert!(
+        !said.contains(SUPPLIED),
+        "the token reached stderr: {said:?}"
+    );
+}
+
+/// The negative control for
+/// `a_generated_token_nobody_read_is_reported_on_stderr_without_its_value`:
+/// a generated token that reaches its reader draws no notice. Without it, a
+/// notice printed under every generated token, or a `say` that reports every
+/// write as failed, would leave this file green while every serve told its
+/// operator to restart for a token it had just printed.
+#[test]
+fn a_generated_token_that_was_printed_draws_no_notice() {
+    let (run, _) = serve_with(
+        &["serve", BACKEND],
+        &["--no-state"],
+        &[],
+        &[],
+        "token:",
+        false,
+    );
+    assert_eq!(run.exit, None, "{:?} {:?}", run.stdout, run.stderr);
+    assert!(
+        run.stdout.iter().any(|line| line.starts_with("token:")),
+        "no token was printed: {:?}",
+        run.stdout
+    );
+    assert!(
+        !run.stderr.contains("the token was not printed"),
+        "a printed token drew the notice: {:?}",
+        run.stderr
+    );
 }

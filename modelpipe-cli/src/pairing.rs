@@ -14,6 +14,7 @@ use modelpipe::{
 };
 
 use crate::park::{FIRST_CONTACT, first_contact};
+use crate::stdout;
 use crate::store::{self, Device};
 
 /// Hold the record's keys, and invite one device more when asked — or when
@@ -203,12 +204,13 @@ pub(crate) async fn connect(
     // and before it, so a terminal about to sit still says why.
     eprintln!("reaching the serve side…");
     first_contact(&mut handle, FIRST_CONTACT).await?;
-    println!("{}", handle.base_url());
+    stdout::say(&handle.base_url());
     Ok(handle)
 }
 
 /// Redeem a pairing string's code for this device's key. Prints the base URL,
-/// as a plain `connect` does, and then the key, once.
+/// as a plain `connect` does, and then the key, once. A key that does not
+/// reach stdout is printed nowhere else: stderr says to pair again.
 pub(crate) async fn redeem(
     given: &PairingString,
     name: Option<&str>,
@@ -221,13 +223,27 @@ pub(crate) async fn redeem(
         serving,
         ..
     } = modelpipe::pair(given, name, opts, FIRST_CONTACT).await?;
-    println!("{}", handle.base_url());
-    println!("key: {api_key}");
-    eprintln!(
-        "paired as {device} with {serving}. The key is printed once, so keep it, and connect \
-         with the ticket alone from now on"
-    );
+    stdout::say(&handle.base_url());
+    let printed = stdout::say(&format!("key: {api_key}"));
+    eprintln!("{}", key_note(printed, &device, serving));
     Ok(handle)
+}
+
+/// The stderr line after the key's: keep the key when it was `printed`, and
+/// otherwise forget the device and pair again, since it was printed nowhere
+/// else. It is never given the key, so stderr cannot carry it.
+pub(crate) fn key_note(printed: bool, device: &str, serving: impl std::fmt::Display) -> String {
+    if printed {
+        format!(
+            "paired as {device} with {serving}. The key is printed once, so keep it, and \
+             connect with the ticket alone from now on"
+        )
+    } else {
+        format!(
+            "WARNING: paired as {device} with {serving}, but the key was not printed: nothing \
+             is reading stdout. Forget {device} on the serve side and pair again"
+        )
+    }
 }
 
 #[cfg(test)]

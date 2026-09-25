@@ -11,6 +11,8 @@ use std::time::Duration;
 
 use modelpipe::{Ticket, TokenPolicy};
 
+use crate::stdout;
+
 /// How long `serve` lets the endpoint look for a relay before minting the
 /// ticket.
 ///
@@ -155,11 +157,21 @@ pub(crate) fn qr_of(text: &str) -> Option<String> {
 }
 
 /// Print the token line, or warn on stderr that nothing is enforced.
+///
+/// A generated token whose write to stdout fails reaches nobody, and the
+/// listener goes on enforcing it; stderr is told so, and never the token.
 pub(crate) fn print_token(supplied: bool, token: Option<String>) {
     match token_line(supplied, token) {
         // Two lines, two credentials: the ticket and the token travel to
         // client machines separately on purpose.
-        Some(line) => println!("{line}"),
+        Some(line) => {
+            if !stdout::say(&line) && !supplied {
+                eprintln!(
+                    "WARNING: the token was not printed: nothing is reading stdout, so no \
+                     client holds it — restart serve to mint another"
+                );
+            }
+        }
         None => eprintln!("WARNING: serving open — anyone holding the ticket can use your backend"),
     }
 }

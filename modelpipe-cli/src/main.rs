@@ -1,6 +1,10 @@
 //! `modelpipe` CLI: thin face over the library crate. All behavior lives
 //! in `modelpipe`; this file parses arguments and prints.
 
+// A stdout line this crate's own code writes goes through `stdout::say`,
+// which does not panic when nothing is reading it any more.
+#![deny(clippy::print_stdout)]
+
 use clap::Parser as _;
 use modelpipe::ConnectOptions;
 
@@ -17,6 +21,7 @@ mod serve_cmd;
 mod serve_out;
 mod session;
 mod state;
+mod stdout;
 mod store;
 
 use cli::{Cli, Command};
