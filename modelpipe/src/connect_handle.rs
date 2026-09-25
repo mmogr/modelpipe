@@ -212,6 +212,11 @@ impl ConnectHandle {
     /// Same contract as [`ServeHandle::shutdown`](crate::ServeHandle::shutdown): drains rather than
     /// cuts, does not time out, takes `&self` for shared-state embedders,
     /// and is idempotent. Dropping the handle cuts instead.
+    ///
+    /// A local client can hold this drain by keeping its socket open, even
+    /// after it has read its whole response, or by leaving a large response
+    /// unread, even after closing its own sending half;
+    /// [`shutdown_timeout`](Self::shutdown_timeout) bounds it.
     pub async fn shutdown(&self) {
         dialer::shutdown(&self.state).await;
     }
