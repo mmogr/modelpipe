@@ -205,7 +205,10 @@ impl ServeHandle {
     /// implementation: the same promise [`set_token`](Self::set_token)
     /// already makes — that a streaming response is not cut mid-body —
     /// holds for teardown. A request admitted before this call runs to
-    /// completion; one arriving after it does not get in.
+    /// completion; one arriving after it does not get in. A peer that
+    /// stops reading its response can hold the drain just as a backend that
+    /// stops producing one does; [`shutdown_timeout`](Self::shutdown_timeout)
+    /// bounds both.
     ///
     /// Dropping the handle is the other half of the pair and cuts
     /// immediately, without waiting. Both are needed: a daemon shutting
@@ -232,9 +235,10 @@ impl ServeHandle {
     ///
     /// This ships alongside `shutdown` rather than after it because the
     /// unbounded wait has a real failure mode — a backend that has wedged
-    /// mid-generation never completes, and an embedder with only the
-    /// unbounded call would have to reach for the drop path and lose the
-    /// drain entirely.
+    /// mid-generation, or a peer that has stopped reading what it asked
+    /// for, can keep that wait from completing, and an embedder with only
+    /// the unbounded call would have to reach for the drop path and lose
+    /// the drain entirely.
     pub async fn shutdown_timeout(&self, grace: Duration) -> bool {
         listener::shutdown_timeout(&self.state, grace).await
     }
