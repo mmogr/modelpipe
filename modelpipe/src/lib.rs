@@ -108,12 +108,8 @@ mod pair;
 mod pair_wire;
 mod serve;
 mod serve_error;
-mod serve_grace;
 mod serve_handle;
-mod serve_invite;
-mod serve_named;
 mod serve_options;
-mod serve_status;
 
 // This block is the public API. Everything above is a private module,
 // free to be rearranged at will; every name below is versioned. Adding to
