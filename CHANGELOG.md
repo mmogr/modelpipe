@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.1](https://github.com/mmogr/modelpipe/compare/v0.8.0...v0.8.1) - 2026-09-25
+
+### Fixed
+
+- *(cli)* modelpipe ollama takes --allow-private-backend, and a backend refused as not local names it ([#138](https://github.com/mmogr/modelpipe/pull/138))
+- *(cli)* serve and connect keep running when whatever reads their stdout has gone ([#137](https://github.com/mmogr/modelpipe/pull/137))
+- *(body)* a chunk-size line carrying a bare CR or LF is refused, and shutdown's docs say what can hold the drain ([#136](https://github.com/mmogr/modelpipe/pull/136))
+- *(identity)* a key or devices path that is not a regular file is refused before it is read ([#135](https://github.com/mmogr/modelpipe/pull/135))
+- *(cli)* an invite whose devices record cannot be written leaves no key held ([#127](https://github.com/mmogr/modelpipe/pull/127))
+
 ## [0.8.0](https://github.com/mmogr/modelpipe/compare/v0.7.0...v0.8.0) - 2026-09-24
 
 ### Added
