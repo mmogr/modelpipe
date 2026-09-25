@@ -131,3 +131,27 @@ async fn the_devices_file_keeps_a_paired_device_and_drops_an_unused_invite() {
     assert_eq!(held.expect("held from the file"), 1);
     assert_eq!(names, vec![used.device().to_owned()]);
 }
+
+/// A devices record that cannot be written refuses the invite, and the key
+/// the library held for it goes with it, so the listener holds no name at
+/// all.
+#[tokio::test]
+async fn an_invite_whose_devices_record_cannot_be_written_leaves_no_key_held() {
+    let dir = std::env::temp_dir().join(format!("modelpipe-cli-unwritable-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("a scratch directory");
+    // A regular file where the record's directory would be.
+    let blocker = dir.join("blocker");
+    std::fs::write(&blocker, "not a directory").expect("the blocking file");
+    let serving = modelpipe::serve("http://127.0.0.1:9", named())
+        .await
+        .expect("serve");
+
+    let invited = invite_one(&serving, Some(&blocker.join("devices.json")));
+    let held = serving.token_names();
+    serving.shutdown().await;
+    let _ = std::fs::remove_dir_all(&dir);
+
+    invited.expect_err("an invite with no row is refused");
+    assert_eq!(held, Vec::<String>::new());
+}

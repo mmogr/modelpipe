@@ -76,20 +76,25 @@ pub(crate) fn hold(handle: &ServeHandle, path: &Path) -> anyhow::Result<usize> {
 /// Invite a device: its row written to the record first, when there is one,
 /// and only then the code armed, so a device that redeems it is always on
 /// record.
+///
+/// The library holds the key as it mints the invite, so a row that cannot
+/// be written takes the key back out before the error returns, rather than
+/// leave one held that no row names.
 pub(crate) fn invite_one(handle: &ServeHandle, file: Option<&Path>) -> anyhow::Result<Invite> {
     let invite = handle.invite(InviteOptions::default())?;
     if let Some(path) = file {
-        store::upsert(
-            path,
-            Device {
-                name: invite.device().to_owned(),
-                key: invite.api_key().to_owned(),
-                label: None,
-                invited_at: store::now(),
-                redeemed_at: None,
-                peer: None,
-            },
-        )?;
+        let row = Device {
+            name: invite.device().to_owned(),
+            key: invite.api_key().to_owned(),
+            label: None,
+            invited_at: store::now(),
+            redeemed_at: None,
+            peer: None,
+        };
+        if let Err(e) = store::upsert(path, row) {
+            handle.remove_token(invite.device());
+            return Err(e);
+        }
     }
     invite.arm();
     Ok(invite)
