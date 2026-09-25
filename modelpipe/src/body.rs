@@ -169,6 +169,13 @@ where
         }
         let size = u64::from_str_radix(size_text, 16)
             .map_err(|_| std::io::Error::other("chunk size is not hexadecimal"))?;
+        // The line goes on verbatim, extensions and all, so it is held to
+        // the rule `dropped` applies to a trailer, before any of it leaves.
+        if has_bare_line_break(&line) {
+            return Err(std::io::Error::other(
+                "chunk size line carries a bare CR or LF",
+            ));
+        }
 
         dst.write_all(&line).await?;
         dst.write_all(b"\r\n").await?;
@@ -240,6 +247,12 @@ fn find_crlf(buf: &[u8]) -> Option<usize> {
     buf.windows(2).position(|w| w == b"\r\n")
 }
 
+/// Whether a line read by [`Buffered::read_line`] still holds a CR or LF,
+/// which can only be one not paired as CRLF.
+fn has_bare_line_break(line: &[u8]) -> bool {
+    line.iter().any(|&b| b == b'\r' || b == b'\n')
+}
+
 /// Whether a trailer line is dropped rather than forwarded.
 ///
 /// A field is dropped when [`headers::is_forbidden_in_trailer`] names it.
@@ -262,7 +275,7 @@ fn find_crlf(buf: &[u8]) -> Option<usize> {
 /// see, so it is dropped rather than resolved — the same call
 /// [`crate::framing`] makes about a message framed two ways at once.
 fn dropped(line: &[u8]) -> bool {
-    if line.contains(&b'\n') || line.contains(&b'\r') {
+    if has_bare_line_break(line) {
         return true;
     }
     let name = line.iter().position(|&b| b == b':').map(|end| &line[..end]);

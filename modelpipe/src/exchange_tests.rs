@@ -1198,6 +1198,33 @@ async fn a_well_formed_chunked_body_is_forwarded_rather_than_refused() {
     assert!(seen.starts_with("HTTP/1.1 200"), "got: {seen}");
 }
 
+/// A chunk-size line is forwarded verbatim, so a bare LF in its extension
+/// is a line break this edge does not see and a lenient backend does. The
+/// line is refused before any of it is written, which only the bytes the
+/// backend received can show: the body-level refusal is the same whether
+/// or not the line had already gone.
+#[tokio::test]
+async fn a_chunk_extension_hiding_a_second_request_never_reaches_the_backend() {
+    let backend = CountingBackend::new(OK_RESPONSE);
+    let request = format!(
+        "POST /v1/chat/completions HTTP/1.1\r\nHost: x\r\n\
+         Authorization: Bearer {TOKEN}\r\nTransfer-Encoding: chunked\r\n\r\n\
+         5;x\nGET /hidden HTTP/1.1\r\nhello\r\n0\r\n\r\n"
+    );
+
+    let _ = exchange(request.as_bytes(), &supplied(), &backend).await;
+
+    let received = String::from_utf8(backend.received().await).expect("ascii");
+    assert!(
+        received.starts_with("POST /v1/chat/completions"),
+        "the head must reach the backend, or this proves nothing: {received:?}"
+    );
+    assert!(
+        !received.contains("GET"),
+        "a second request line reached the backend: {received:?}"
+    );
+}
+
 /// The half-close is most of the answer, and this is the rest of it. A
 /// backend that is told the body stopped and neither answers nor closes put
 /// the exchange straight back where it started — waiting forever on a

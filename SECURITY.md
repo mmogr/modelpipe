@@ -59,6 +59,17 @@ exploitable — the next hop resolves the same ambiguity the other way. So is
 a request carrying two `Authorization` headers: the edge would check one,
 and a backend handed the client's bearer could read the other.
 
+A chunked body is held to the same rule, because the edge passes its
+framing on as it came. A chunk-size line is refused if its size, spaces
+and tabs aside, is not plain hexadecimal, or if it carries a bare CR or
+LF anywhere, extensions included. A trailer is dropped if it carries a
+bare CR or LF, if it is not a field the edge can read (no colon, or a
+name that is not UTF-8), or if it names `Content-Length`, `Host`, a
+standard hop-by-hop field such as `Connection` or `Transfer-Encoding`,
+a proxy-chain field such as `X-Forwarded-For`, or one of the markers the
+edge sets itself (`Via`, `X-Modelpipe-Peer`, `X-Modelpipe-Device`). Any
+other trailer is forwarded as it came.
+
 ## What modelpipe does not defend against
 
 Stated plainly, because each of these surprises somebody.

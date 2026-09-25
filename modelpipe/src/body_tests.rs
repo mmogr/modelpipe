@@ -307,6 +307,20 @@ async fn a_trailer_cannot_smuggle_a_second_field_behind_a_bare_lf() {
     );
 }
 
+/// A bare CR is held to the same rule as the bare LF above: the trailer
+/// line carrying it is dropped, and the field behind the CR with it.
+#[tokio::test]
+async fn a_trailer_cannot_smuggle_a_second_field_behind_a_bare_cr() {
+    let input = b"0\r\nX-Ok: 1\rContent-Length: 99\r\n\r\n";
+    let (_, out) = run(b"", input, Framing::Chunked).await.unwrap();
+    assert_eq!(
+        out,
+        b"0\r\n\r\n",
+        "a second field rode through behind a bare CR: {:?}",
+        String::from_utf8_lossy(&out)
+    );
+}
+
 /// The negative control for the bare-LF refusal: an ordinary trailer, on a
 /// line with no embedded terminator, is still the peer's to send.
 ///
@@ -392,5 +406,38 @@ async fn a_chunk_size_with_a_tab_is_still_read() {
             .unwrap_or_else(|e| panic!("{size:?} must frame: {e}"));
         assert_eq!(n, 5, "{size:?}");
         assert_eq!(out, input.as_bytes(), "{size:?} was rewritten");
+    }
+}
+
+/// Only the text before the first `;` is a size, so a line break after it
+/// is not caught by the hexadecimal check, and the line goes on verbatim.
+/// A CR or LF that is not part of the CRLF ending the line is refused
+/// wherever it sits, as a trailer carrying one is dropped. So the inputs
+/// put the break in the first of two extensions and in the last, as the
+/// line's last byte before its CRLF, and on the last-chunk line, where a
+/// next hop that splits on a bare LF can be made to end the body early and
+/// read what follows as a second request. A check that reads one
+/// extension, stops short of the last byte or passes the size-zero line
+/// fails here.
+#[tokio::test]
+async fn a_bare_cr_or_lf_in_a_chunk_extension_is_refused() {
+    let sized = [
+        "5;a\nb",
+        "5;a\rb",
+        "5;a\r",
+        "5 ;a=b\nc",
+        "5;a=b;c\nd",
+        "5;a\rb;c=d",
+    ]
+    .map(|size| format!("{size}\r\nhello\r\n0\r\n\r\n"));
+    let last = ["0;a\nb\r\n\r\n", "0;a\rb\r\n\r\n"].map(String::from);
+    for input in sized.iter().chain(&last) {
+        let Err(err) = run(b"", input.as_bytes(), Framing::Chunked).await else {
+            panic!("{input:?} must be refused");
+        };
+        assert!(
+            err.to_string().contains("bare CR or LF"),
+            "{input:?} gave {err}"
+        );
     }
 }
