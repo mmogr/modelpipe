@@ -194,6 +194,80 @@ fn a_refused_identity_file_is_left_exactly_as_found() {
     }
 }
 
+/// Run `f` on a thread and wait at most `bound` for it, so a call that
+/// blocks on the path fails the test instead of hanging the suite.
+#[cfg(unix)]
+fn within<T: Send + 'static>(
+    bound: std::time::Duration,
+    f: impl FnOnce() -> T + Send + 'static,
+) -> T {
+    let (sent, received) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = sent.send(f());
+    });
+    received
+        .recv_timeout(bound)
+        .expect("it returned rather than blocking on the path")
+}
+
+/// A FIFO at the key path is refused before anything opens it, so the
+/// call returns instead of waiting for a writer, and the FIFO is left as
+/// found.
+#[cfg(unix)]
+#[test]
+fn a_fifo_at_the_key_path_is_refused_without_blocking() {
+    let scratch = Scratch::new("fifo");
+    let path = scratch.join("key");
+    let made = std::process::Command::new("mkfifo")
+        .arg(&path)
+        .status()
+        .expect("mkfifo runs");
+    assert!(made.success(), "mkfifo made {}", path.display());
+
+    let probe = path.clone();
+    let refused = within(std::time::Duration::from_secs(10), move || {
+        load_or_mint(&probe)
+    })
+    .expect_err("a FIFO holds no key");
+
+    let said = refused.source.to_string();
+    assert!(said.contains("not a regular file"), "{said}");
+    assert!(
+        std::os::unix::fs::FileTypeExt::is_fifo(
+            &fs::symlink_metadata(&path)
+                .expect("still there")
+                .file_type()
+        ),
+        "the FIFO was replaced"
+    );
+}
+
+/// A symlink at the key path is refused even when it points at a key this
+/// module wrote and reads: the type checked is the link's own. The file it
+/// points at is still a key, and the link is left as found.
+#[cfg(unix)]
+#[test]
+fn a_symlink_to_a_usable_key_is_refused() {
+    let scratch = Scratch::new("linked");
+    let real = scratch.join("key");
+    let minted = load_or_mint(&real).expect("mints");
+    let link = scratch.join("link");
+    std::os::unix::fs::symlink(&real, &link).expect("symlink");
+
+    let refused = load_or_mint(&link).expect_err("a symlink is refused");
+
+    let said = refused.source.to_string();
+    assert!(said.contains("is a symlink"), "{said}");
+    assert!(
+        fs::symlink_metadata(&link)
+            .expect("still there")
+            .file_type()
+            .is_symlink(),
+        "the link was replaced"
+    );
+    assert_eq!(load_or_mint(&real).expect("the target reads"), minted);
+}
+
 /// A key others can read is not a secret, and a listener that starts on one
 /// is minting tickets anybody on the machine can mint too. The same refusal
 /// `ssh` makes, and the message says what to do about it.
