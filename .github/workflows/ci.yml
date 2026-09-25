@@ -5,8 +5,8 @@
 # architectural rule rather than writing it down and hoping.
 #
 # The enforcement scripts live in the `fmt` job because none of them needs a
-# toolchain: check_file_size.sh counts lines, and ticket_vectors.py --check is
-# pure stdlib Python.
+# toolchain: check_file_size.sh counts code lines with awk, and
+# ticket_vectors.py --check is pure stdlib Python.
 #
 # No `apt-get install` step anywhere below, unlike gglib's: iroh resolves rustls
 # onto `ring`, which needs no system libraries. If a future dependency flips the
@@ -63,8 +63,12 @@ jobs:
 
       # A hard gate rather than gglib's ratchet, because this workspace has
       # no debt to ratchet down: every file is under budget, so crossing the
-      # line is a failure and not a new baseline entry. Lives in this job
-      # because it needs no toolchain — it counts lines.
+      # line is a failure and not a new baseline entry. The budget is code
+      # lines: blank lines and `//` comment lines (docs included) are free,
+      # so the gate measures how much logic a file holds. Before it counts,
+      # the script checks its rule against a fixture, so the runner's awk is
+      # tested and not assumed. Lives in this job because it needs no
+      # toolchain.
       - name: Check file sizes
         run: ./scripts/check_file_size.sh
 
