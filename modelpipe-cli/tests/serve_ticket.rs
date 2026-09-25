@@ -16,13 +16,14 @@
 //! `a_ticket_that_names_somewhere_is_printed` needs is a non-loopback
 //! address on this machine, which is what it asserts it found when it fails.
 //!
-//! Each test costs the ten seconds `main` spends letting the endpoint look
-//! for the relay it will not find.
+//! A run that gets as far as a listener costs the ten seconds `main` spends
+//! letting the endpoint look for the relay it will not find; a run refused
+//! before that does not wait.
 //!
-//! **Nothing here touches the real data directory.** Every run either says
-//! `--no-state` or is given a `HOME` of its own under the temp directory, so
-//! a test never reads a developer's identity, never leaves one behind, and
-//! never finds the lock another test holds.
+//! **Nothing here touches the real data directory.** Every run says
+//! `--no-state`, names a `--state-dir` under the temp directory, or is given
+//! a `HOME` of its own there, so a test never reads a developer's identity,
+//! never leaves one behind, and never finds the lock another test holds.
 
 use std::io::{BufRead as _, BufReader, Read as _};
 use std::path::Path;
@@ -500,6 +501,67 @@ fn ollama_offers_a_first_code_and_keeps_its_state() {
     assert!(!run.stderr.contains("WARNING"), "{:?}", run.stderr);
     assert!(state.join("127.0.0.1_9").join("devices.json").is_file());
     let _ = std::fs::remove_dir_all(&state);
+}
+
+/// Run `modelpipe ollama` against `backend` with `extra`, in a state folder
+/// of its own named for `name`, until it prints a ticket or ends.
+fn ollama(backend: &str, extra: &[&str], name: &str) -> Run {
+    let state = std::env::temp_dir().join(format!(
+        "modelpipe-cli-ollama-{name}-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&state);
+    let extra = [&["--state-dir", state.to_str().expect("utf-8")][..], extra].concat();
+    let (run, _) = serve_with(
+        &["ollama", "--backend", backend],
+        &[],
+        &extra,
+        &[],
+        "ticket:",
+        false,
+    );
+    let _ = std::fs::remove_dir_all(&state);
+    run
+}
+
+/// `modelpipe ollama` pointed at a private address it was not permitted to
+/// dial ends without printing anything to stdout, and says on stderr which
+/// flag permits it. The address is screened at startup and never dialled.
+#[test]
+fn ollama_refuses_a_private_backend_and_names_the_flag_that_permits_it() {
+    const PRIVATE: &str = "http://192.168.1.5:11434";
+    let run = ollama(PRIVATE, &[], "private");
+    assert_eq!(run.exit, Some(false), "{:?} {:?}", run.stdout, run.stderr);
+    assert!(run.stdout.is_empty(), "{:?}", run.stdout);
+    assert!(
+        run.stderr
+            .contains(&format!("backend {PRIVATE} is not a local address"))
+            && run.stderr.contains("--allow-private-backend"),
+        "{:?}",
+        run.stderr
+    );
+}
+
+/// The negative control for the test above: with the flag passed, a
+/// link-local address is still refused, and the refusal does not tell the
+/// operator to pass the flag they passed.
+#[test]
+fn ollama_given_the_flag_refuses_a_link_local_backend_without_naming_it() {
+    const LINK_LOCAL: &str = "http://169.254.169.254:80";
+    let run = ollama(LINK_LOCAL, &["--allow-private-backend"], "link-local");
+    assert_eq!(run.exit, Some(false), "{:?} {:?}", run.stdout, run.stderr);
+    assert!(run.stdout.is_empty(), "{:?}", run.stdout);
+    assert!(
+        run.stderr
+            .contains(&format!("backend {LINK_LOCAL} is not a local address")),
+        "{:?}",
+        run.stderr
+    );
+    assert!(
+        !run.stderr.contains("--allow-private-backend"),
+        "{:?}",
+        run.stderr
+    );
 }
 
 /// Run `serve --no-state` with `auth`, its stdout's reader gone before the

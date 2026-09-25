@@ -7,11 +7,11 @@
 
 use clap::Parser as _;
 
-use modelpipe::{Ticket, TokenPolicy};
+use modelpipe::{ServeError, Ticket, TokenPolicy};
 
 use super::Cli;
 use crate::cli::{OllamaArgs, ServeArgs};
-use crate::serve_out::{qr, token_line, token_policy, undialable};
+use crate::serve_out::{not_served, qr, token_line, token_policy, undialable};
 
 /// Vector 1 from `docs/ticket-format-v0.md`: an endpoint id and no
 /// addresses at all — the shape `--relay-only` mints on a host that reached
@@ -487,4 +487,68 @@ fn ollama_is_serve_with_the_answers_filled_in() {
     ));
     assert!(Cli::try_parse_from(["modelpipe", "ollama", "--invite"]).is_err());
     let _: fn(OllamaArgs) -> ServeArgs = OllamaArgs::into_serve;
+}
+
+/// `ollama` takes the permission a private backend needs, as `serve` does,
+/// and the `serve` it stands for carries it; without the flag it is off.
+#[test]
+fn ollama_takes_allow_private_backend_and_hands_it_to_serve() {
+    let allowed = Cli::try_parse_from([
+        "modelpipe",
+        "ollama",
+        "--backend",
+        "http://192.168.1.5:11434",
+        "--allow-private-backend",
+    ])
+    .expect("ollama takes the flag");
+    let super::Command::Ollama(args) = allowed.command else {
+        panic!("not ollama");
+    };
+    assert!(args.into_serve().allow_private_backend);
+
+    let plain = Cli::try_parse_from(["modelpipe", "ollama"]).expect("one word");
+    let super::Command::Ollama(args) = plain.command else {
+        panic!("not ollama");
+    };
+    assert!(!args.into_serve().allow_private_backend);
+}
+
+/// A backend refused as not local names the flag that admits a private one,
+/// and keeps the library's own words beside it. With the flag already passed
+/// the refusal is about an address the flag does not admit, and a URL that
+/// is not a backend URL at all is no business of the flag's, so neither
+/// names it. An error `not_served` adds nothing to comes back as the
+/// library's own `ServeError`, cause included: `Bind`'s text says what failed
+/// and only its source says why, so an error re-made from the text would
+/// lose the why.
+#[test]
+fn a_backend_refused_as_not_local_names_the_flag_only_when_it_was_not_passed() {
+    const URL: &str = "http://192.168.1.5:11434";
+    let not_local = || ServeError::BackendNotLocal {
+        url: URL.to_owned(),
+    };
+
+    let hinted = not_served(not_local(), false).to_string();
+    assert!(hinted.contains("--allow-private-backend"), "{hinted}");
+    assert!(
+        hinted.starts_with(&not_local().to_string()),
+        "the library's refusal comes first: {hinted}"
+    );
+
+    let passed = not_served(not_local(), true);
+    assert!(passed.downcast_ref::<ServeError>().is_some(), "{passed:#}");
+    assert_eq!(passed.to_string(), not_local().to_string());
+
+    let invalid = ServeError::InvalidBackendUrl {
+        url: "https://127.0.0.1:11434".to_owned(),
+    };
+    let said = invalid.to_string();
+    assert_eq!(not_served(invalid, false).to_string(), said);
+
+    let bind = not_served(
+        ServeError::Bind(std::io::Error::other("port in use")),
+        false,
+    );
+    assert!(bind.downcast_ref::<ServeError>().is_some(), "{bind:#}");
+    assert!(format!("{bind:#}").contains("port in use"), "{bind:#}");
 }

@@ -217,7 +217,7 @@ the client.
 | `--identity <FILE>` | Keep the endpoint key in this file instead of the state folder. Created `0600`; refuses to start if others can read it, or if it is a symlink or anything else but a regular file. |
 | `--state-dir <DIR>` | Keep everything that survives a restart under here instead of the data directory, in a folder per backend: the endpoint key, and with `--named` the devices record. Created `0700`; refuses a folder others can read into, and refuses to start while another `serve` holds the same backend's folder. Also read from `MODELPIPE_STATE_DIR`. `--identity` and `--devices` each override their file's place in it. |
 | `--no-state` | Keep nothing across restarts: a fresh ticket every run, and no devices record. Restarting is then revocation, as it was before 0.8. |
-| `--allow-private-backend` | Accept a backend on a private (RFC 1918 / ULA) address, not only loopback. Link-local is never accepted. |
+| `--allow-private-backend` | Accept a backend on a private (RFC 1918 / ULA) address, not only loopback. Link-local is never accepted. `modelpipe ollama` takes it too; without it, the error for a backend refused as not local names it. |
 | `--relay <URL>` | Use your own relay instead of the public ones. Does **not** disable discovery — see below. |
 | `--no-qr` | Don't print the QR code beside the ticket. |
 | `--no-portmap` | Don't ask the router for a UPnP/NAT-PMP mapping. Free: pairing is unaffected, a few NATs fall back to the relay more often. |
