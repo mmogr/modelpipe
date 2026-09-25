@@ -1,6 +1,6 @@
 //! What `serve` works out and prints around its ticket: the credential policy
 //! the flags ask for, the token line, the refusal for a ticket nobody could
-//! dial, and the QR code.
+//! dial, the QR code, and the hint on a backend refused as not local.
 //!
 //! Split from `main.rs` when the pairing flags pushed it past the file-size
 //! budget. Moved as they were, apart from `qr_of`, which a pairing string needs
@@ -9,7 +9,7 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use modelpipe::{Ticket, TokenPolicy};
+use modelpipe::{ServeError, Ticket, TokenPolicy};
 
 use crate::stdout;
 
@@ -132,6 +132,23 @@ pub(crate) fn undialable(ticket: &Ticket, relay_only: bool) -> Option<String> {
              machine's network."
         )
     })
+}
+
+/// `serve`'s error as the operator reads it.
+///
+/// A backend refused as not local, with `--allow-private-backend` not
+/// passed, gets a hint naming the flag: a private address is the one class
+/// of refused backend that flag admits. Every other error, and this one
+/// with the flag passed, is the library's own.
+pub(crate) fn not_served(e: ServeError, allowed_private: bool) -> anyhow::Error {
+    if !allowed_private && matches!(e, ServeError::BackendNotLocal { .. }) {
+        return anyhow::anyhow!(
+            "{e}. If the backend is on a private (RFC 1918 or ULA) address on your own \
+             network, pass --allow-private-backend; a link-local or public address is refused \
+             either way"
+        );
+    }
+    e.into()
 }
 
 /// The ticket as a QR code, or `None` if it will not fit one.

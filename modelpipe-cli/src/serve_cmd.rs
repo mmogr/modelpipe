@@ -16,7 +16,7 @@ use crate::interrupt::Interrupt;
 use crate::keys::Keys;
 use crate::pairing;
 use crate::park::{park, shut_down};
-use crate::serve_out::{WAIT_ONLINE, print_token, qr, qr_of, token_policy, undialable};
+use crate::serve_out::{WAIT_ONLINE, not_served, print_token, qr, qr_of, token_policy, undialable};
 use crate::session::{self, HINT};
 use crate::state::{self, StateDir, backend_key};
 use crate::stdout;
@@ -97,8 +97,11 @@ pub(crate) async fn run(args: ServeArgs, interrupt: &mut Interrupt) -> anyhow::R
     // code does, minutes later, on a task of its own — and it needs
     // the listener to take the key back. Every call it makes takes
     // `&self`, so nothing but the sharing changes.
-    let handle =
-        Arc::new(modelpipe::serve(backend(&backend_url, allow_private_backend), opts).await?);
+    let handle = Arc::new(
+        modelpipe::serve(backend(&backend_url, allow_private_backend), opts)
+            .await
+            .map_err(|e| not_served(e, allow_private_backend))?,
+    );
     let ticket = handle.ticket();
     // Between minting the ticket and printing it, which is the only
     // place the check is worth anything: a person who reads the

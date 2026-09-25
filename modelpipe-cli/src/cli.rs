@@ -220,11 +220,15 @@ pub(crate) struct ServeArgs {
 
 /// What `ollama` takes: the few things worth choosing when the backend is
 /// Ollama at its usual address and the rest is decided.
+#[expect(clippy::struct_excessive_bools, reason = "a flag surface")]
 #[derive(clap::Args)]
 pub(crate) struct OllamaArgs {
     /// Where Ollama listens, if not its default
     #[arg(long, value_name = "URL", default_value = "http://127.0.0.1:11434")]
     pub(crate) backend: String,
+    /// Accept a backend on a private (RFC 1918) address, not just loopback
+    #[arg(long)]
+    pub(crate) allow_private_backend: bool,
     /// Keep the endpoint key and the devices record under this folder
     ///
     /// Otherwise the data directory: see modelpipe serve --help.
@@ -258,7 +262,7 @@ impl OllamaArgs {
             invite: false,
             invite_if_none: true,
             devices: None,
-            allow_private_backend: false,
+            allow_private_backend: self.allow_private_backend,
             relay: self.relay,
             identity: None,
             state_dir: self.state_dir,
