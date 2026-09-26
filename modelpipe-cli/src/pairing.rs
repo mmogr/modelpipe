@@ -197,11 +197,11 @@ pub(crate) async fn connect(
         eprintln!("note: --name is sent when pairing, and this ticket has no code");
     }
     let mut handle = modelpipe::connect(given.ticket(), opts).await?;
-    // The local port is bound; reaching the peer is not. `connect` used to do
-    // both before returning, and the terminal is owed the same sentence for an
-    // absent serve side — so the wait that used to happen inside the library
-    // happens here, where picking a deadline is this command's to do. To stderr
-    // and before it, so a terminal about to sit still says why.
+    // The local port is bound; reaching the peer is not. `connect` returns
+    // before the first dial lands, and the terminal is owed a sentence for an
+    // absent serve side, so the wait happens here, where picking a deadline is
+    // this command's to do. To stderr and before it, so a terminal about to
+    // sit still says why.
     eprintln!("reaching the serve side…");
     first_contact(&mut handle, FIRST_CONTACT).await?;
     stdout::say(&handle.base_url());

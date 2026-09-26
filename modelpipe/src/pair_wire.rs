@@ -67,9 +67,9 @@ pub(crate) fn redeemed(answer: &[u8], serving: PeerId) -> Result<(String, String
                 "the pipe to the serve side dropped before the code arrived",
             )));
         }
-        // Carried as a number, not a sentence. A serve side too old to know
-        // this path answers here, and both embedders were matching the
-        // prose that used to say so.
+        // Carried as a number, not a sentence, so an embedder matches the
+        // status rather than prose. A serve side too old to know this path
+        // answers here.
         other => return Err(PairError::UnexpectedStatus { status: other }),
     }
     let declared = head

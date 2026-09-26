@@ -12,12 +12,12 @@
 //!
 //! Pure of iroh, and testable without one.
 
-// Scoped to the non-test build: the handles hold this, and land next.
+// Scoped to the non-test build: only the tests read `Lifecycle::in_flight`.
 #![cfg_attr(
     not(test),
     expect(
         dead_code,
-        reason = "the handles hold this; tests exercise it meanwhile"
+        reason = "`Lifecycle::in_flight` is read by the tests and by nothing else"
     )
 )]
 

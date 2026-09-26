@@ -2,19 +2,18 @@
 //!
 //! An endpoint's secret key is its name on the network: its public half is
 //! what a ticket carries, and what a connecting peer dials. Generated fresh
-//! per process — the default, and what every version before this one did —
-//! it makes every ticket disposable. Restart the listener and every ticket
-//! ever handed out names a peer nobody is, which is the ticket rotation the
-//! README sells, and also the reason a laptop has to be re-paired every time
-//! a desktop reboots.
+//! per process — the default — it makes every ticket disposable. Restart
+//! the listener and every ticket ever handed out names a peer nobody is,
+//! which is the ticket rotation the README sells, and also the reason a
+//! laptop has to be re-paired every time a desktop reboots.
 //!
 //! Storing the key swaps one of those for the other, and it is worth being
 //! exact about which. It does **not** weaken revocation: a leaked ticket is
 //! killed by deleting this file and restarting, which costs precisely what
-//! restarting cost before — a re-pairing of every device. What it removes is
-//! revocation *by accident*, which is what a reboot used to be. What it adds
-//! is a secret on disk, and that is the real cost: there was nothing to
-//! steal before and now there is.
+//! restarting with a fresh key costs — a re-pairing of every device. What
+//! it removes is revocation *by accident*, which is what a reboot is with a
+//! fresh key. What it adds is a secret on disk, and that is the real cost: a
+//! fresh key leaves nothing on disk to steal.
 //!
 //! **A durable ticket is not the same as a reachable one**, and the gap is
 //! worth naming here because this module is where people will look. The key
@@ -71,11 +70,11 @@ pub(crate) fn load_or_mint(path: &Path) -> Result<[u8; KEY_BYTES], Unusable> {
     // never opened. An absent path is `NotFound` from the check, which is
     // the arm that mints.
     match check_regular(path).and_then(|()| fs::read_to_string(path)) {
-        // A file with nothing in it holds no key, and now says so instead
-        // of failing as "not base32". This crate can no longer produce
-        // one — writes go through [`private_file::write_new`] — but a
-        // version before 0.7.0-rc.1 wrote in place, and a crash between the
-        // open and the bytes left exactly this (#103).
+        // A file with nothing in it holds no key, and says so rather than
+        // failing as "not base32". This crate cannot produce one — writes go
+        // through [`private_file::write_new`] — but a version before
+        // 0.7.0-rc.1 wrote in place, and a crash between the open and the
+        // bytes left exactly this (#103).
         //
         // **Refused rather than replaced, deliberately.** Minting over it
         // means unlinking a path this process does not own, and two
@@ -84,8 +83,7 @@ pub(crate) fn load_or_mint(path: &Path) -> Result<[u8; KEY_BYTES], Unusable> {
         // written, and the two would serve different identities from one
         // file. That is precisely the failure [`private_file`] refuses a
         // rename to avoid, and saving the operator one `rm` is not worth
-        // reintroducing it. So the refusal names the file and the remedy,
-        // which is the other half of what #103 asked for.
+        // reintroducing it. So the refusal names the file and the remedy.
         Ok(stored) if stored.trim().is_empty() => Err(unusable(
             path,
             io::Error::other(format!(

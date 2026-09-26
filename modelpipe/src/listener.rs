@@ -66,11 +66,11 @@ impl ServeState {
 /// them.
 ///
 /// Both halves matter, and the first is what makes the drain possible.
-/// Closing the endpoint would also end this loop — that is what it used to
-/// rely on — but it ends every in-flight exchange with it, so a `shutdown`
-/// that wants to drain has nothing left to drain by the time it asks. The
-/// loop watches the lifecycle instead, so admission stops while the work
-/// already admitted runs on.
+/// Closing the endpoint would also end this loop, but it ends every
+/// in-flight exchange with it, so a `shutdown` that wants to drain would
+/// have nothing left to drain by the time it asks. The loop watches the
+/// lifecycle instead, so admission stops while the work already admitted
+/// runs on.
 pub(crate) async fn accept_loop(state: std::sync::Arc<ServeState>) {
     loop {
         let incoming = tokio::select! {

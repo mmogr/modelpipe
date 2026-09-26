@@ -33,10 +33,9 @@ pub(super) enum Primary {
 
 /// The token a listener enforces.
 ///
-/// One field, since the scheme stopped being part of what is compared: the
+/// One field, because the scheme is not part of what is compared: the
 /// `Authorization` value is split at its single space and only the
-/// credential after it is matched, so the pre-built `"Bearer <token>"`
-/// string this used to carry beside the token had no reader left.
+/// credential after it is matched against this.
 pub(super) struct Enforced {
     /// What [`ServeHandle::token`](crate::ServeHandle::token) reports.
     pub(super) token: String,

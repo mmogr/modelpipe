@@ -2,10 +2,10 @@
 //!
 //! The library persists one thing, the endpoint key, and only at a path it
 //! is handed. The CLI persists two — that key, and the devices file — and
-//! until now each needed its own flag, so a serve that remembered anything
-//! was a serve started with two paths typed by hand. This module is one
-//! folder for both, chosen once: under the platform's data directory unless
-//! `--state-dir` names another, and `--no-state` keeps none.
+//! this module is one folder for both, chosen once, so a serve remembers
+//! them without two paths typed by hand: under the platform's data
+//! directory unless `--state-dir` names another, and `--no-state` keeps
+//! none.
 //!
 //! One folder per **backend**, under the root: two serves on one machine
 //! fronting two servers share nothing, and neither is refused for the

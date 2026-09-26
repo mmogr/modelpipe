@@ -85,10 +85,10 @@ impl TcpBackend {
     /// requests later. That first answer is not cached: it is a check, and
     /// every connection screens again.
     pub(crate) async fn new(url: &str, allow_private: bool) -> Result<Self, ServeError> {
-        // Three different objections, and they used to be one. "Not a
-        // local address" is a verdict about an address; it cannot be the
-        // answer for a string that is not a URL, or for a scheme, and
-        // saying so sent the operator to `--allow-private-backend`.
+        // Three different objections. "Not a local address" is a verdict
+        // about an address; it cannot be the answer for a string that is not
+        // a URL, or for a scheme, and saying so would send the operator to
+        // `--allow-private-backend`.
         let invalid = || ServeError::InvalidBackendUrl {
             url: url.to_owned(),
         };

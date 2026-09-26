@@ -141,7 +141,7 @@ pub struct ConnectOptions {
     /// Self-hosted relay URL for *this* side's endpoint. `None` uses iroh's
     /// public relays. The serve side's relay travels in the ticket and is
     /// dialled regardless; this is the relay this endpoint registers with
-    /// and falls back to, which until now was always a public one.
+    /// and falls back to.
     pub relay: Option<String>,
     /// Same as [`ServeOptions::port_mapping`](crate::ServeOptions#structfield.port_mapping).
     pub port_mapping: bool,

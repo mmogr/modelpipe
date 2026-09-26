@@ -53,10 +53,10 @@ pub(crate) const FIRST_CONTACT: Duration = Duration::from_secs(40);
 /// The stream is deliberately not a parameter of *this* function. README's
 /// output contract — "the first two lines are stdout, the rest is stderr",
 /// which is what makes `modelpipe serve … | head -1` a ticket — has to
-/// survive an edit by someone who has not read it, and `eprintln!` used to
-/// enforce that for free. [`park_to`] is private to this module, so the two
-/// `main.rs` call sites cannot pick a stream at all; the one place that
-/// names one is the line below, next to the paragraph saying why.
+/// survive an edit by someone who has not read it. [`park_to`] is private to
+/// this module, so the callers of this function cannot pick a stream at
+/// all; the one place that names one is the line below, next to the
+/// paragraph saying why.
 pub(crate) async fn park(
     status: impl AsyncStatus,
     interrupt: &mut Interrupt,
@@ -153,16 +153,14 @@ pub(crate) fn throttle_line(reported: u64, metrics: NetworkMetrics) -> Option<St
 
 /// Wait for the pipe to reach the serve side, or say that it could not.
 ///
-/// This is the sentence `connect` used to produce. It blocked until the
-/// first dial landed and reported an absent peer through its `Result`;
-/// it now returns with the local port bound and the dial still running, so
-/// the wait — and the deadline it needs — moved out here rather than
-/// disappearing. The wording is the one `ConnectError::PeerUnreachable`
-/// printed, because it is the same fact reported from one step further out.
+/// `connect` returns with the local port bound and the dial still running,
+/// so the wait for the first contact, and the deadline it needs, is here.
+/// The wording is `ConnectError::PeerUnreachable`'s, because it is the same
+/// fact reported from one step further out.
 ///
-/// Nothing is printed on the way to stdout until this returns `Ok`, which
-/// is the other half of not regressing: a script capturing the URL gets one
-/// only for a pipe that actually reached its peer, exactly as before.
+/// Nothing is printed on the way to stdout until this returns `Ok`, so a
+/// script capturing the URL gets one only for a pipe that actually reached
+/// its peer.
 ///
 /// `grace` is [`FIRST_CONTACT`] everywhere but the tests, which pass a
 /// short one so that checking the decision does not mean waiting out the
