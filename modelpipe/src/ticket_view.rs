@@ -32,9 +32,8 @@ impl Ticket {
     /// at all. [`ServeHandle::ticket`](crate::ServeHandle::ticket) says so
     /// in prose and
     /// [`ServeOptions::wait_online`](crate::ServeOptions#structfield.wait_online)
-    /// is the switch that waits; until now there was no way for an embedder
-    /// that skipped the wait to *find out*, and a ticket printed for a
-    /// person is printed once.
+    /// is the switch that waits; this is how an embedder that skipped the
+    /// wait *finds out*, and a ticket printed for a person is printed once.
     ///
     /// **Verbatim.** No case folding, no percent-decoding, no trailing-dot
     /// removal, no default-port elision — a `String` and not a parsed URL

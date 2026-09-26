@@ -1,12 +1,10 @@
 //! Where a listener dials its backend, and whether it may.
 //!
 //! `serve` needs two things about a backend: a URL, and whether the
-//! operator has agreed to reach a private address. Those used to travel
-//! separately — a `&str` argument and a `ServeOptions` flag — and keeping
-//! them apart made the flag mean "trust me" in general when it only ever
-//! means "trust *this* address". Here they are one value, so the
-//! permission is attached to the thing it is about and cannot be set for
-//! one backend and left on for the next.
+//! operator has agreed to reach a private address. Here they are one
+//! value, because the permission only ever means "trust *this* address":
+//! it is attached to the thing it is about, and cannot be set for one
+//! backend and left on for the next.
 //!
 //! **Two constructors, and the difference between them is the whole
 //! design.**

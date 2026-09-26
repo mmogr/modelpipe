@@ -34,11 +34,11 @@ use crate::status::PeerView;
 /// can bring at once is the peer cap,
 /// [`ServeOptions::max_peers`](crate::ServeOptions::max_peers).
 ///
-/// Per *peer*, not per connection, and the difference is the bound. The
-/// semaphore used to be built inside the connection loop, so a holder who
-/// opened N connections had 64·N streams — the cap the docs promised was
-/// off by whatever the peer chose. It now lives here, keyed by the peer's
-/// identity, and every connection from one endpoint draws on one budget.
+/// Per *peer*, not per connection, and the difference is the bound. A
+/// semaphore per connection would give a holder who opened N connections
+/// 64·N streams, a cap off by whatever the peer chose. Each peer's
+/// semaphore is kept in this registry, keyed by its identity, so every
+/// connection from one endpoint draws on one budget.
 ///
 /// Deliberately generous. A client pipelining a page of requests is normal;
 /// a client with sixty-four in flight is not a client.
@@ -201,10 +201,9 @@ impl PeerRegistry {
     /// now means.
     ///
     /// The write [`crate::path_watch`] makes on the serve side, keyed by the
-    /// `id` [`add`](Self::add) returned. Everything in this registry used to
-    /// be written once at accept and never again, which is exactly why a
-    /// connection that hole-punched after establishing went on being
-    /// reported as relayed for the rest of its life.
+    /// `id` [`add`](Self::add) returned. A path written only at accept would
+    /// go on reporting a connection that hole-punched after establishing as
+    /// relayed for the rest of its life.
     ///
     /// A peer that has already left is not resurrected: a watcher may still
     /// be a tick behind [`remove`](Self::remove), and re-inserting the entry

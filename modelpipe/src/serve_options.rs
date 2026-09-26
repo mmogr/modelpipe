@@ -18,12 +18,11 @@ use crate::token_policy::TokenPolicy;
 /// you need. `#[non_exhaustive]`, so a new option is not a breaking
 /// change for callers who construct it that way.
 #[non_exhaustive]
-// The three remaining booleans do not interact: each names a separate
-// thing the endpoint does or does not do on the network, they are legal
-// in all eight combinations, and the README documents them as
-// independent switches. `struct_excessive_bools` used to fire here and
-// was allowed for that reason; the permission moving onto `BackendUrl`
-// took the fourth away, so the allowance went with it.
+// The three booleans do not interact: each names a separate thing the
+// endpoint does or does not do on the network, they are legal in all
+// eight combinations, and the README documents them as independent
+// switches. That is the answer to `struct_excessive_bools` if a fourth
+// makes it fire.
 pub struct ServeOptions {
     /// What the listener requires in `Authorization: Bearer …`.
     pub auth: TokenPolicy,

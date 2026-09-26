@@ -72,10 +72,10 @@ pub(crate) fn write_new(path: &Path, contents: &str) -> Result<(), io::Error> {
     let (temp, mut file) = new_temp(path)?;
     let written = file
         .write_all(contents.as_bytes())
-        // The flush the old in-place write did not do. Without it the bytes
-        // may still be in the page cache when the link below makes the file
-        // reachable under its real name, which would put the empty-file case
-        // back exactly where it was.
+        // The flush to the disk the module doc describes. Without it the
+        // bytes may still be in the page cache when the link below makes the
+        // file reachable under its real name, and the half-written state the
+        // temporary name exists to hide would be reachable after all.
         .and_then(|()| file.sync_all());
     drop(file);
     if let Err(why) = written {

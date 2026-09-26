@@ -175,14 +175,13 @@ const fn auto_trait_promises() {
     // that is what a status page is — so it needs the same bounds the
     // views beside it have.
     assert::<NetworkMetrics>();
-    // The options structs and the policy they carry. Until now these were
-    // only *accidentally* `Send`, by way of `future_promises` pinning the
-    // futures that consume them; nothing said so, and an implementation
-    // could have made one of them `!Send` without failing a single check.
-    // Pinning `TokenPolicy` also forbids a future variant holding
-    // something like an `Rc<dyn Fn…>` — that is the intent, not a side
-    // effect: a credential source that cannot cross a thread boundary
-    // would break every embedder holding the listener in a spawned task.
+    // The options structs and the policy they carry, pinned here in their
+    // own right and not only by way of `future_promises` pinning the
+    // futures that consume them. Pinning `TokenPolicy` also forbids a
+    // future variant holding something like an `Rc<dyn Fn…>` — that is
+    // the intent, not a side effect: a credential source that cannot cross
+    // a thread boundary would break every embedder holding the listener in
+    // a spawned task.
     assert::<ServeOptions>();
     assert::<BackendUrl>();
     assert::<ConnectOptions>();

@@ -185,17 +185,16 @@ where
             //
             // Filtered by `headers::is_forbidden_in_trailer`, because a
             // trailer is a header field that arrives late and nothing else.
-            // Forwarding them verbatim let a peer restate anything the head
-            // strip had just removed — a client putting back its own
+            // Forwarded verbatim, they would let a peer restate anything the
+            // head strip had just removed — a client putting back its own
             // `X-Forwarded-For`, a backend putting back `Connection` or a
             // second `Content-Length` — with the edge's own header rules
             // applied and then undone a few hundred bytes later.
             //
             // That list is wider than the head strip's on purpose, and the
-            // reason is the sentence above: this filter used to run on
-            // `is_stripped`, under which `Content-Length` is neither
-            // hop-by-hop nor a forwarding header, so the example this
-            // comment gives was one the code did not actually prevent.
+            // reason is the sentence above: under `is_stripped`,
+            // `Content-Length` is neither hop-by-hop nor a forwarding header,
+            // so that filter alone would let the second one through.
             loop {
                 let trailer = src.read_line().await?;
                 if trailer.is_empty() {

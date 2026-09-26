@@ -38,8 +38,8 @@ pub(crate) struct ConnectState {
 /// [`crate::peer_redial::keep_connected`]'s, first attempt included, so what comes
 /// back is everything `connect` needs to hand out a handle with a port
 /// already answering and no connection behind it yet. A dial at a peer that
-/// is not there takes iroh about thirty seconds to give up on, and that is
-/// thirty seconds a caller used to spend not knowing its own port number.
+/// is not there takes iroh about thirty seconds to give up on, and a caller
+/// has its own port number without waiting that out.
 pub(crate) async fn bind(
     ticket: &Ticket,
     opts: &ConnectOptions,
@@ -69,11 +69,8 @@ pub(crate) async fn bind(
 
     // `Idle` — where `Lifecycle::new` starts — is the honest answer the
     // moment this returns: the port is bound and nobody has been reached.
-    // It used to be a lie told in the most misleading direction available,
-    // because the connection was already up and the status was published
-    // from a spawned task that had not necessarily run. Now there is
-    // nothing to publish here and no race to lose: every status this pipe
-    // ever reports is `keep_connected`'s.
+    // There is nothing to publish here and no race to lose: every status
+    // this pipe ever reports is `keep_connected`'s.
     let lifecycle = Lifecycle::new();
 
     Ok((
@@ -207,10 +204,10 @@ async fn carry(
     let opened = connection.open_bi().await;
     let Ok((send, recv)) = opened else {
         // The serve edge answers a backend it cannot reach with a 502, and
-        // this end owes a client whose tunnel is gone the same. The socket
-        // used to be dropped unread, so an SDK saw a connection reset with
-        // no status: "the tunnel is down" and "nothing is listening here"
-        // were the same event. `open_bi` fails only when the connection is
+        // this end owes a client whose tunnel is gone the same. A socket
+        // dropped unread would give an SDK a connection reset with no
+        // status, and "the tunnel is down" and "nothing is listening here"
+        // would be the same event. `open_bi` fails only when the connection is
         // dead — stream-budget exhaustion back-pressures instead — so this
         // arm is exactly that case.
         tracing::info!("refused a request: the tunnel is down");

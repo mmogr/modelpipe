@@ -2,39 +2,26 @@
 //!
 //! iroh establishes over a relay and hole-punches to a direct path a moment
 //! later, so the path a connection has when it is accepted is routinely not
-//! the path it spends its life on. Both sides used to read it exactly once,
-//! at that moment, and never again: a session that upgraded reported
-//! `relayed` until it ended, and one that degraded went on reporting
-//! `direct`. That leaves the status unable to answer the only question it
-//! exists for — *is hole punching working from here* — which is why this
-//! module is a watcher and not a second copy of the reading.
+//! the path it spends its life on. A reading taken once, at that moment,
+//! would go on reporting `relayed` for a session that upgraded and `direct`
+//! for one that degraded, and the status exists to answer one question —
+//! *is hole punching working from here* — so this module watches the path
+//! for as long as the connection lives.
 //!
-//! **A poll rather than iroh's event stream, and the choice was costed
-//! rather than assumed.** [`Connection::path_events`] is the event-shaped
-//! API and looks like the obvious pick, but iroh re-exports neither the
-//! `Stream` trait nor `n0_future`, so calling `next` on it means taking a
-//! direct dependency on one of `futures-core` / `futures-lite` /
-//! `tokio-stream` / `n0-future` to keep a status line honest.
-//! [`Connection::paths`] needs none of them, and is the call the single
-//! reading already made. The second reason is what settles it: a
-//! `PathEvent` carries no round-trip time, and the RTT is the half of a
-//! reading that makes it a measurement rather than a label — so an
-//! event-driven watcher would have had to poll for the number anyway, and
-//! would have been both mechanisms instead of one.
+//! **A poll rather than iroh's event stream.** [`Connection::path_events`]
+//! is the event-shaped API and looks like the obvious pick, but iroh
+//! re-exports neither the `Stream` trait nor `n0_future`, so calling `next`
+//! on it means taking a direct dependency on one of `futures-core` /
+//! `futures-lite` / `tokio-stream` / `n0-future` to keep a status line
+//! honest. [`Connection::paths`] needs none of them. The second reason is
+//! what settles it: a `PathEvent` carries no round-trip time, and the RTT is
+//! the half of a reading that makes it a measurement rather than a label —
+//! so an event-driven watcher would still have to poll for the number, and
+//! would be both mechanisms instead of one.
 //!
 //! (Not `paths_stream` either, for a plainer reason: it borrows the
 //! `Connection` and yields values iroh documents as unable to cross a task
 //! boundary.)
-//!
-//! **Correcting the record.** PR #50's description — the page a reader
-//! following the changelog's link for this change arrives at — says the
-//! watcher is "a per-connection watcher on `Connection::path_events()`" and
-//! that `paths_stream` was the alternative it beat. It is neither of those:
-//! the reading is the [`Connection::paths`] poll below, for the two reasons
-//! above it. The commit body that landed on `main` describes the poll
-//! correctly, so the PR page is the only copy that is wrong — and a merged
-//! description cannot be corrected in place, which is why the correction is
-//! here, where that reader arrives next.
 //!
 //! [`Connection::paths`]: iroh::endpoint::Connection::paths
 //! [`Connection::path_events`]: iroh::endpoint::Connection::path_events
@@ -238,7 +225,7 @@ async fn repeat(mut sample: impl FnMut() -> Reading, mut publish: impl FnMut(Rea
             // `info`, the level a peer arriving and leaving are reported at,
             // because this is the same class of event: it is the line that
             // says whether hole punching worked from where this machine is
-            // sitting, and it was previously impossible to emit at all.
+            // sitting.
             tracing::info!(
                 path = aggregate(&[now.path]).as_str(),
                 rtt_ms = now.rtt.map(millis),

@@ -19,26 +19,22 @@
 //! 502. Confused, the first of them is not a wrong status but a hang — the
 //! edge waits for a response that cannot exist, on a stream no timeout
 //! covers, holding the in-flight guard `ServeHandle::shutdown` drains
-//! against.
-//!
-//! Measured, before the halves were told apart: a client that declared
-//! `Content-Length: 1000`, sent ten bytes and hung up got nothing back,
-//! ever, and the first Ctrl-C on `modelpipe serve` never returned. With
-//! only ordinary traffic in flight the same shutdown took a second.
+//! against ([#16] measured it).
 //!
 //! The half-close is most of the answer but not all of it, because it
 //! depends on the backend doing something with what it is told. One that
-//! holds its socket open after the end of the stream — measured, against a
-//! server blocked in `read` that neither answers nor closes — put the
-//! exchange straight back where it was. [`ANSWER_GRACE`] is the floor under
-//! that, and it is armed only by a pump that has already failed, which is
-//! what keeps it from ever becoming the request timeout this crate is right
-//! not to have.
+//! holds its socket open after the end of the stream, neither answering nor
+//! closing, leaves the exchange hung all the same. [`ANSWER_GRACE`] is the
+//! floor under that, and it is armed only by a pump that has already
+//! failed, which is what keeps it from ever becoming the request timeout
+//! this crate is right not to have.
 //!
 //! Generic over its streams like everything above the transport, so the
 //! half-close is a FIN on a socket and `tokio::io::duplex()`'s peer seeing
 //! `Ok(0)` in the tests — which is why every case below is exercised
 //! without one.
+//!
+//! [#16]: https://github.com/mmogr/modelpipe/pull/16
 
 use std::time::Duration;
 

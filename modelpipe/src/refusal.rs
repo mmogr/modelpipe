@@ -23,12 +23,11 @@
 //!
 //! # Why there are three 502s
 //!
-//! There used to be one, and its sentence — "the backend sent a response
-//! this tunnel could not read" — was written at four call sites of which it
-//! described one and a half. A backend that was never reached sent no
-//! response; a tunnel with no peer has no backend at either end. Both said
-//! so anyway, which sends the reader to the wrong machine: to the model
-//! server, when the model server is fine and the far laptop is asleep.
+//! One sentence — "the backend sent a response this tunnel could not
+//! read" — cannot describe them all. A backend that was never reached sent
+//! no response; a tunnel with no peer has no backend at either end. Saying
+//! so anyway sends the reader to the wrong machine: to the model server,
+//! when the model server is fine and the far laptop is asleep.
 //!
 //! The status stays 502 for all three and [`Outcome`] stays
 //! one variant, because the client's *recovery* is the same in each case
@@ -99,10 +98,9 @@ pub(crate) fn bad_request() -> Vec<u8> {
 /// Three sub-cases share it, and the wording has to cover all three because
 /// this edge cannot always tell them apart: an answer framed ambiguously, a
 /// head that would not parse, and a backend that said nothing at all before
-/// the grace expired. The old sentence — "the backend *sent* a response
-/// this tunnel could not read" — was true of the first two and a claim
-/// about an event that did not happen for the third, which is the same
-/// mistake `backend_unreachable` exists to stop making.
+/// the grace expired. "The backend *sent* a response this tunnel could not
+/// read" would be true of the first two and, for the third, a claim about an
+/// event that did not happen, so the sentence says it did not *return* one.
 ///
 /// Distinct from [`bad_request`] on purpose: the client did nothing wrong,
 /// and reporting a gateway failure as a client error would send whoever is
@@ -118,12 +116,12 @@ pub(crate) fn bad_gateway() -> Vec<u8> {
 
 /// The 502 for a backend that was never reached at all.
 ///
-/// The most likely failure on a first run, and the one the old wording was
-/// worst for: the tunnel is up, the serving side is running, and the model
-/// server behind it is not — stopped, on a different port, or bound
-/// somewhere this listener may not dial. Saying "the backend sent a
-/// response" there is not merely imprecise, it is a claim about an event
-/// that did not happen, and it points at the one component that is working.
+/// The most likely failure on a first run: the tunnel is up, the serving
+/// side is running, and the model server behind it is not — stopped, on a
+/// different port, or bound somewhere this listener may not dial. Saying
+/// "the backend sent a response" there would not be merely imprecise: it
+/// would be a claim about an event that did not happen, pointing at the one
+/// component that is working.
 pub(crate) fn backend_unreachable() -> Vec<u8> {
     refusal(
         "HTTP/1.1 502 Bad Gateway",
