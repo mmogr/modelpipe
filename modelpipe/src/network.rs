@@ -31,7 +31,6 @@
 use iroh::Endpoint;
 
 use crate::connect_handle::ConnectHandle;
-use crate::serve_handle::ServeHandle;
 
 /// What the transport underneath a pipe has been doing, as plain numbers.
 ///
@@ -88,46 +87,6 @@ pub struct NetworkMetrics {
     pub relay_connections_ratelimited: u64,
 }
 
-impl ServeHandle {
-    /// Tell this side's endpoint that the network underneath it may have
-    /// changed, and wait for the notice to be taken.
-    ///
-    /// A *notifier*, not an observer, which is why it takes nothing and
-    /// returns nothing: it pushes a fact in rather than reading one out.
-    /// The endpoint responds by rebinding its sockets and re-checking its
-    /// relay connection, which is what repairs a pipe whose addresses are
-    /// all now wrong.
-    ///
-    /// Harmless when nothing changed, and harmless when the endpoint had
-    /// already noticed by itself — so the honest rule is to call it
-    /// whenever the host knows something this library cannot, and not to
-    /// try to be clever about when.
-    ///
-    /// **The reason it is on the public surface is the hosts that cannot be
-    /// detected from inside.** iroh watches the platform for link changes
-    /// where the platform will say; on Android that information is only
-    /// available to Java code, and on iOS the sleep/wake detection is
-    /// deliberately disabled in favour of a poll measured in the hour. An
-    /// app resuming on a new cellular bearer therefore has a pipe with
-    /// nothing left to repair it until that poll comes round — unless the
-    /// app itself says so, here, from the resume it already handles.
-    ///
-    /// Safe on a pipe that is already closed: the endpoint ignores the
-    /// notice and this returns.
-    pub async fn notify_network_change(&self) {
-        notify(&self.state.endpoint).await;
-    }
-
-    /// What the transport underneath this listener has been doing.
-    ///
-    /// See [`NetworkMetrics`]: monotonic totals for this endpoint's whole
-    /// life, so the useful reading is a difference or a ratio rather than
-    /// one number.
-    pub fn network_metrics(&self) -> NetworkMetrics {
-        metrics_of(&self.state.endpoint)
-    }
-}
-
 impl ConnectHandle {
     /// Tell this side's endpoint that the network underneath it may have
     /// changed, and wait for the notice to be taken.
@@ -175,7 +134,7 @@ pub(crate) async fn notify(endpoint: &Endpoint) {
 /// that is used should be declared, rather than arriving free from a
 /// dependency's private choice and disappearing in a release that changed
 /// nothing here.
-fn metrics_of(endpoint: &Endpoint) -> NetworkMetrics {
+pub(crate) fn metrics_of(endpoint: &Endpoint) -> NetworkMetrics {
     let socket = &endpoint.metrics().socket;
     NetworkMetrics {
         relay_connections: socket.relay_conns_success.get(),

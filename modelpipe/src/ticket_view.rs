@@ -1,11 +1,9 @@
 //! What a ticket says about where it points.
 //!
-//! The second `impl` block of [`Ticket`], split from `ticket.rs` the way
-//! `serve_status.rs` was split from `serve_handle.rs`, and for both of that
-//! split's reasons: the file is at its budget, and the question is a
-//! different one. `ticket.rs` owns what a ticket *is* — the fields, their
-//! widths, how they are written down and read back. This owns what a holder
-//! may ask of one.
+//! The second `impl` block of [`Ticket`], apart from `ticket.rs` because the
+//! question is a different one. `ticket.rs` owns what a ticket *is* — the
+//! fields, their widths, how they are written down and read back. This owns
+//! what a holder may ask of one.
 //!
 //! Two narrow accessors rather than a public address type, and the
 //! narrowness is the point. [`crate::ticket_addr::TicketAddr`] is

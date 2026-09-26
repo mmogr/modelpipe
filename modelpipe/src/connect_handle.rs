@@ -1,7 +1,6 @@
 //! The live connect side.
 //!
-//! The twin of [`crate::serve_handle`]; see that module for why they are
-//! separate files.
+//! The twin of [`crate::serve_handle`].
 
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
@@ -43,14 +42,13 @@ use crate::status::{CloseReason, PipeStatus};
 /// as the pipe is held.
 ///
 /// Deliberately shares no trait with [`ServeHandle`](crate::ServeHandle): the overlap is
-/// three methods, and embedders driving both sides duplicate a small
+/// eight methods, and embedders driving both sides duplicate a small
 /// park-and-watch loop. If that ever grows past a nuisance, a shared
 /// trait is an additive, non-breaking change — the decision is recorded
 /// here so the duplication reads as chosen, not overlooked.
 pub struct ConnectHandle {
-    /// Shared with `network.rs`, the second `impl` block — the same
-    /// arrangement [`ServeHandle`](crate::ServeHandle) has with
-    /// `serve_status.rs`.
+    /// Shared with this type's `impl` blocks in `network.rs` and
+    /// `connect_idle.rs`.
     pub(crate) state: Arc<ConnectState>,
 }
 
