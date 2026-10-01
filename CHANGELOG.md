@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.2](https://github.com/mmogr/modelpipe/compare/v0.8.1...v0.8.2) - 2026-10-01
+
+### Fixed
+
+- *(connect)* shutdown waits for each response to be written, not for its client to close the socket ([#144](https://github.com/mmogr/modelpipe/pull/144))
+- *(cli)* serve and connect keep running when stderr cannot take a status line ([#143](https://github.com/mmogr/modelpipe/pull/143))
+- *(serve)* trailers, chunk extensions, key-file owners and peer budgets are held to stricter rules ([#142](https://github.com/mmogr/modelpipe/pull/142))
+- *(body)* a chunk size is plain hexadecimal, with spaces or tabs only before a `;` ([#141](https://github.com/mmogr/modelpipe/pull/141))
+
+### Other
+
+- *(pipe)* the comments say what the code keeps, not how it got there ([#140](https://github.com/mmogr/modelpipe/pull/140))
+- *(serve)* every ServeHandle method lives in serve_handle.rs ([#139](https://github.com/mmogr/modelpipe/pull/139))
+
 ## [0.8.1](https://github.com/mmogr/modelpipe/compare/v0.8.0...v0.8.1) - 2026-09-25
 
 ### Fixed
