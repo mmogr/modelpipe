@@ -339,6 +339,15 @@ fn a_primary_admission_carries_no_device_marker_and_still_strips_a_forged_one() 
     assert_eq!(names(&h), ["accept", "via", "x-modelpipe-peer"]);
 }
 
+/// `Authorization` is refused in a trailer and kept in a head: the trailer
+/// rule names it, and the head strip does not.
+#[test]
+fn authorization_is_forbidden_in_a_trailer_and_not_stripped_from_a_head() {
+    assert!(is_forbidden_in_trailer("Authorization"));
+    assert!(is_forbidden_in_trailer("AUTHORIZATION"));
+    assert!(!is_stripped("Authorization"));
+}
+
 #[test]
 fn the_device_marker_is_forbidden_in_trailers_like_the_others() {
     assert!(is_stripped("X-Modelpipe-Device"));

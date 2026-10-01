@@ -145,6 +145,27 @@ async fn a_trailer_cannot_restate_a_header_the_head_strip_removes() {
     assert!(text.ends_with("\r\n\r\n"), "the body still ends: {text:?}");
 }
 
+/// An `Authorization` trailer is dropped, in any case, and the trailers
+/// around it go on as they came. A head's `Authorization` is replaced by the
+/// backend's own bearer where there is one, and nothing replaces a trailer,
+/// so forwarding one would hand the backend the device's key, or a second
+/// `Authorization` after the one the edge checked.
+#[tokio::test]
+async fn an_authorization_trailer_is_dropped_and_its_neighbours_are_not() {
+    let input = b"3\r\nabc\r\n0\r\n\
+                  X-Checksum: 1\r\n\
+                  Authorization: Bearer device-key\r\n\
+                  authorization: Bearer lower\r\n\
+                  X-Other: 2\r\n\r\n";
+    let (_, out) = run(b"", input, Framing::Chunked).await.unwrap();
+    assert_eq!(
+        out,
+        b"3\r\nabc\r\n0\r\nX-Checksum: 1\r\nX-Other: 2\r\n\r\n",
+        "{:?}",
+        String::from_utf8_lossy(&out)
+    );
+}
+
 /// A trailer line the edge cannot read as a field is not forwarded, on the
 /// rule `http_head::collect` already applies to header values: passing on
 /// bytes this edge could not parse is how a value means one thing here and

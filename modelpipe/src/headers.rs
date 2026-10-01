@@ -93,6 +93,15 @@ pub(crate) const DEVICE_HEADER: &str = "X-Modelpipe-Device";
 /// comment above says stripping must not create.
 const NEVER_NOMINABLE: &[&str] = &["connection", "content-length", "host", "transfer-encoding"];
 
+/// Fields a head may carry and a trailer may not.
+///
+/// `Authorization` is end-to-end, so it is on neither list above: a head
+/// keeps it, and [`set_authorization`] replaces it when the backend has a
+/// bearer of its own. Nothing replaces a trailer, so a device's key sent
+/// as one would reach a backend that should see only the edge's bearer,
+/// or arrive as a second `Authorization` after the one the edge checked.
+const NEVER_IN_TRAILER: &[&str] = &["authorization"];
+
 /// Remove the hop-by-hop headers, including the ones this message nominates.
 ///
 /// `Connection` may name further headers as hop-by-hop for this connection
@@ -121,11 +130,12 @@ pub(crate) fn strip_hop_by_hop(headers: &mut Vec<(String, String)>) {
 
 /// Whether a field name is one the edge removes from a head.
 ///
-/// The head strip's own rule, and one half of the trailer rule: trailers go
+/// The head strip's own rule, and one part of the trailer rule: trailers go
 /// through [`is_forbidden_in_trailer`] below, which is this plus
-/// [`NEVER_NOMINABLE`]. The two are separate because they answer different
-/// questions — what this hop removes from a head it is forwarding, and what
-/// a field is not allowed to be *at all* when it arrives after the body.
+/// [`NEVER_NOMINABLE`] and [`NEVER_IN_TRAILER`]. The two are separate
+/// because they answer different questions — what this hop removes from a
+/// head it is forwarding, and what a field is not allowed to be *at all*
+/// when it arrives after the body.
 pub(crate) fn is_stripped(name: &str) -> bool {
     let lower = name.trim().to_ascii_lowercase();
     HOP_BY_HOP.contains(&lower.as_str())
@@ -137,17 +147,20 @@ pub(crate) fn is_stripped(name: &str) -> bool {
 ///
 /// Everything [`is_stripped`] covers, plus [`NEVER_NOMINABLE`] — which is
 /// where `content-length` and `host` live, and which `is_stripped` does not
-/// consult. `body.rs` filtered trailers through `is_stripped` alone while
-/// the comment above that filter said a backend could not use one to put
-/// back "`Connection` or a second `Content-Length`". Half of that was true:
-/// `Connection` is hop-by-hop and was caught, `Content-Length` is neither
-/// hop-by-hop nor a forwarding header and sailed through.
+/// consult — plus [`NEVER_IN_TRAILER`]. `body.rs` filtered trailers through
+/// `is_stripped` alone while the comment above that filter said a backend
+/// could not use one to put back "`Connection` or a second
+/// `Content-Length`". Half of that was true: `Connection` is hop-by-hop and
+/// was caught, `Content-Length` is neither hop-by-hop nor a forwarding
+/// header and sailed through.
 ///
 /// The rule is RFC 9110 §6.5.1: a trailer may not carry a field that
-/// affects message framing, routing, authentication, or processing. These
-/// two lists are this crate's spelling of the first two, and a trailer
-/// restating either is the head strip undone a few hundred bytes later —
-/// on the one part of the message nothing else filters.
+/// affects message framing, routing, authentication, or processing. The
+/// head strip's lists and [`NEVER_NOMINABLE`] are this crate's spelling of
+/// the first two, and a trailer restating either is the head strip undone a
+/// few hundred bytes later — on the one part of the message nothing else
+/// filters. [`NEVER_IN_TRAILER`] is authentication, with the RFC's own
+/// example.
 ///
 /// Still deliberately ignores `Connection` nominations, for the reason
 /// [`is_stripped`] gives: those describe the head they arrived with, and
@@ -155,7 +168,9 @@ pub(crate) fn is_stripped(name: &str) -> bool {
 /// [`NEVER_NOMINABLE`] exists to take away.
 pub(crate) fn is_forbidden_in_trailer(name: &str) -> bool {
     let lower = name.trim().to_ascii_lowercase();
-    is_stripped(name) || NEVER_NOMINABLE.contains(&lower.as_str())
+    is_stripped(name)
+        || NEVER_NOMINABLE.contains(&lower.as_str())
+        || NEVER_IN_TRAILER.contains(&lower.as_str())
 }
 
 /// Remove any inbound description of a proxy chain, and add none.
