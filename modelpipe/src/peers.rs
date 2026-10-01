@@ -47,9 +47,9 @@ pub(crate) const MAX_CONCURRENT_STREAMS_PER_PEER: usize = 64;
 /// How many distinct peers a listener carries at once, unless
 /// [`ServeOptions::max_peers`](crate::ServeOptions::max_peers) says otherwise.
 ///
-/// A peer is a fingerprint, so a second connection from a device already
-/// here is not a new peer: it counts against the connection cap and not
-/// against this.
+/// A peer is a whole endpoint id, so a second connection from a device
+/// already here is not a new peer: it counts against the connection cap and
+/// not against this. Two ids that share a fingerprint are two peers.
 pub(crate) const DEFAULT_MAX_PEERS: usize = 32;
 
 /// How many connections a listener carries at once, handshakes included,
@@ -124,11 +124,16 @@ type Connected = (Arc<str>, PeerId, Reading);
 
 /// The connected peers, keyed by an id that exists only to name the right
 /// entry when one changes path or goes.
+///
+/// A peer is its whole endpoint id, for the cap and for the budget alike.
+/// The fingerprint is for people to read: forty-eight bits of the key, and
+/// a key ground to share a device's prefix is a different endpoint that
+/// must not share its budget or its place under the cap.
 pub(crate) struct PeerRegistry {
     peers: Mutex<BTreeMap<u64, Connected>>,
-    /// Stream budgets by peer identity, shared across that peer's
+    /// Stream budgets by endpoint id, shared across that peer's
     /// connections and dropped when its last one goes.
-    budgets: Mutex<HashMap<Arc<str>, Budget>>,
+    budgets: Mutex<HashMap<PeerId, Budget>>,
     next: AtomicU64,
     /// How many distinct peers it carries.
     max_peers: usize,
@@ -151,12 +156,15 @@ impl PeerRegistry {
         }
     }
 
-    /// The stream budget for `name`, shared with every other connection
-    /// that peer currently holds. Call once per connection, after
+    /// The stream budget for `caller`'s endpoint, shared with every other
+    /// connection it currently holds. Call once per connection, after
     /// [`add`](Self::add); [`remove`](Self::remove) returns the share.
-    pub(crate) fn slots(&self, name: &Arc<str>) -> Arc<Semaphore> {
+    ///
+    /// The key is read from `caller` here, its whole id as [`add`](Self::add)
+    /// reads it for the cap, so the listener has no id to choose.
+    pub(crate) fn slots(&self, caller: &Caller) -> Arc<Semaphore> {
         let mut budgets = self.lock_budgets();
-        let budget = budgets.entry(name.clone()).or_insert_with(|| Budget {
+        let budget = budgets.entry(caller.id).or_insert_with(|| Budget {
             slots: Arc::new(Semaphore::new(MAX_CONCURRENT_STREAMS_PER_PEER)),
             connections: 0,
         });
@@ -178,8 +186,8 @@ impl PeerRegistry {
     /// routinely not how it will be routed a second later — see
     /// [`set_path`](Self::set_path), which is the other half of this.
     ///
-    /// `None`, and the set left as it was, when `caller` is not here already
-    /// and as many others as the cap allows are.
+    /// `None`, and the set left as it was, when `caller`'s endpoint id is not
+    /// here already and as many others as the cap allows are.
     pub(crate) fn add(
         &self,
         caller: &Caller,
@@ -187,8 +195,8 @@ impl PeerRegistry {
         lifecycle: &Lifecycle,
     ) -> Option<u64> {
         self.mutate(lifecycle, |peers| {
-            let here: HashSet<&str> = peers.values().map(|(held, _, _)| &**held).collect();
-            if here.len() >= self.max_peers && !here.contains(&*caller.name) {
+            let here: HashSet<PeerId> = peers.values().map(|(_, held, _)| *held).collect();
+            if here.len() >= self.max_peers && !here.contains(&caller.id) {
                 return None;
             }
             let id = self.next.fetch_add(1, Ordering::Relaxed);
@@ -219,22 +227,22 @@ impl PeerRegistry {
     pub(crate) fn remove(&self, id: u64, lifecycle: &Lifecycle) {
         let mut departed = None;
         self.mutate(lifecycle, |peers| {
-            departed = peers.remove(&id).map(|(name, _, _)| name);
+            departed = peers.remove(&id).map(|(_, peer, _)| peer);
         });
-        if let Some(name) = departed {
-            self.release(&name);
+        if let Some(peer) = departed {
+            self.release(peer);
         }
     }
 
     /// Give back one connection's share of a peer's budget, dropping the
     /// budget with its last connection so an endpoint that paired once and
     /// left does not hold a semaphore for the life of the listener.
-    fn release(&self, name: &Arc<str>) {
+    fn release(&self, peer: PeerId) {
         let mut budgets = self.lock_budgets();
-        if let Some(budget) = budgets.get_mut(name) {
+        if let Some(budget) = budgets.get_mut(&peer) {
             budget.connections = budget.connections.saturating_sub(1);
             if budget.connections == 0 {
-                budgets.remove(name);
+                budgets.remove(&peer);
             }
         }
     }
@@ -282,7 +290,7 @@ impl PeerRegistry {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
-    fn lock_budgets(&self) -> std::sync::MutexGuard<'_, HashMap<Arc<str>, Budget>> {
+    fn lock_budgets(&self) -> std::sync::MutexGuard<'_, HashMap<PeerId, Budget>> {
         self.budgets
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
