@@ -35,13 +35,14 @@ the sign to retire the address. Every refusal is the same 401, and the code,
 the key and the label are never logged.
 
 **A superseded token is another credential, and it is the loosest one.**
-`ServeHandle::set_token_with_grace` keeps the replaced token admitting requests
-for a window the operator chooses, so a rollout to several clients does not have
-to race their reconfiguration. It is not scoped: for the length of that window two full credentials open the door, and a
-window measured in hours is a second standing key with a comment attached. It
-expires on its own and a plain `set_token` closes it immediately — a rotation
-that says nothing about grace is a rotation that wants none. Choose the shortest
-window the rollout can survive.
+`ServeHandle::set_token_with_grace` keeps the replaced token admitting
+requests for a window the operator chooses, so a rollout to several clients
+does not have to race their reconfiguration. It is not scoped: for the
+length of that window two full credentials open the door, and a window
+measured in hours is a second standing key with a comment attached. It
+expires on its own and a plain `set_token` closes it immediately — a
+rotation that says nothing about grace is a rotation that wants none. Choose
+the shortest window the rollout can survive.
 
 **The backend must be local.** Loopback always, private ranges only behind
 an explicit flag, link-local — where cloud instance metadata lives — never,
