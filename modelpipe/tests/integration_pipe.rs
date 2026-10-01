@@ -789,6 +789,126 @@ async fn an_idle_local_connection_does_not_wedge_the_connect_side_drain() {
     serving.shutdown().await;
 }
 
+/// A client that has read its whole response and keeps its socket open
+/// holds nothing.
+///
+/// `Connection: close` asks a client to close and cannot make it: a pool
+/// that has not noticed the end of the stream, a hand-rolled client or a
+/// stopped process keeps the socket. The response is over, so the drain has
+/// nothing left to wait for, and the bound here is well under the five
+/// seconds the client may still go on sending.
+#[tokio::test]
+async fn a_client_that_keeps_its_socket_after_its_response_does_not_hold_the_connect_side_drain() {
+    let backend = MockBackend::json(200, OK_BODY).await;
+    let (serving, connected, url) = paired(&backend, TokenPolicy::Generate).await;
+    let auth = bearer(&serving);
+    let authority = url
+        .trim_start_matches("http://")
+        .trim_end_matches("/v1")
+        .to_owned();
+
+    let mut socket = tokio::net::TcpStream::connect(&authority)
+        .await
+        .expect("connect");
+    socket
+        .write_all(
+            format!("GET /v1/models HTTP/1.1\r\nHost: x\r\nAuthorization: {auth}\r\n\r\n")
+                .as_bytes(),
+        )
+        .await
+        .expect("write");
+    let mut seen = Vec::new();
+    within(
+        "the whole response must arrive, and then its end",
+        socket.read_to_end(&mut seen),
+    )
+    .await
+    .expect("read");
+    let response = String::from_utf8_lossy(&seen);
+    assert!(response.contains(OK_BODY), "got: {response}");
+
+    // The socket stays open, and its sending half too, until after the
+    // shutdown.
+    let drained = tokio::time::timeout(Duration::from_secs(2), connected.shutdown()).await;
+    assert!(
+        drained.is_ok(),
+        "the response is over, so a client keeping its socket open must not hold the drain"
+    );
+
+    drop(socket);
+    serving.shutdown().await;
+}
+
+/// The other side of that line: a response still on its way to the client
+/// holds the drain until all of it has been written to the client.
+///
+/// The client finishes sending first, so the request half is over before
+/// the response is, and a drain that stopped waiting at the end of either
+/// half would close the connection under the stream: the client would be
+/// cut before `[DONE]`.
+#[tokio::test]
+async fn a_connect_shutdown_lets_a_response_still_on_its_way_finish() {
+    let backend = MockBackend::streaming(&[
+        "data: one\n\n",
+        "data: two\n\n",
+        "data: three\n\n",
+        "data: [DONE]\n\n",
+    ])
+    .await;
+    let (serving, connected, url) = paired(&backend, TokenPolicy::Generate).await;
+    let auth = bearer(&serving);
+    let authority = url
+        .trim_start_matches("http://")
+        .trim_end_matches("/v1")
+        .to_owned();
+
+    let mut socket = tokio::net::TcpStream::connect(&authority)
+        .await
+        .expect("connect");
+    socket
+        .write_all(
+            format!(
+                "GET /v1/chat/completions HTTP/1.1\r\nHost: x\r\n\
+                 Authorization: {auth}\r\n\r\n"
+            )
+            .as_bytes(),
+        )
+        .await
+        .expect("write");
+    socket
+        .shutdown()
+        .await
+        .expect("the client finishes sending");
+
+    // The first frame, so the exchange is provably under way and provably
+    // unfinished.
+    let mut seen = Vec::new();
+    let mut chunk = [0u8; 4096];
+    while !String::from_utf8_lossy(&seen).contains("data: one") {
+        let n = within("the first frame must arrive", socket.read(&mut chunk))
+            .await
+            .expect("read");
+        assert_ne!(n, 0, "the response ended before its first frame");
+        seen.extend_from_slice(&chunk[..n]);
+    }
+    let reading = tokio::spawn(async move {
+        socket.read_to_end(&mut seen).await.expect("read");
+        String::from_utf8_lossy(&seen).into_owned()
+    });
+
+    within("the drain must not hang", connected.shutdown()).await;
+
+    let body = within("the response must complete", reading)
+        .await
+        .expect("reader");
+    assert!(
+        body.contains("data: [DONE]"),
+        "shutdown drains, so a response on its way runs to its end; the client got: {body}"
+    );
+
+    serving.shutdown().await;
+}
+
 /// `shutdown_timeout` returning must mean the port is free, exactly as
 /// `shutdown` does — and it must leave a later `shutdown` able to say the
 /// same. It used to set the teardown latch itself while the accept loop
