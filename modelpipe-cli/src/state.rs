@@ -21,6 +21,8 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context as _, bail};
 
+use crate::private_path;
+
 /// The folder's own name under the platform's data directory.
 const APP: &str = "modelpipe";
 
@@ -132,12 +134,14 @@ impl StateDir {
     ///
     /// # Errors
     ///
-    /// The folder exists and other users can read it; another serve holds
-    /// the lock; or the folder could not be made or the lock file opened.
+    /// The folder exists and another user owns it or other users can read
+    /// it; another serve holds the lock; or the folder could not be made or
+    /// the lock file opened.
     pub(crate) fn open(root: &Path, key: &str) -> anyhow::Result<Self> {
         let dir = root.join(key);
         make_private(&dir)?;
-        refuse_if_shared(&dir)?;
+        // It holds the endpoint key and every paired device's.
+        private_path::refuse_unless_private(&dir, "keys", "700")?;
         let lock_path = dir.join("lock");
         let pid_path = dir.join("pid");
         let lock = private_file_options()
@@ -242,33 +246,6 @@ fn private_dir_builder() -> fs::DirBuilder {
     {
         fs::DirBuilder::new()
     }
-}
-
-/// Refuse a folder other users can read into: it holds the endpoint key and
-/// every paired device's.
-#[cfg(unix)]
-fn refuse_if_shared(dir: &Path) -> anyhow::Result<()> {
-    use std::os::unix::fs::PermissionsExt as _;
-    let mode = fs::metadata(dir)
-        .with_context(|| format!("could not read {}", dir.display()))?
-        .permissions()
-        .mode();
-    #[expect(clippy::verbose_bit_mask, reason = "0o077 names what it checks")]
-    let private = mode & 0o077 == 0;
-    if !private {
-        bail!(
-            "{} holds keys and other users can read it: chmod 700 it",
-            dir.display()
-        );
-    }
-    Ok(())
-}
-
-/// Nothing to check where there are no Unix modes.
-#[cfg(not(unix))]
-#[expect(clippy::unnecessary_wraps, reason = "the Unix twin can fail")]
-const fn refuse_if_shared(_: &Path) -> anyhow::Result<()> {
-    Ok(())
 }
 
 #[cfg(test)]

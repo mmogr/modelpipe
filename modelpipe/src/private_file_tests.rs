@@ -338,3 +338,57 @@ fn a_file_others_can_read_is_refused_with_a_remedy() {
         "it must say what to do: {refused}"
     );
 }
+
+/// A file another user owns is refused even when its mode is private, and
+/// the refusal names both uids. The decision is checked apart from the
+/// read, because no test can `chown` a file to another user without root;
+/// the test below holds the read to the same decision for a file this
+/// process owns.
+#[cfg(unix)]
+#[test]
+fn a_private_file_another_user_owns_is_refused_and_the_owners_is_not() {
+    for mode in [0o100_600, 0o100_400, 0o040_700] {
+        let refused = exposure(mode, 0, 501).expect("another user's file is refused");
+        assert!(refused.contains("uid 0"), "{refused}");
+        assert!(refused.contains("uid 501"), "{refused}");
+        assert!(
+            refused.contains("chown"),
+            "it must say what to do: {refused}"
+        );
+
+        assert_eq!(exposure(mode, 501, 501), None, "{mode:o} is the owner's");
+        assert_eq!(exposure(mode, 0, 0), None, "root's own {mode:o} is root's");
+    }
+    let shared = exposure(0o100_644, 501, 501).expect("the mode is still checked");
+    assert!(shared.contains("chmod 600"), "{shared}");
+}
+
+/// The read asks about the uid this process runs as. A file it made is its
+/// own and passes, and the filesystem root, which another user owns
+/// wherever these tests do not run as root, is refused for its owner
+/// before its mode is looked at.
+#[cfg(unix)]
+#[test]
+fn the_check_compares_the_owner_with_the_uid_this_process_runs_as() {
+    use std::os::unix::fs::MetadataExt as _;
+
+    let euid = rustix::process::geteuid().as_raw();
+    let scratch = Scratch::new("owner");
+    let path = scratch.join("secret");
+    write_new(&path, "hello\n").expect("writes");
+    assert_eq!(fs::metadata(&path).expect("metadata").uid(), euid);
+    check_private(&path).expect("a file this process made is its own");
+
+    let root = Path::new("/");
+    let owner = fs::metadata(root).expect("the root").uid();
+    if owner == euid {
+        return; // run as the root's owner, so there is no other user to see
+    }
+    let refused = check_private(root).expect_err("another user's path");
+    assert!(
+        refused
+            .to_string()
+            .contains(&format!("belongs to uid {owner}")),
+        "{refused}"
+    );
+}

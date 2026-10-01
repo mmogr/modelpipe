@@ -58,9 +58,9 @@ pub enum ConnectError {
         url: String,
     },
     /// [`ConnectOptions::identity`] names a file this side cannot use as its
-    /// endpoint key: one that is not a key, one others can read, a path that
-    /// is not a regular file (a symlink included), or one it cannot read or
-    /// write. The twin of
+    /// endpoint key: one that is not a key, one others can read or another
+    /// user owns, a path that is not a regular file (a symlink included), or
+    /// one it cannot read or write. The twin of
     /// [`ServeError::Identity`](crate::ServeError::Identity), and permanent
     /// for the same reason: the path is the caller's.
     Identity {
@@ -170,9 +170,10 @@ pub struct ConnectOptions {
     /// The file rules are
     /// [`ServeOptions::identity`](crate::ServeOptions#structfield.identity)'s:
     /// minted on first use, created readable only by its owner, and refused
-    /// as [`ConnectError::Identity`] when others can read it or when the
-    /// path is not a regular file, a symlink included. Keep it apart
-    /// from any listener's file, because one key is one endpoint.
+    /// as [`ConnectError::Identity`] when others can read it, when another
+    /// user owns it, or when the path is not a regular file, a symlink
+    /// included. Keep it apart from any listener's file, because one key is
+    /// one endpoint.
     pub identity: Option<std::path::PathBuf>,
     /// How often, while there is no connection, to tell this endpoint the
     /// network may have changed. `None` never does.

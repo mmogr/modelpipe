@@ -100,15 +100,18 @@ is what a reboot used to be.
 
 What it adds is a secret on disk, where there was none. modelpipe keeps it
 in a folder created readable only by its owner, refuses a folder others can
-read into, and refuses an identity file others can read — the check `ssh`
-makes on a private key — but that is a floor, not a guarantee: backups,
-sync clients, shared home directories and container images all copy files
-that mode bits do not stop. **On Windows there is no mode to set or
-inspect**, so nothing is kept there unless `--state-dir` or `--identity`
-asks for it, and then the file lands with whatever the directory grants and
-this crate cannot narrow it; put it somewhere only you can read. Why the
-default is what it is: [ADR 0005](docs/adr/0005-state-on-by-default.md);
-the trade itself: [ADR 0002](docs/adr/0002-a-stored-endpoint-key-opt-in.md).
+read into and an identity file others can read — the check `ssh` makes on a
+private key — and refuses either when another user owns it, so a process
+running as root does not serve with a key that user can rewrite. The checks
+read the mode bits and the owner, not an access-control list, and they are a
+floor, not a guarantee: backups, sync clients, shared home directories and
+container images all copy files that mode bits do not stop. **On Windows
+there is no mode to set or inspect**, so nothing is kept there unless
+`--state-dir` or `--identity` asks for it, and then the file lands with
+whatever the directory grants and this crate cannot narrow it; put it
+somewhere only you can read. Why the default is what it is:
+[ADR 0005](docs/adr/0005-state-on-by-default.md); the trade itself:
+[ADR 0002](docs/adr/0002-a-stored-endpoint-key-opt-in.md).
 
 One thing a stored key does *not* buy on its own: reachability. The stored
 key fixes the name in the ticket, while the addresses beside it are a

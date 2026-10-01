@@ -16,6 +16,7 @@ mod interrupt;
 mod keys;
 mod pairing;
 mod park;
+mod private_path;
 mod screen;
 mod serve_cmd;
 mod serve_out;

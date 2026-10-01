@@ -3,10 +3,10 @@
 //!
 //! What the file *says* is `store.rs`'s business. This module owns how it is
 //! read and written: the keys are credentials, so the file is created
-//! readable only by its owner, one others can read is refused rather than
-//! used, a path that is not a regular file is refused before it is read, a
-//! replacement lands whole or not at all, and no error from here repeats a
-//! key.
+//! readable only by its owner, one others can read or another user owns is
+//! refused rather than used, a path that is not a regular file is refused
+//! before it is read, a replacement lands whole or not at all, and no error
+//! from here repeats a key.
 //!
 //! Before 0.8 the file was one device per line — its name, a space, and its
 //! key — with blank lines and `#` lines skipped. [`parse_lines`] still reads
@@ -18,6 +18,8 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context as _, bail};
 
+use crate::private_path;
+
 /// The file's text, or `None` when there is no file.
 ///
 /// A path that is not a regular file is refused before it is read, a
@@ -25,7 +27,8 @@ use anyhow::{Context as _, bail};
 pub(crate) fn read(path: &Path) -> anyhow::Result<Option<String>> {
     match refuse_unless_regular(path).and_then(|()| fs::read_to_string(path)) {
         Ok(text) => {
-            refuse_if_shared(path)?;
+            // It holds every paired device's key.
+            private_path::refuse_unless_private(path, "device keys", "600")?;
             Ok(Some(text))
         }
         Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
@@ -116,32 +119,6 @@ fn private_options() -> fs::OpenOptions {
     {
         fs::OpenOptions::new()
     }
-}
-
-/// Refuse a file that other users can read: it holds every paired device's key.
-#[cfg(unix)]
-fn refuse_if_shared(path: &Path) -> anyhow::Result<()> {
-    use std::os::unix::fs::PermissionsExt as _;
-    let mode = fs::metadata(path)
-        .with_context(|| format!("could not read {}", path.display()))?
-        .permissions()
-        .mode();
-    #[expect(clippy::verbose_bit_mask, reason = "0o077 names what it checks")]
-    let private = mode & 0o077 == 0;
-    if !private {
-        bail!(
-            "{} holds device keys and other users can read it: chmod 600 it",
-            path.display()
-        );
-    }
-    Ok(())
-}
-
-/// Nothing to check where there are no Unix modes.
-#[cfg(not(unix))]
-#[expect(clippy::unnecessary_wraps, reason = "the Unix twin can fail")]
-const fn refuse_if_shared(_: &Path) -> anyhow::Result<()> {
-    Ok(())
 }
 
 #[cfg(test)]
