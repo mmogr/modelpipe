@@ -14,7 +14,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+use tokio::io::{AsyncRead, AsyncReadExt as _, AsyncWrite, AsyncWriteExt as _};
 use tokio::net::TcpListener;
 
 use crate::ConnectError;
@@ -161,9 +161,13 @@ fn transient(e: &std::io::Error) -> bool {
 /// `guard` is the in-flight registration taken at accept, and this function
 /// is where it is decided whether that registration means anything. A
 /// socket that has been accepted but has said nothing is not an exchange:
-/// an SDK preconnect or a health probe is exactly that shape, and
-/// `copy_bidirectional` never returns for one, so holding the guard made a
+/// an SDK preconnect or a health probe is exactly that shape, and no
+/// response ever comes back for one, so holding the guard for it would let a
 /// single silent connection wedge `shutdown`'s drain permanently.
+///
+/// Once the client has said something this is an exchange the drain must
+/// wait for. A refusal keeps the guard until [`refuse_locally`] returns,
+/// and [`relay`] lets it go when the response is over.
 async fn carry(
     state: &ConnectState,
     mut local: tokio::net::TcpStream,
@@ -187,9 +191,6 @@ async fn carry(
             }
         }
     }
-    // Only now is this an exchange the drain must wait for.
-    let _guard = guard;
-
     // No connection at all right now — the peer is away and
     // `keep_connected` is looking for it. Same answer as a dead one, for the
     // same reason: this end owes the client a status rather than a reset.
@@ -213,15 +214,86 @@ async fn carry(
         tracing::info!("refused a request: the tunnel is down");
         return refuse_locally(&mut local).await;
     };
-    let mut remote = tokio::io::join(recv, send);
-
-    // Opaque in both directions. `copy_bidirectional` finishes when both
-    // halves have seen EOF, which for one exchange per stream is exactly
-    // when the response is complete.
-    tokio::io::copy_bidirectional(&mut local, &mut remote)
-        .await
-        .map(|_| ())
+    let (from_client, to_client) = local.split();
+    relay(from_client, to_client, recv, send, guard).await
 }
+
+/// Carry one exchange's bytes, opaque in both directions, and let `guard`
+/// go once the response is over.
+///
+/// Two copies rather than one bidirectional copy, because the two halves
+/// end at different times and only one of them is the exchange. The
+/// response half ends when the serve side has finished its stream, which it
+/// does once its exchange is over, and every byte of that stream has been
+/// written to the client's socket; this side then shuts down its sending
+/// half of that socket. The request half ends only on the client's own EOF,
+/// and a client is under no obligation to send one: a pool that has not
+/// noticed the end, a hand-rolled client or a stopped process keeps its
+/// socket open after reading its whole response. A guard held until both
+/// halves ended would measure "the client's socket is open", not "the
+/// response is written", and would hold `shutdown` for as long as the
+/// socket stayed open.
+///
+/// A response not yet all written to the client's socket keeps the guard,
+/// because the response half has not ended. That is the drain `shutdown`
+/// promises.
+///
+/// The request half is not cut when the response ends. A backend can
+/// answer before the request body is over, an early `413` or `401`, and
+/// the client is then still sending. That half runs on for up to
+/// [`REQUEST_DRAIN`], with the guard already gone, and ends sooner if the
+/// client closes or the serve side stops taking the bytes.
+///
+/// An error on either half before the response is over ends both halves
+/// there, and the request half gets no drain.
+async fn relay<CR, CW, R, W>(
+    mut from_client: CR,
+    mut to_client: CW,
+    mut recv: R,
+    mut send: W,
+    guard: crate::lifecycle::InFlight,
+) -> std::io::Result<()>
+where
+    CR: AsyncRead + Unpin,
+    CW: AsyncWrite + Unpin,
+    R: AsyncRead + Unpin,
+    W: AsyncWrite + Unpin,
+{
+    let mut request = std::pin::pin!(async {
+        tokio::io::copy(&mut from_client, &mut send).await?;
+        send.shutdown().await
+    });
+    let mut response = std::pin::pin!(async {
+        tokio::io::copy(&mut recv, &mut to_client).await?;
+        to_client.shutdown().await
+    });
+    let mut sending = true;
+    let answered = loop {
+        tokio::select! {
+            ended = &mut request, if sending => {
+                ended?;
+                sending = false;
+            }
+            answered = &mut response => break answered,
+        }
+    };
+    drop(guard);
+    answered?;
+    if sending {
+        // Ignored: the client has its answer, and how its upload ended
+        // changes nothing about it.
+        let _ = tokio::time::timeout(REQUEST_DRAIN, request).await;
+    }
+    Ok(())
+}
+
+/// How long the request half may go on once the response is over.
+///
+/// [`REFUSAL_DRAIN`]'s value, taken from it rather than chosen again: both
+/// wait on a client that already has its whole answer, for it to finish
+/// sending and notice the end of the stream, and neither has anything left
+/// to serve it.
+const REQUEST_DRAIN: Duration = REFUSAL_DRAIN;
 
 /// Answer a client this side cannot serve, and make sure it arrives.
 ///
@@ -295,3 +367,7 @@ pub(crate) async fn shutdown_timeout(state: &ConnectState, grace: Duration) -> b
     state.lifecycle.wait_until_torn_down().await;
     drained
 }
+
+#[cfg(test)]
+#[path = "dialer_tests.rs"]
+mod dialer_tests;

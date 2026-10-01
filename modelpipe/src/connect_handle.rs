@@ -211,10 +211,13 @@ impl ConnectHandle {
     /// cuts, does not time out, takes `&self` for shared-state embedders,
     /// and is idempotent. Dropping the handle cuts instead.
     ///
-    /// A local client can hold this drain by keeping its socket open, even
-    /// after it has read its whole response, or by leaving a large response
-    /// unread, even after closing its own sending half;
-    /// [`shutdown_timeout`](Self::shutdown_timeout) bounds it.
+    /// The drain waits for each response to be written to its local client.
+    /// A client that leaves a large response unread holds it, even after
+    /// closing its own sending half; one that keeps its socket open once it
+    /// has its whole response does not. A request this side refuses itself,
+    /// because the serve side cannot be reached, holds it for up to five
+    /// seconds after the refusal unless its client closes sooner.
+    /// [`shutdown_timeout`](Self::shutdown_timeout) bounds the drain.
     pub async fn shutdown(&self) {
         dialer::shutdown(&self.state).await;
     }
