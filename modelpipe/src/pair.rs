@@ -184,6 +184,20 @@ pub async fn pair(
     opts: ConnectOptions,
     reach_within: Duration,
 ) -> Result<Paired, PairError> {
+    pair_within(pairing, label, opts, reach_within, REDEEM_WITHIN).await
+}
+
+/// [`pair`], with `redeem_within` for the exchange once the serve side is
+/// reached, where [`pair`] gives it [`REDEEM_WITHIN`]. Apart so a test can give
+/// up on a serve side that never answers without waiting thirty seconds. No
+/// test pins the thirty seconds: a longer deadline still passes the suite.
+async fn pair_within(
+    pairing: &PairingString,
+    label: Option<&str>,
+    opts: ConnectOptions,
+    reach_within: Duration,
+    redeem_within: Duration,
+) -> Result<Paired, PairError> {
     let code = pairing.code().ok_or(PairError::NoCode)?;
     let handle = connect(pairing.ticket(), opts)
         .await
@@ -195,7 +209,7 @@ pub async fn pair(
     let serving = PeerId::from_bytes(*pairing.ticket().endpoint_id());
     let local = dialable(handle.local_addr());
     let request = redeem_request(local, code.as_str(), label.unwrap_or(""));
-    let answer = tokio::time::timeout(REDEEM_WITHIN, exchange(local, &request))
+    let answer = tokio::time::timeout(redeem_within, exchange(local, &request))
         .await
         .map_err(|_| PairError::Exchange(std::io::ErrorKind::TimedOut.into()))?
         .map_err(PairError::Exchange)?;
@@ -207,3 +221,7 @@ pub async fn pair(
         serving,
     })
 }
+
+#[cfg(test)]
+#[path = "pair_tests.rs"]
+mod pair_tests;
