@@ -371,16 +371,19 @@ async fn an_ordinary_chunk_size_is_still_hexadecimal() {
     }
 }
 
-/// A chunk size is trimmed of spaces and tabs only, the whitespace `framing`
-/// trims from a `Content-Length`.
+/// Only spaces and tabs are trimmed from a chunk size, and only between it
+/// and a `;`: around the size, that is all RFC 9112 §7.1 allows.
 ///
-/// `str::trim` is wider than that: NBSP, U+2028 and a bare LF padding a `5`
-/// framed a five-byte chunk here while the size line went to the next hop
-/// verbatim, for it to read its own way or refuse.
+/// `str::trim` is wider than that: NBSP or U+2028 padding a `5` would frame
+/// a five-byte chunk here while the size line went to the next hop
+/// verbatim, for it to read its own way or refuse. A bare LF would be
+/// refused either way; here it is refused as a size, before the bare CR or
+/// LF check sees it. So each pad is tried before the size, after it, and
+/// between it and a `;`.
 #[tokio::test]
 async fn a_chunk_size_padded_with_unicode_whitespace_is_refused() {
     for pad in ["\u{a0}", "\u{2028}", "\n"] {
-        for size in [format!("{pad}5"), format!("5{pad}")] {
+        for size in [format!("{pad}5"), format!("5{pad}"), format!("5{pad};a=b")] {
             let input = format!("{size}\r\nhello\r\n0\r\n\r\n");
             let err = run(b"", input.as_bytes(), Framing::Chunked)
                 .await
@@ -393,13 +396,31 @@ async fn a_chunk_size_padded_with_unicode_whitespace_is_refused() {
     }
 }
 
-/// The negative control: a space or a tab is whitespace this edge accepts
-/// around a chunk size, as it does around a `Content-Length`, and the line
-/// it pads still frames and goes on exactly as it came. The leniency is
-/// this edge's: RFC 9112 §7.1 allows it only between the size and a `;`.
+/// RFC 9112 §7.1 makes a chunk-size `1*HEXDIG`, and around it allows spaces
+/// and tabs only between it and a `;`. A size padded anywhere else is
+/// refused: before it, with an extension or without, and after it when no
+/// `;` follows. The line goes on verbatim, so a padded size read here would
+/// be read again by a next hop that need not agree on where the chunk ends.
 #[tokio::test]
-async fn a_chunk_size_with_a_tab_is_still_read() {
-    for size in ["5 ", " 5", "5 ;name=value", "5\t", "\t5", "5\t;name=value"] {
+async fn a_chunk_size_padded_with_spaces_or_tabs_is_refused() {
+    for size in [" 5", "\t5", " 5;x", "\t5;x", "5 ", "5\t"] {
+        let input = format!("{size}\r\nhello\r\n0\r\n\r\n");
+        let err = run(b"", input.as_bytes(), Framing::Chunked)
+            .await
+            .expect_err("must be refused");
+        assert!(
+            err.to_string().contains("hexadecimal"),
+            "{size:?} gave {err}"
+        );
+    }
+}
+
+/// The negative control: spaces and tabs between a size and a `;` are the
+/// padding the RFC allows, and a size with no padding is read as ever. Each
+/// line frames and goes on exactly as it came.
+#[tokio::test]
+async fn a_chunk_size_padded_only_before_a_semicolon_is_read() {
+    for size in ["5 ;name=value", "5\t;name=value", "5 \t;x", "5", "5;a=b"] {
         let input = format!("{size}\r\nhello\r\n0\r\n\r\n");
         let (n, out) = run(b"", input.as_bytes(), Framing::Chunked)
             .await
