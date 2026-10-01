@@ -159,6 +159,21 @@ async fn every_refusal_is_the_same_401_and_leaves_the_invite_live() {
     assert_eq!(result, Outcome::Paired, "for the device it was meant for");
 }
 
+/// The body cap is 4096 bytes, and a body of exactly that redeems. One byte
+/// over is refused before the code is looked at, so it costs no strike and
+/// the same code redeems after it.
+#[tokio::test]
+async fn a_label_of_4096_bytes_redeems_and_one_of_4097_is_refused() {
+    let (credential, code, outcome) = inviting(3);
+    let (over, seen) = answered(&credential, DEVICE, &post(Some(&code), &[b'a'; 4097])).await;
+    assert_eq!(over, Outcome::Unauthorized, "4097 bytes");
+    assert_eq!(seen, refusal::pairing_refused());
+    assert_eq!(outcome.borrow().clone(), None, "the invite is still live");
+
+    let (full, _) = answered(&credential, DEVICE, &post(Some(&code), &[b'a'; 4096])).await;
+    assert_eq!(full, Outcome::Paired, "4096 bytes");
+}
+
 /// A key the listener holds is refused before any `100 Continue`, so a device
 /// that has paired is never asked for a body.
 #[tokio::test]
