@@ -1,9 +1,9 @@
 //! `modelpipe` CLI: thin face over the library crate. All behavior lives
 //! in `modelpipe`; this file parses arguments and prints.
 
-// A stdout line this crate's own code writes goes through `stdout::say`,
-// which does not panic when nothing is reading it any more.
-#![deny(clippy::print_stdout)]
+// A line this crate's own code writes goes through `stdout::say` or
+// `stderr::say`, neither of which panics when the stream cannot take it.
+#![deny(clippy::print_stdout, clippy::print_stderr)]
 
 use clap::Parser as _;
 use modelpipe::ConnectOptions;
@@ -21,6 +21,7 @@ mod serve_cmd;
 mod serve_out;
 mod session;
 mod state;
+mod stderr;
 mod stdout;
 mod store;
 
@@ -62,9 +63,9 @@ async fn main() -> anyhow::Result<()> {
                 // The local port is the one hop in the design with no
                 // encryption in front of it; leaving loopback is a choice
                 // worth a warning, not a guard.
-                eprintln!(
+                stderr::say(&format!(
                     "WARNING: binding {addr} exposes the pipe beyond this machine — anyone who can reach that port can reach the backend (with the token)"
-                );
+                ));
             }
             let mut opts = ConnectOptions::default();
             opts.bind = bind;

@@ -19,7 +19,7 @@ use super::{shows_target, targets};
 /// and by nothing else anywhere — the listener discards the error, because
 /// the peer it would have told is the thing that went away. If level 0
 /// filtered that out, the default install would be strictly worse than the
-/// `eprintln!`s it sits beside.
+/// status lines it sits beside.
 #[test]
 fn the_default_hears_warnings_and_nothing_below_them() {
     let filter = targets(0);

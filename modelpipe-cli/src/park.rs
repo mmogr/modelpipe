@@ -17,6 +17,7 @@ use std::time::Duration;
 use modelpipe::{NetworkMetrics, PipeStatus};
 
 use crate::interrupt::Interrupt;
+use crate::stderr;
 
 /// How long a fresh connect side may sit at `Idle` before this command
 /// gives up on the serve side.
@@ -200,7 +201,7 @@ pub(crate) async fn shut_down(handle: impl Future<Output = ()>, interrupt: &mut 
     tokio::select! {
         () = handle => {}
         _ = interrupt.next() => {
-            eprintln!("interrupted again — cutting rather than waiting");
+            stderr::say("interrupted again — cutting rather than waiting");
         }
     }
 }

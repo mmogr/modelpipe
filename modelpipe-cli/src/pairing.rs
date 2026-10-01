@@ -14,6 +14,7 @@ use modelpipe::{
 };
 
 use crate::park::{FIRST_CONTACT, first_contact};
+use crate::stderr;
 use crate::stdout;
 use crate::store::{self, Device};
 
@@ -32,16 +33,18 @@ pub(crate) fn start(
     let held = if let Some(path) = file {
         hold(handle, path)?
     } else {
-        eprintln!(
+        stderr::say(
             "note: devices paired now are forgotten when serve stops — \
-             pass --state-dir <dir> to keep them"
+             pass --state-dir <dir> to keep them",
         );
         0
     };
     let first_run = if_none && held == 0;
     if !invite && !first_run {
         if held == 0 {
-            eprintln!("WARNING: no device can use this listener yet — {how}");
+            stderr::say(&format!(
+                "WARNING: no device can use this listener yet — {how}"
+            ));
         }
         return Ok(None);
     }
@@ -56,7 +59,7 @@ pub(crate) fn hold(handle: &ServeHandle, path: &Path) -> anyhow::Result<usize> {
         // Rewritten now rather than at the next change, so that a file the
         // person reads after this run is in the one form serve writes.
         store::save(path, &loaded.devices)?;
-        eprintln!("note: {} was rewritten as JSON", path.display());
+        stderr::say(&format!("note: {} was rewritten as JSON", path.display()));
     }
     let mut held = 0;
     for device in loaded.devices.iter().filter(|d| d.paired()) {
@@ -109,7 +112,7 @@ pub(crate) async fn watch(
     file: Option<PathBuf>,
 ) {
     let outcome = invite.outcome().await;
-    eprintln!("{}", settle(&handle, &device, &outcome, file.as_deref()));
+    stderr::say(&settle(&handle, &device, &outcome, file.as_deref()));
 }
 
 /// Keep the listener and the record in step with how an invite ended, and
@@ -190,11 +193,11 @@ pub(crate) async fn connect(
     if given.code().is_some() {
         // `pair` waits for the serve side before it spends the code, so there
         // is no first contact to wait out here as well.
-        eprintln!("pairing with the serve side…");
+        stderr::say("pairing with the serve side…");
         return redeem(given, name, opts).await;
     }
     if name.is_some() {
-        eprintln!("note: --name is sent when pairing, and this ticket has no code");
+        stderr::say("note: --name is sent when pairing, and this ticket has no code");
     }
     let mut handle = modelpipe::connect(given.ticket(), opts).await?;
     // The local port is bound; reaching the peer is not. `connect` returns
@@ -202,7 +205,7 @@ pub(crate) async fn connect(
     // absent serve side, so the wait happens here, where picking a deadline is
     // this command's to do. To stderr and before it, so a terminal about to
     // sit still says why.
-    eprintln!("reaching the serve side…");
+    stderr::say("reaching the serve side…");
     first_contact(&mut handle, FIRST_CONTACT).await?;
     stdout::say(&handle.base_url());
     Ok(handle)
@@ -225,7 +228,7 @@ pub(crate) async fn redeem(
     } = modelpipe::pair(given, name, opts, FIRST_CONTACT).await?;
     stdout::say(&handle.base_url());
     let printed = stdout::say(&format!("key: {api_key}"));
-    eprintln!("{}", key_note(printed, &device, serving));
+    stderr::say(&key_note(printed, &device, serving));
     Ok(handle)
 }
 
