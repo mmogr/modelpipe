@@ -114,6 +114,27 @@ somewhere only you can read. Why the default is what it is:
 [ADR 0005](docs/adr/0005-state-on-by-default.md); the trade itself:
 [ADR 0002](docs/adr/0002-a-stored-endpoint-key-opt-in.md).
 
+The endpoint key is not the only secret modelpipe keeps on disk.
+**The devices record** is the most valuable of them: it holds every paired
+device's key, so a copy of it admits every device at once. With `--named`,
+serve keeps it as `devices.json` in the state folder it prints at startup,
+one per backend: by default on Unix under
+`~/Library/Application Support/modelpipe` on macOS and under
+`$XDG_DATA_HOME/modelpipe` or `~/.local/share/modelpipe` on other Unix, and
+under `--state-dir` where that names a folder. `--devices` names a file of
+its own instead. On Windows there is no default folder, so the record is
+kept only where `--state-dir` or `--devices` names a place. **A connect
+side's endpoint key** is kept only where `modelpipe connect --identity` or
+`ConnectOptions::identity` names a file, and it is what the serve side
+knows that device by. Both files get the identity file's rules: created
+readable only by their owner, refused when others can read them or another
+user owns them, and on Windows landing with whatever the directory grants.
+Deleting the devices record means pairing every device again once serve
+restarts. Deleting a connect identity gives that device a new endpoint, so
+the serve side no longer knows it by its old one, and where an embedder
+pinned its key to the old endpoint with `ServeHandle::add_token_pinned`,
+the new one is refused.
+
 One thing a stored key does *not* buy on its own: reachability. The stored
 key fixes the name in the ticket, while the addresses beside it are a
 snapshot of the ports the old process held, so finding the restarted
