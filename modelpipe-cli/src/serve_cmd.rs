@@ -19,6 +19,7 @@ use crate::park::{park, shut_down};
 use crate::serve_out::{WAIT_ONLINE, not_served, print_token, qr, qr_of, token_policy, undialable};
 use crate::session::{self, HINT};
 use crate::state::{self, StateDir, backend_key};
+use crate::stderr;
 use crate::stdout;
 
 /// Serve as asked, and stay parked on the pipe until told to stop.
@@ -64,7 +65,7 @@ pub(crate) async fn run(args: ServeArgs, interrupt: &mut Interrupt) -> anyhow::R
     if let Some(state) = &state {
         // Where a restart will look, said once so that a `forget` by hand,
         // or a revocation by `rm`, knows the folder.
-        eprintln!("state: {}", state.path().display());
+        stderr::say(&format!("state: {}", state.path().display()));
     }
     // Mutation rather than a struct literal: the options structs
     // are #[non_exhaustive], so a literal cannot cross the crate
@@ -91,7 +92,7 @@ pub(crate) async fn run(args: ServeArgs, interrupt: &mut Interrupt) -> anyhow::R
 
     // To stderr, and before the wait rather than after it, so a
     // terminal that is about to sit still for a moment says why.
-    eprintln!("finding a relay…");
+    stderr::say("finding a relay…");
     // Shared rather than owned from here on: an invite's watcher
     // outlives this function's straight line — it ends when the
     // code does, minutes later, on a task of its own — and it needs
@@ -136,9 +137,9 @@ pub(crate) async fn run(args: ServeArgs, interrupt: &mut Interrupt) -> anyhow::R
     };
     if let Some(invite) = &invited {
         stdout::say(&format!("pairing: {}", invite.pairing()));
-        eprintln!(
+        stderr::say(
             "the code in it works once, for two minutes: run modelpipe connect with the whole \
-             pairing string on the device"
+             pairing string on the device",
         );
     }
     if ephemeral && !no_state {
@@ -147,9 +148,9 @@ pub(crate) async fn run(args: ServeArgs, interrupt: &mut Interrupt) -> anyhow::R
         // flag is the only thing standing between a paired laptop
         // and being re-paired after every reboot, and a flag nobody
         // hears about is a flag nobody uses.
-        eprintln!(
+        stderr::say(
             "note: this ticket dies when serve restarts — \
-             pass --state-dir <dir> to keep it across restarts, or --no-state to say so"
+             pass --state-dir <dir> to keep it across restarts, or --no-state to say so",
         );
     }
     // The pairing string's code when there is an invite: a device
@@ -183,7 +184,7 @@ async fn attend(
         }
         return park(&**handle, interrupt).await;
     };
-    eprintln!("{HINT}");
+    stderr::say(HINT);
     let controller = Controller::new(Arc::clone(handle), devices, invited);
     session::run(
         &**handle,

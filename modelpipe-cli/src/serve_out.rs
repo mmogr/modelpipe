@@ -11,6 +11,7 @@ use std::time::Duration;
 
 use modelpipe::{ServeError, Ticket, TokenPolicy};
 
+use crate::stderr;
 use crate::stdout;
 
 /// How long `serve` lets the endpoint look for a relay before minting the
@@ -183,12 +184,14 @@ pub(crate) fn print_token(supplied: bool, token: Option<String>) {
         // client machines separately on purpose.
         Some(line) => {
             if !stdout::say(&line) && !supplied {
-                eprintln!(
+                stderr::say(
                     "WARNING: the token was not printed: nothing is reading stdout, so no \
-                     client holds it — restart serve to mint another"
+                     client holds it — restart serve to mint another",
                 );
             }
         }
-        None => eprintln!("WARNING: serving open — anyone holding the ticket can use your backend"),
+        None => {
+            stderr::say("WARNING: serving open — anyone holding the ticket can use your backend");
+        }
     }
 }

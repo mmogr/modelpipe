@@ -126,18 +126,33 @@ fn a_locked_out_endpoint_is_refused_however_often_it_presents() {
     );
 }
 
+/// The table holds sixty-four strikers. One already in it goes on spending
+/// its own budget, and only an endpoint a full table has no room for burns
+/// every live invite.
 #[test]
-fn a_sixty_fifth_striker_burns_every_live_invite() {
+fn in_a_full_table_a_known_striker_burns_nothing_and_a_sixty_fifth_burns_every_invite() {
     let invites = Invites::default();
     let first = armed(&invites, "dev-a", 3);
     let second = armed(&invites, "dev-b", 3);
     let wrong = miss(&[&first, &second]);
+    let striker = |n: u8| PeerId::from_bytes([n.wrapping_add(10); 32]);
 
     for n in 0..64u8 {
-        let striker = PeerId::from_bytes([n.wrapping_add(10); 32]);
-        assert!(invites.redeem(wrong.as_bytes(), striker, None).is_none());
+        assert!(invites.redeem(wrong.as_bytes(), striker(n), None).is_none());
     }
     assert_eq!(invites.count(), 2, "sixty-four strikers burn nothing");
+    assert_eq!(invites.lock().strikes.len(), 64, "and fill the table");
+    assert!(invites.redeem(wrong.as_bytes(), striker(0), None).is_none());
+    assert_eq!(
+        invites.count(),
+        2,
+        "a known striker's second wrong code burns nothing"
+    );
+    assert_eq!(
+        invites.lock().strikes.get(&striker(0)),
+        Some(&2),
+        "and is counted against it"
+    );
     assert!(
         invites
             .redeem(wrong.as_bytes(), PeerId::from_bytes([200; 32]), None)
@@ -259,5 +274,37 @@ fn strikes_are_forgotten_when_no_invite_is_live() {
             .redeem(second.code.as_str().as_bytes(), STRANGER, None)
             .is_some(),
         "a new round starts with no strikes"
+    );
+}
+
+/// The redeem that takes the last live invite ends the round, and the strikes
+/// go with it: an endpoint locked out of that round starts the next with its
+/// whole budget. A redeem that leaves an invite live ends no round and forgets no strike.
+#[test]
+fn a_redeem_of_the_last_invite_forgets_the_strikes_and_an_earlier_one_does_not() {
+    let invites = Invites::default();
+    let first = armed(&invites, "dev-a", 1);
+    let second = armed(&invites, "dev-b", 1);
+    let wrong = miss(&[&first, &second]);
+    assert!(invites.redeem(wrong.as_bytes(), STRANGER, None).is_none());
+    invites
+        .redeem(first.code.as_str().as_bytes(), DEVICE, None)
+        .expect("one of two live invites redeems");
+    assert!(
+        invites
+            .redeem(second.code.as_str().as_bytes(), STRANGER, None)
+            .is_none(),
+        "still locked out while an invite is live"
+    );
+    invites
+        .redeem(second.code.as_str().as_bytes(), DEVICE, None)
+        .expect("the last live invite redeems");
+
+    let third = armed(&invites, "dev-c", 1);
+    assert!(
+        invites
+            .redeem(third.code.as_str().as_bytes(), STRANGER, None)
+            .is_some(),
+        "the next round starts with no strikes"
     );
 }

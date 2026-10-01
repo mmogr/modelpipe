@@ -16,6 +16,8 @@ use tracing_subscriber::filter::{LevelFilter, Targets};
 use tracing_subscriber::layer::SubscriberExt as _;
 use tracing_subscriber::util::SubscriberInitExt as _;
 
+use crate::stderr;
+
 /// Every event this workspace emits arrives under this one target.
 ///
 /// One entry covers the library *and* this binary, which looks like a bug
@@ -103,7 +105,11 @@ pub(crate) fn install(verbosity: u8) {
     // nothing.
     let from_env = std::env::var("RUST_LOG").ok().and_then(|raw| {
         Targets::from_str(&raw)
-            .inspect_err(|e| eprintln!("warning: ignoring RUST_LOG, which does not parse: {e}"))
+            .inspect_err(|e| {
+                stderr::say(&format!(
+                    "warning: ignoring RUST_LOG, which does not parse: {e}"
+                ));
+            })
             .ok()
     });
     // Whether the ladder is in force at all decides the target column
