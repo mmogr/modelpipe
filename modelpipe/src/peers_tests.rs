@@ -9,10 +9,13 @@ use crate::status::PipeStatus;
 /// An endpoint id for the tests that are not about which one a peer has.
 const SOMEONE: PeerId = PeerId::from_bytes([9; 32]);
 
-/// A connection from the endpoint named `name`.
+/// A connection from the endpoint named `name`, whose id is the name's
+/// bytes: one name is one endpoint, and two names are two.
 fn calling(name: &Arc<str>) -> Caller {
+    let mut id = [0; 32];
+    id[..name.len()].copy_from_slice(name.as_bytes());
     Caller {
-        id: SOMEONE,
+        id: PeerId::from_bytes(id),
         name: name.clone(),
         at: SOMEONE,
     }
@@ -180,9 +183,9 @@ fn connections_from_one_peer_share_a_budget_and_peers_do_not() {
     registry.add(&calling(&alice), hole_punched(), &lifecycle);
     registry.add(&calling(&bob), hole_punched(), &lifecycle);
 
-    let first = registry.slots(&alice);
-    let second = registry.slots(&alice);
-    let other = registry.slots(&bob);
+    let first = registry.slots(&calling(&alice));
+    let second = registry.slots(&calling(&alice));
+    let other = registry.slots(&calling(&bob));
     assert!(Arc::ptr_eq(&first, &second), "one peer, one budget");
     assert!(!Arc::ptr_eq(&first, &other), "another peer, another budget");
     assert_eq!(first.available_permits(), MAX_CONCURRENT_STREAMS_PER_PEER);
@@ -197,8 +200,8 @@ fn a_stream_on_one_connection_counts_against_the_peers_other_connections() {
     let alice = name("aaaaaaaaaaaa");
     registry.add(&calling(&alice), hole_punched(), &lifecycle);
     registry.add(&calling(&alice), hole_punched(), &lifecycle);
-    let via_first = registry.slots(&alice);
-    let via_second = registry.slots(&alice);
+    let via_first = registry.slots(&calling(&alice));
+    let via_second = registry.slots(&calling(&alice));
 
     let held: Vec<_> = (0..MAX_CONCURRENT_STREAMS_PER_PEER)
         .map(|_| {
@@ -233,21 +236,66 @@ fn a_budget_survives_one_connection_leaving_and_dies_with_the_last() {
     let second = registry
         .add(&calling(&alice), hole_punched(), &lifecycle)
         .expect("under the cap");
-    let budget = registry.slots(&alice);
-    let _also = registry.slots(&alice);
+    let budget = registry.slots(&calling(&alice));
+    let _also = registry.slots(&calling(&alice));
 
     registry.remove(first, &lifecycle);
     assert!(
-        Arc::ptr_eq(&budget, &registry.slots(&alice)),
+        Arc::ptr_eq(&budget, &registry.slots(&calling(&alice))),
         "the surviving connection still draws on the same budget"
     );
-    registry.release(&alice); // the share `slots` above just took, for the assertion
+    registry.release(calling(&alice).id); // the share `slots` above just took, for the assertion
 
     registry.remove(second, &lifecycle);
     assert!(
-        !Arc::ptr_eq(&budget, &registry.slots(&alice)),
+        !Arc::ptr_eq(&budget, &registry.slots(&calling(&alice))),
         "a peer that comes back after leaving entirely starts a fresh budget"
     );
+}
+
+/// Two endpoints whose ids share the forty-eight bits a fingerprint shows
+/// are two peers: each has its own stream budget, and each takes its own
+/// place under the cap. A key ground to match a device's prefix must not
+/// spend that device's budget or ride in on its place.
+#[test]
+fn two_ids_that_share_a_fingerprint_are_two_peers() {
+    let mut other = [0xd7; 32];
+    other[31] = 0x01;
+    let desk = Caller::new(PeerId::from_bytes([0xd7; 32]), SOMEONE);
+    let lookalike = Caller::new(PeerId::from_bytes(other), SOMEONE);
+    assert_eq!(desk.name, lookalike.name, "one fingerprint");
+    assert_ne!(desk.id, lookalike.id, "two endpoints");
+
+    let registry = PeerRegistry::new(NonZeroUsize::new(1).expect("one"));
+    let lifecycle = Lifecycle::new();
+    registry
+        .add(&desk, hole_punched(), &lifecycle)
+        .expect("under the cap");
+    assert_eq!(
+        registry.add(&lookalike, hole_punched(), &lifecycle),
+        None,
+        "a second endpoint is a second peer, past a cap of one"
+    );
+    assert!(
+        registry.add(&desk, hole_punched(), &lifecycle).is_some(),
+        "while the first endpoint's second connection is not"
+    );
+
+    let registry = PeerRegistry::default();
+    registry.add(&desk, hole_punched(), &lifecycle);
+    registry.add(&lookalike, hole_punched(), &lifecycle);
+    let budget = registry.slots(&desk);
+    let lookalikes = registry.slots(&lookalike);
+    assert!(!Arc::ptr_eq(&budget, &lookalikes), "two budgets");
+    let held: Vec<_> = (0..MAX_CONCURRENT_STREAMS_PER_PEER)
+        .map(|_| budget.clone().try_acquire_owned().expect("within the cap"))
+        .collect();
+    assert_eq!(
+        lookalikes.available_permits(),
+        MAX_CONCURRENT_STREAMS_PER_PEER,
+        "one spent budget leaves the other whole"
+    );
+    drop(held);
 }
 
 // ── How many the listener carries ────────────────────────────────────────

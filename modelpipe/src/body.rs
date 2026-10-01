@@ -180,6 +180,17 @@ where
                 "chunk size line carries a bare CR or LF",
             ));
         }
+        // Nor any other control byte but a tab. RFC 9112 §7.1.1 makes an
+        // extension tokens and quoted strings, whose one allowed control is
+        // HTAB, and a NUL, an escape or a DEL passed on verbatim is a byte a
+        // lenient or C-string parser downstream may read differently from
+        // this edge. The size before any `;` is hex digits and spaces or
+        // tabs by now, so checking the whole line checks the extensions.
+        if line.iter().any(|&b| b != b'\t' && b.is_ascii_control()) {
+            return Err(std::io::Error::other(
+                "chunk extension carries a control character",
+            ));
+        }
 
         dst.write_all(&line).await?;
         dst.write_all(b"\r\n").await?;

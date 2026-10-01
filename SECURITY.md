@@ -35,13 +35,14 @@ the sign to retire the address. Every refusal is the same 401, and the code,
 the key and the label are never logged.
 
 **A superseded token is another credential, and it is the loosest one.**
-`ServeHandle::set_token_with_grace` keeps the replaced token admitting requests
-for a window the operator chooses, so a rollout to several clients does not have
-to race their reconfiguration. It is not scoped: for the length of that window two full credentials open the door, and a
-window measured in hours is a second standing key with a comment attached. It
-expires on its own and a plain `set_token` closes it immediately — a rotation
-that says nothing about grace is a rotation that wants none. Choose the shortest
-window the rollout can survive.
+`ServeHandle::set_token_with_grace` keeps the replaced token admitting
+requests for a window the operator chooses, so a rollout to several clients
+does not have to race their reconfiguration. It is not scoped: for the
+length of that window two full credentials open the door, and a window
+measured in hours is a second standing key with a comment attached. It
+expires on its own and a plain `set_token` closes it immediately — a
+rotation that says nothing about grace is a rotation that wants none. Choose
+the shortest window the rollout can survive.
 
 **The backend must be local.** Loopback always, private ranges only behind
 an explicit flag, link-local — where cloud instance metadata lives — never,
@@ -63,12 +64,13 @@ A chunked body is held to the same rule, because the edge passes its
 framing on as it came. A chunk-size line is refused unless its size is
 plain hexadecimal, with spaces or tabs only between the size and a `;`,
 and refused too if it carries a bare CR or LF anywhere, extensions
-included. A trailer is dropped if it carries a bare CR or LF, if it is
-not a field the edge can read (no colon, or a name that is not UTF-8),
-or if it names `Content-Length`, `Host`, a standard hop-by-hop field
-such as `Connection` or `Transfer-Encoding`, a proxy-chain field such as
-`X-Forwarded-For`, or one of the markers the edge sets itself (`Via`,
-`X-Modelpipe-Peer`, `X-Modelpipe-Device`). Any other trailer is
+included, or any other control character but a tab in its extensions.
+A trailer is dropped if it carries a bare CR or LF, if it is not a field
+the edge can read (no colon, or a name that is not UTF-8), or if it
+names `Content-Length`, `Host`, `Authorization`, a standard hop-by-hop
+field such as `Connection` or `Transfer-Encoding`, a proxy-chain field
+such as `X-Forwarded-For`, or one of the markers the edge sets itself
+(`Via`, `X-Modelpipe-Peer`, `X-Modelpipe-Device`). Any other trailer is
 forwarded as it came.
 
 ## What modelpipe does not defend against
@@ -99,15 +101,39 @@ is what a reboot used to be.
 
 What it adds is a secret on disk, where there was none. modelpipe keeps it
 in a folder created readable only by its owner, refuses a folder others can
-read into, and refuses an identity file others can read — the check `ssh`
-makes on a private key — but that is a floor, not a guarantee: backups,
-sync clients, shared home directories and container images all copy files
-that mode bits do not stop. **On Windows there is no mode to set or
-inspect**, so nothing is kept there unless `--state-dir` or `--identity`
-asks for it, and then the file lands with whatever the directory grants and
-this crate cannot narrow it; put it somewhere only you can read. Why the
-default is what it is: [ADR 0005](docs/adr/0005-state-on-by-default.md);
-the trade itself: [ADR 0002](docs/adr/0002-a-stored-endpoint-key-opt-in.md).
+read into and an identity file others can read — the check `ssh` makes on a
+private key — and refuses either when another user owns it, so a process
+running as root does not serve with a key that user can rewrite. The checks
+read the mode bits and the owner, not an access-control list, and they are a
+floor, not a guarantee: backups, sync clients, shared home directories and
+container images all copy files that mode bits do not stop. **On Windows
+there is no mode to set or inspect**, so nothing is kept there unless
+`--state-dir` or `--identity` asks for it, and then the file lands with
+whatever the directory grants and this crate cannot narrow it; put it
+somewhere only you can read. Why the default is what it is:
+[ADR 0005](docs/adr/0005-state-on-by-default.md); the trade itself:
+[ADR 0002](docs/adr/0002-a-stored-endpoint-key-opt-in.md).
+
+The endpoint key is not the only secret modelpipe keeps on disk.
+**The devices record** is the most valuable of them: it holds every paired
+device's key, so a copy of it admits every device at once. With `--named`,
+serve keeps it as `devices.json` in the state folder it prints at startup,
+one per backend: by default on Unix under
+`~/Library/Application Support/modelpipe` on macOS and under
+`$XDG_DATA_HOME/modelpipe` or `~/.local/share/modelpipe` on other Unix, and
+under `--state-dir` where that names a folder. `--devices` names a file of
+its own instead. On Windows there is no default folder, so the record is
+kept only where `--state-dir` or `--devices` names a place. **A connect
+side's endpoint key** is kept only where `modelpipe connect --identity` or
+`ConnectOptions::identity` names a file, and it is what the serve side
+knows that device by. Both files get the identity file's rules: created
+readable only by their owner, refused when others can read them or another
+user owns them, and on Windows landing with whatever the directory grants.
+Deleting the devices record means pairing every device again once serve
+restarts. Deleting a connect identity gives that device a new endpoint, so
+the serve side no longer knows it by its old one, and where an embedder
+pinned its key to the old endpoint with `ServeHandle::add_token_pinned`,
+the new one is refused.
 
 One thing a stored key does *not* buy on its own: reachability. The stored
 key fixes the name in the ticket, while the addresses beside it are a

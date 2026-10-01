@@ -13,14 +13,25 @@ use tokio::io::duplex;
 /// Forward `input` under `framing`, with `leftover` standing in for bytes
 /// already read while parsing the head.
 async fn run(leftover: &[u8], input: &[u8], framing: Framing) -> std::io::Result<(u64, Vec<u8>)> {
+    let (n, out) = forwarded(leftover, input, framing).await;
+    Ok((n?, out))
+}
+
+/// [`run`], keeping what reached the next hop when forwarding fails too,
+/// for the tests that a refused line is refused before any of it leaves.
+async fn forwarded(
+    leftover: &[u8],
+    input: &[u8],
+    framing: Framing,
+) -> (std::io::Result<u64>, Vec<u8>) {
     let (mut src_tx, mut src_rx) = duplex(64 * 1024);
     src_tx.write_all(input).await.unwrap();
     drop(src_tx); // the source ends here, which is what UntilClose needs
 
     let mut out = Vec::new();
     let mut buffered = Buffered::new(&mut src_rx, leftover.to_vec());
-    let n = forward(&mut buffered, &mut out, framing).await?;
-    Ok((n, out))
+    let n = forward(&mut buffered, &mut out, framing).await;
+    (n, out)
 }
 
 // ── Length-framed ────────────────────────────────────────────────────────
@@ -143,6 +154,27 @@ async fn a_trailer_cannot_restate_a_header_the_head_strip_removes() {
     // the peer's to send.
     assert!(text.contains("X-Checksum: 1"), "{text}");
     assert!(text.ends_with("\r\n\r\n"), "the body still ends: {text:?}");
+}
+
+/// An `Authorization` trailer is dropped, in any case, and the trailers
+/// around it go on as they came. A head's `Authorization` is replaced by the
+/// backend's own bearer where there is one, and nothing replaces a trailer,
+/// so forwarding one would hand the backend the device's key, or a second
+/// `Authorization` after the one the edge checked.
+#[tokio::test]
+async fn an_authorization_trailer_is_dropped_and_its_neighbours_are_not() {
+    let input = b"3\r\nabc\r\n0\r\n\
+                  X-Checksum: 1\r\n\
+                  Authorization: Bearer device-key\r\n\
+                  authorization: Bearer lower\r\n\
+                  X-Other: 2\r\n\r\n";
+    let (_, out) = run(b"", input, Framing::Chunked).await.unwrap();
+    assert_eq!(
+        out,
+        b"3\r\nabc\r\n0\r\nX-Checksum: 1\r\nX-Other: 2\r\n\r\n",
+        "{:?}",
+        String::from_utf8_lossy(&out)
+    );
 }
 
 /// A trailer line the edge cannot read as a field is not forwarded, on the
@@ -439,7 +471,8 @@ async fn a_chunk_size_padded_only_before_a_semicolon_is_read() {
 /// next hop that splits on a bare LF can be made to end the body early and
 /// read what follows as a second request. A check that reads one
 /// extension, stops short of the last byte or passes the size-zero line
-/// fails here.
+/// fails here, and so does one made after the line has gone on: every
+/// input breaks its first line, so nothing may reach the next hop.
 #[tokio::test]
 async fn a_bare_cr_or_lf_in_a_chunk_extension_is_refused() {
     let sized = [
@@ -453,12 +486,85 @@ async fn a_bare_cr_or_lf_in_a_chunk_extension_is_refused() {
     .map(|size| format!("{size}\r\nhello\r\n0\r\n\r\n"));
     let last = ["0;a\nb\r\n\r\n", "0;a\rb\r\n\r\n"].map(String::from);
     for input in sized.iter().chain(&last) {
-        let Err(err) = run(b"", input.as_bytes(), Framing::Chunked).await else {
+        let (result, out) = forwarded(b"", input.as_bytes(), Framing::Chunked).await;
+        let Err(err) = result else {
             panic!("{input:?} must be refused");
         };
         assert!(
             err.to_string().contains("bare CR or LF"),
             "{input:?} gave {err}"
+        );
+        assert!(
+            out.is_empty(),
+            "{input:?} went on before it was refused: {out:?}"
+        );
+    }
+}
+
+/// A control byte in a chunk extension is refused, as a bare CR or LF is:
+/// RFC 9112 §7.1.1 allows none but HTAB there, and the line goes on
+/// verbatim, so whatever this edge let through a C-string or lenient parser
+/// downstream would read its own way. One case per class — NUL, the other
+/// C0 controls and DEL — in the first extension and the last, and on the
+/// last-chunk line. Each is on the first line, so nothing may reach the
+/// next hop: a check made after the line has gone on is no check.
+#[tokio::test]
+async fn a_control_byte_in_a_chunk_extension_is_refused() {
+    let classes: [(&str, &[u8]); 3] = [
+        ("NUL", &[0x00]),
+        ("another C0 control", &[0x01, 0x08, 0x0b, 0x0c, 0x1b, 0x1f]),
+        ("DEL", &[0x7f]),
+    ];
+    for (class, bytes) in classes {
+        for &byte in bytes {
+            let c = char::from(byte);
+            let inputs = [
+                format!("5;a{c}b\r\nhello\r\n0\r\n\r\n"),
+                format!("5;a=b;c=d{c}\r\nhello\r\n0\r\n\r\n"),
+                format!("5 ;a=\"b{c}\"\r\nhello\r\n0\r\n\r\n"),
+                format!("0;a{c}\r\n\r\n"),
+            ];
+            for input in inputs {
+                let (result, out) = forwarded(b"", input.as_bytes(), Framing::Chunked).await;
+                let Err(err) = result else {
+                    panic!("{class} {byte:#04x} in {input:?} must be refused");
+                };
+                assert!(
+                    err.to_string().contains("control character"),
+                    "{class} {byte:#04x} in {input:?} gave {err}"
+                );
+                assert!(
+                    out.is_empty(),
+                    "{class} {byte:#04x} in {input:?} went on before it was refused: {out:?}"
+                );
+            }
+        }
+    }
+}
+
+/// The negative control: an extension with tabs where the RFC allows
+/// them, a quoted string holding a tab, and bytes past ASCII in a quoted
+/// string still frame and go on byte for byte. A check that refused every
+/// extension, or every tab, fails here.
+#[tokio::test]
+async fn an_ordinary_chunk_extension_is_still_forwarded_byte_for_byte() {
+    for size in [
+        &b"5;name=value"[..],
+        b"5\t;\tname\t=\tvalue",
+        b"5;a=\"b\tc\"",
+        b"5;a=\"caf\xc3\xa9\";b",
+    ] {
+        let mut input = size.to_vec();
+        input.extend_from_slice(b"\r\nhello\r\n0;last=1\r\n\r\n");
+        let (n, out) = run(b"", &input, Framing::Chunked)
+            .await
+            .unwrap_or_else(|e| panic!("{:?} must frame: {e}", String::from_utf8_lossy(size)));
+        assert_eq!(n, 5);
+        assert_eq!(
+            out,
+            input,
+            "{:?} was rewritten",
+            String::from_utf8_lossy(size)
         );
     }
 }

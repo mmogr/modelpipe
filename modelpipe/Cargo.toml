@@ -95,6 +95,16 @@ tracing = { version = "0.1", default-features = false, features = ["std", "attri
 # alone, and the reason it gives is a test's reason.
 tokio = { workspace = true, features = ["net", "io-util", "rt", "sync", "time"] }
 
+# The effective uid, which the private-file check compares a key file's
+# owner with: a `0600` key another user owns is refused. `std` has no safe
+# way to ask who this process runs as, and the workspace denies `unsafe`,
+# so this is the wrapper. **New compilation** for the library: rustix,
+# and on Linux `linux-raw-sys` under it, which the CLI already compiles and
+# nothing the library depended on did. Unix only, as the check is, with
+# `process` the one module used.
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "1", default-features = false, features = ["process"] }
+
 [dev-dependencies]
 # `macros` for #[tokio::test]; `rt-multi-thread` because a test that pumps a
 # stream while reading the other end needs a second task to make progress.

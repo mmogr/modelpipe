@@ -137,9 +137,12 @@ async fn a_refused_connection_leaves_the_registry_as_it_found_it() {
             path: PeerPath::Direct,
             rtt: None,
         };
+        // One endpoint per name, so the thirty-two are thirty-two peers.
+        let mut id = [0; 32];
+        id[..peer.len()].copy_from_slice(peer.as_bytes());
         let nobody = crate::peer_id::PeerId::from_bytes([0; 32]);
         let caller = crate::caller::Caller {
-            id: nobody,
+            id: crate::peer_id::PeerId::from_bytes(id),
             name: peer.clone(),
             at: nobody,
         };

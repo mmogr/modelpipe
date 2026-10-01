@@ -62,8 +62,10 @@ serde_json = { version = "1", default-features = false, features = ["std"] }
 # always was, and the mode is put back on every way out but SIGKILL.
 #
 # **New compilation**, and the only new compilation in the state work.
-# `termios` is the one module used; `std` is what its `BorrowedFd` needs.
-rustix = { version = "1", default-features = false, features = ["std", "termios"] }
+# `termios` is the module for that; `std` is what its `BorrowedFd` needs.
+# `process` is the effective uid, which the devices file and the state
+# folder compare their owner with, and adds no crate.
+rustix = { version = "1", default-features = false, features = ["std", "termios", "process"] }
 
 [dev-dependencies]
 # `Targets::would_enable` — the one honest way to ask a filter what it lets

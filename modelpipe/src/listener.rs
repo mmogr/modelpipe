@@ -141,7 +141,7 @@ async fn serve_connection(
         return;
     };
     // The peer's budget, shared by its connections: `peers::MAX_CONCURRENT_STREAMS_PER_PEER`.
-    let slots = state.peers.slots(&peer_name);
+    let slots = state.peers.slots(&caller);
 
     // `info_span!` rather than `debug_span!`, and that is not a taste
     // call: a span disabled by the filter contributes no fields, so at the

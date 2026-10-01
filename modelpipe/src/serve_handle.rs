@@ -407,7 +407,13 @@ impl ServeHandle {
     /// the call runs to completion.
     ///
     /// A live [`invite`](Self::invite) for `name` is withdrawn first, so its
-    /// code cannot hand out a key that no longer admits.
+    /// code cannot hand out a key that no longer admits. That covers an
+    /// invite that has returned, and not one still running: an `invite` for
+    /// the same `name` on another task can hold its key before this call
+    /// removes it and register its code after this call has withdrawn, and
+    /// that code then hands out a key the listener refuses. An embedder that
+    /// invites and removes from more than one task orders the two calls for
+    /// any one name.
     pub fn remove_token(&self, name: &str) -> bool {
         // Before the token goes, and not inside its lock: the invites are
         // never locked while the named tokens are.

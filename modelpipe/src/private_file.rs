@@ -179,7 +179,8 @@ pub(crate) fn check_regular(path: &Path) -> Result<(), io::Error> {
     Err(io::Error::other(format!("{} is {what}", path.display())))
 }
 
-/// Refuse a file anyone else on this machine can read.
+/// Refuse a file anyone else on this machine can read, or that another
+/// user owns.
 ///
 /// The check `ssh` makes on a private key, for the reason it makes it: a
 /// key is only a secret while it is one, and a file that has become
@@ -187,13 +188,37 @@ pub(crate) fn check_regular(path: &Path) -> Result<(), io::Error> {
 /// left in a shared directory — is a secret somebody else holds, silently,
 /// for as long as the file lives.
 ///
+/// The owner is checked too, because the mode bits say nothing about who
+/// they belong to. A process running as root reads another user's `0600`
+/// key as easily as its own, and serving with it would serve with a secret
+/// that user can read and rewrite.
+///
 /// Refusing is the safe direction and the message says what to do. Unix
-/// only, because there is no mode to inspect elsewhere.
+/// only, because there is no mode or owner to inspect elsewhere.
 #[cfg(unix)]
 pub(crate) fn check_private(path: &Path) -> Result<(), io::Error> {
-    use std::os::unix::fs::PermissionsExt as _;
+    use std::os::unix::fs::MetadataExt as _;
 
-    let mode = fs::metadata(path)?.permissions().mode();
+    let file = fs::metadata(path)?;
+    let euid = rustix::process::geteuid().as_raw();
+    exposure(file.mode(), file.uid(), euid).map_or(Ok(()), |why| {
+        Err(io::Error::other(format!("{} {why}", path.display())))
+    })
+}
+
+/// Why a file with `mode`, owned by `owner`, is no secret of a process
+/// running as `euid`, or `None` when it is one.
+///
+/// Apart from [`check_private`]'s read of the file, so a test can name an
+/// owner it has no way to `chown` a file to.
+#[cfg(unix)]
+fn exposure(mode: u32, owner: u32, euid: u32) -> Option<String> {
+    if owner != euid {
+        return Some(format!(
+            "belongs to uid {owner}, not uid {euid} that this process runs as — chown it, or \
+             run as its owner"
+        ));
+    }
     // Clippy prefers `trailing_zeros() >= 6` here, and it is the same
     // predicate. It is also unreadable: `0o077` is the group and other bits
     // written the way every chmod manual and every reader of this function
@@ -203,13 +228,12 @@ pub(crate) fn check_private(path: &Path) -> Result<(), io::Error> {
     #[expect(clippy::verbose_bit_mask, reason = "0o077 names what it checks")]
     let private = mode & 0o077 == 0;
     if private {
-        return Ok(());
+        return None;
     }
-    Err(io::Error::other(format!(
-        "{} is readable by others (mode {:04o}) — chmod 600 it",
-        path.display(),
+    Some(format!(
+        "is readable by others (mode {:04o}) — chmod 600 it",
         mode & 0o7777
-    )))
+    ))
 }
 
 /// The same, where there is no mode to inspect.
