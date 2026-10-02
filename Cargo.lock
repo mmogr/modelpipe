@@ -1761,7 +1761,7 @@ dependencies = [
 
 [[package]]
 name = "modelpipe"
-version = "0.8.1"
+version = "0.8.2"
 dependencies = [
  "getrandom 0.4.3",
  "httparse",
@@ -1778,7 +1778,7 @@ dependencies = [
 
 [[package]]
 name = "modelpipe-cli"
-version = "0.8.1"
+version = "0.8.2"
 dependencies = [
  "anyhow",
  "clap",
