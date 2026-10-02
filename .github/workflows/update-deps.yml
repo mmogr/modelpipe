@@ -1,0 +1,132 @@
+# Updates Cargo.lock on demand and opens a PR with the result: every
+# dependency, or the one named in `package`, moved to the newest version the
+# version ranges allow.
+#
+# Run it from Actions -> Update dependencies -> Run workflow, or with
+# `gh workflow run update-deps.yml -R mmogr/modelpipe [-f package=<name>]`.
+# Nothing to update means no branch and no PR, and the run summary says so.
+#
+# Every write goes through RELEASE_PAT, for the reason release-plz.yml gives:
+# a branch pushed and a PR opened with the default GITHUB_TOKEN start no
+# workflows, so the PR would get no CI and could never pass the required
+# check.
+#
+# Cargo.toml sets resolver = "3", so `cargo update` prefers versions that
+# declare support for the workspace's rust-version, and "newest" in the PR
+# title means newest among those.
+name: Update dependencies
+
+on:
+  workflow_dispatch:
+    inputs:
+      package:
+        description: One dependency to update, for example iroh. Leave empty to update everything the version ranges allow.
+        required: false
+        default: ""
+        type: string
+
+# The default token is used for nothing below: checkout, push and the PR all
+# authenticate with RELEASE_PAT.
+permissions: {}
+
+# One run at a time; a second waits for the first instead of running beside it.
+concurrency:
+  group: update-deps
+  cancel-in-progress: false
+
+jobs:
+  update:
+    name: Update dependencies
+    runs-on: ubuntu-latest
+    # Forks have no RELEASE_PAT to push or open the PR with.
+    if: github.repository_owner == 'mmogr'
+    steps:
+      # The credential stays in git config for the push. Unlike ci.yml, no
+      # dependency's code runs here: `cargo update` resolves and builds nothing.
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          token: ${{ secrets.RELEASE_PAT }}
+
+      # The pinned toolchain from rust-toolchain.toml, exactly as ci.yml
+      # installs it, so the lockfile is written by the cargo CI checks with.
+      - name: Install Rust toolchain
+        run: rustup show
+
+      # Inputs reach the script through env, never pasted into it, so a
+      # package name is only ever an argument.
+      - name: Update Cargo.lock and open a pull request
+        shell: bash
+        env:
+          PACKAGE: ${{ inputs.package }}
+          BASE: ${{ github.event.repository.default_branch }}
+          GH_TOKEN: ${{ secrets.RELEASE_PAT }}
+        run: |
+          export LC_ALL=C
+
+          if [ -n "$PACKAGE" ]; then
+            cargo update --package="$PACKAGE"
+            subject="chore(deps): $PACKAGE moves to the newest version its range allows"
+            nothing="Nothing to update: $PACKAGE is already at the newest version its range allows."
+          else
+            cargo update
+            subject="chore(deps): dependencies move to the newest versions their ranges allow"
+            nothing="Nothing to update: every dependency is already at the newest version its range allows."
+          fi
+
+          if git diff --quiet -- Cargo.lock; then
+            echo "$nothing" | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          # One line per package whose versions changed, read from the two
+          # lockfiles rather than from cargo's messages, which are written for
+          # people and report a package held at two versions as removals and
+          # additions.
+          versions() { awk -F'"' '/^name = /{n=$2} /^version = /{print n, $2}' | sort -u; }
+          git show HEAD:Cargo.lock | versions > "$RUNNER_TEMP/old"
+          versions < Cargo.lock > "$RUNNER_TEMP/new"
+          changes=$(
+            {
+              comm -23 "$RUNNER_TEMP/old" "$RUNNER_TEMP/new" | sed 's/^/old /'
+              comm -13 "$RUNNER_TEMP/old" "$RUNNER_TEMP/new" | sed 's/^/new /'
+            } | awk '
+              $1 == "old" { old[$2] = old[$2] (old[$2] == "" ? "" : ", ") $3 }
+              $1 == "new" { new[$2] = new[$2] (new[$2] == "" ? "" : ", ") $3 }
+              { seen[$2] = 1 }
+              END {
+                for (n in seen) {
+                  if (!(n in new)) print "- " n " " old[n] " (removed)"
+                  else if (!(n in old)) print "- " n " " new[n] " (added)"
+                  else print "- " n " " old[n] " -> " new[n]
+                }
+              }' | sort
+          )
+          echo "$changes"
+
+          printf '%s\n\n%s\n' "$subject" "$changes" > "$RUNNER_TEMP/message"
+          run_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          printf '%s\n\nOpened by the Update dependencies workflow: %s\n' "$changes" "$run_url" > "$RUNNER_TEMP/body"
+
+          branch="chore(deps)/update-run-$GITHUB_RUN_NUMBER-$GITHUB_RUN_ATTEMPT"
+          git switch --create "$branch"
+          git add Cargo.lock
+          git -c user.name=mmogr -c user.email=172192206+mmogr@users.noreply.github.com \
+            commit --quiet --file="$RUNNER_TEMP/message"
+          # A re-run keeps the run number but not the attempt, so each
+          # attempt pushes a branch of its own and never overwrites one an
+          # earlier attempt left, or commits someone added to its PR since.
+          git push origin "$branch"
+
+          # `dependencies` is the label Dependabot puts on its PRs. gh refuses
+          # a label the repository does not have, so a missing one is created
+          # first, with Dependabot's colour and description.
+          if ! gh api --silent "repos/$GITHUB_REPOSITORY/labels/dependencies"; then
+            gh label create dependencies --repo "$GITHUB_REPOSITORY" \
+              --color 0366d6 --description "Pull requests that update a dependency file"
+          fi
+
+          url=$(gh pr create --repo "$GITHUB_REPOSITORY" --base "$BASE" --head "$branch" \
+            --title "$subject" --body-file "$RUNNER_TEMP/body" --label dependencies)
+          echo "Opened $url" | tee -a "$GITHUB_STEP_SUMMARY"
