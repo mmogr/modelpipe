@@ -85,7 +85,7 @@ permissions:
 jobs:
   verify:
     name: Verify
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -276,7 +276,7 @@ jobs:
     # only outcome would be an echo. Approvals people grant to no-ops are
     # approvals they stop reading.
     if: github.event_name == 'push'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     # Requires a repository environment named `crates-io` holding
     # CARGO_REGISTRY_TOKEN, with a required reviewer on it: this is the step
     # that cannot be taken back, and a human ack costs one click. That

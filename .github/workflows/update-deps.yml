@@ -37,7 +37,7 @@ concurrency:
 jobs:
   update:
     name: Update dependencies
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     # Forks have no RELEASE_PAT to push or open the PR with.
     if: github.repository_owner == 'mmogr'
     steps:
