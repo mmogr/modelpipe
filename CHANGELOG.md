@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.6](https://github.com/mmogr/modelpipe/compare/v0.8.5...v0.8.6) - 2026-10-08
+
+### Other
+
+- update Cargo.lock dependencies
+
 ## [0.8.5](https://github.com/mmogr/modelpipe/compare/v0.8.4...v0.8.5) - 2026-10-08
 
 ### Other
