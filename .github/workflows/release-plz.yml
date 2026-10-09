@@ -35,7 +35,7 @@ jobs:
   # push (release_always = false in release-plz.toml).
   release-plz-release:
     name: Release-plz release
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     # Forks have no business releasing (and no RELEASE_PAT to do it with).
     if: github.repository_owner == 'mmogr'
     permissions:
@@ -66,7 +66,7 @@ jobs:
   # Opens or updates the release PR (version bump + changelog).
   release-plz-pr:
     name: Release-plz PR
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     if: github.repository_owner == 'mmogr'
     permissions:
       # Push to the PR branch.
