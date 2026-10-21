@@ -138,6 +138,14 @@ impl Named {
         entries.len() != before
     }
 
+    /// Whether `token` is the one held under `name`, compared in constant
+    /// time like every other token here.
+    pub(crate) fn holds(&self, name: &str, token: &str) -> bool {
+        self.read()
+            .iter()
+            .any(|held| &*held.name == name && same(&held.token, token.as_bytes()))
+    }
+
     /// Every name a token is held under, in the order they were added.
     pub(crate) fn names(&self) -> Vec<String> {
         self.read()

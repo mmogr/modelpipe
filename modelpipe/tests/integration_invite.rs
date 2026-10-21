@@ -187,6 +187,48 @@ async fn an_invite_ends_once_and_says_how() {
     );
 }
 
+/// An `invite` and a `remove_token` for one name, raced from two threads:
+/// after every round, an invite still live has its key held.
+///
+/// Probabilistic. Most rounds never land in the gap between the two calls'
+/// steps, and a round that does is the only way this fails; it is the one
+/// test of `remove_token`'s second withdrawal.
+#[tokio::test]
+async fn an_invite_raced_by_a_removal_never_outlives_its_key() {
+    let backend = MockBackend::json(200, OK_BODY).await;
+    let serving = listening(&backend, TokenPolicy::Named).await;
+    for round in 0..20_000 {
+        let done = std::sync::atomic::AtomicBool::new(false);
+        let invited = std::thread::scope(|scope| {
+            scope.spawn(|| {
+                // Every removal runs to its end before the flag is read, so a
+                // removal that started is never cut short by this loop.
+                loop {
+                    serving.remove_token("racer");
+                    if done.load(std::sync::atomic::Ordering::Acquire) {
+                        break;
+                    }
+                }
+            });
+            let mut opts = InviteOptions::default();
+            opts.device = Some("racer".to_owned());
+            let invited = serving.invite(opts);
+            done.store(true, std::sync::atomic::Ordering::Release);
+            invited
+        });
+        let invite = invited.expect("nothing else holds the name");
+        if invite.handle().ended().is_none() {
+            assert!(
+                serving.token_names().iter().any(|name| name == "racer"),
+                "round {round}: a live invite's key is not held"
+            );
+        }
+        invite.handle().withdraw();
+        serving.remove_token("racer");
+    }
+    serving.shutdown().await;
+}
+
 #[tokio::test]
 async fn an_invite_the_listener_cannot_honour_is_refused_and_holds_nothing() {
     let backend = MockBackend::json(200, OK_BODY).await;

@@ -9,6 +9,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::invite::{Invite, InviteHandle, InviteOptions, InviteRefusal, MAX_TTL, MAX_WRONG_CODES};
+use crate::invites::Registered;
 use crate::listener::{self, ServeState};
 use crate::minting::mint;
 use crate::named::AddRefused;
@@ -407,18 +408,20 @@ impl ServeHandle {
     /// the call runs to completion.
     ///
     /// A live [`invite`](Self::invite) for `name` is withdrawn first, so its
-    /// code cannot hand out a key that no longer admits. That covers an
-    /// invite that has returned, and not one still running: an `invite` for
-    /// the same `name` on another task can hold its key before this call
-    /// removes it and register its code after this call has withdrawn, and
-    /// that code then hands out a key the listener refuses. An embedder that
-    /// invites and removes from more than one task orders the two calls for
-    /// any one name.
+    /// code cannot hand out a key that no longer admits. Once this returns,
+    /// no invite for `name` is live, including one an `invite` on another
+    /// task was registering while this call ran.
     pub fn remove_token(&self, name: &str) -> bool {
-        // Before the token goes, and not inside its lock: the invites are
-        // never locked while the named tokens are.
-        self.state.credential.invites().withdraw_device(name);
-        self.state.credential.remove_named(name)
+        // Withdrawn on both sides of the removal, never inside its lock: the
+        // invites are never locked while the named tokens are. The second
+        // pass ends an invite registered between the first and the removal;
+        // one registered after the removal finds its key gone and withdraws
+        // itself in `register_invite`.
+        let invites = self.state.credential.invites();
+        invites.withdraw_device(name);
+        let removed = self.state.credential.remove_named(name);
+        invites.withdraw_device(name);
+        removed
     }
 
     /// Every name a token is currently held under, in the order they were
@@ -466,14 +469,9 @@ impl ServeHandle {
         }
         let api_key = mint();
         let device = self.hold_invited(opts.device, &api_key)?;
-        let invites = Arc::clone(self.state.credential.invites());
         let expires = Instant::now() + opts.ttl;
-        let registered = invites.register(
-            device.clone(),
-            api_key.clone(),
-            expires,
-            opts.wrong_codes.get(),
-        );
+        let registered = self.register_invite(&device, &api_key, expires, opts.wrong_codes.get());
+        let invites = Arc::clone(self.state.credential.invites());
         let id = registered.id;
         let state = Arc::clone(&self.state);
         self.state.runtime.spawn(async move {
@@ -497,6 +495,29 @@ impl ServeHandle {
                 invites,
             },
         })
+    }
+
+    /// Register a disarmed invite for `device`'s `key`, and withdraw it at
+    /// once unless `key` is still the one held under `device`. A
+    /// [`remove_token`](Self::remove_token) that removed the key before this
+    /// registered could not see the invite to withdraw it; an invite whose
+    /// key is gone ends [`Withdrawn`](crate::InviteOutcome::Withdrawn), and
+    /// `invite` still returns it.
+    fn register_invite(
+        &self,
+        device: &str,
+        key: &str,
+        expires: Instant,
+        wrong_codes: u8,
+    ) -> Registered {
+        let invites = self.state.credential.invites();
+        let registered = invites.register(device.to_owned(), key.to_owned(), expires, wrong_codes);
+        // After the registration, so a removal either sees the invite or has
+        // already happened when this looks.
+        if !self.state.credential.holds_named(device, key) {
+            invites.withdraw(registered.id);
+        }
+        registered
     }
 
     /// Hold `key` under `name`, or under a minted name when there is none.
@@ -770,3 +791,7 @@ fn named(name: &str, reason: NamedTokenRefusal) -> ServeError {
         reason,
     }
 }
+
+#[cfg(test)]
+#[path = "serve_handle_tests.rs"]
+mod serve_handle_tests;
