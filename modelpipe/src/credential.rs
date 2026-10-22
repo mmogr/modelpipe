@@ -192,6 +192,11 @@ impl Credential {
         self.named.remove(name)
     }
 
+    /// Whether `token` is the one held under `name`.
+    pub(crate) fn holds_named(&self, name: &str, token: &str) -> bool {
+        self.named.holds(name, token)
+    }
+
     /// Every name a token is held under.
     pub(crate) fn named(&self) -> Vec<String> {
         self.named.names()
