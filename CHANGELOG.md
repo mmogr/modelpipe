@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.8](https://github.com/mmogr/modelpipe/compare/v0.8.6...v0.8.8) - 2026-10-22
+
+### Fixed
+
+- *(serve)* an invite never outlives its key ([#157](https://github.com/mmogr/modelpipe/pull/157))
+
+### Other
+
+- update Cargo.lock dependencies
+
 ## [0.8.7](https://github.com/mmogr/modelpipe/compare/v0.8.6...v0.8.7) - 2026-10-22
 
 ### Fixed
