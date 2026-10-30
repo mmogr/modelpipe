@@ -390,3 +390,13 @@ out by hand is [ADR 0001](docs/adr/0001-an-explicit-ticket-byte-layout.md).
 - Browser support. Browsers can't hole-punch.
 - Model management of any kind. modelpipe moves requests; it has no opinion
   about what serves them.
+
+## The rest of the set
+
+modelpipe is the reach. [gglib](https://github.com/mmogr/gglib) is the
+server it was built for: a library of GGUF models served through llama.cpp
+as one OpenAI-compatible endpoint, with `gglib remote enable` doing what
+`modelpipe serve --named` does here and `gglib remote join` what
+`modelpipe connect` does. [ggchat](https://github.com/mmogr/ggchat) is the
+phone: a native iPhone and Mac client that talks to that endpoint from
+anywhere; an iPhone or iPad scans the pairing string's QR code.
