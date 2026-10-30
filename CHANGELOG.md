@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.8](https://github.com/mmogr/modelpipe/compare/v0.8.7...v0.8.8) - 2026-10-30
+
+### Other
+
+- *(readme)* the rest of the set ([#161](https://github.com/mmogr/modelpipe/pull/161))
+
 ## [0.8.7](https://github.com/mmogr/modelpipe/compare/v0.8.6...v0.8.7) - 2026-10-22
 
 ### Fixed
