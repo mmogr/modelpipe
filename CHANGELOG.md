@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.8](https://github.com/mmogr/modelpipe/compare/v0.8.7...v0.8.8) - 2026-11-09
+
+### Fixed
+
+- *(headers)* a transfer coding or expectation is trimmed of spaces and tabs only ([#169](https://github.com/mmogr/modelpipe/pull/169))
+- *(body)* a chunk size is sixteen hex digits at most ([#176](https://github.com/mmogr/modelpipe/pull/176))
+- *(serve)* a serve handle dropped off its runtime still closes its endpoint ([#174](https://github.com/mmogr/modelpipe/pull/174))
+- *(serve)* a redeemed key never prints ([#167](https://github.com/mmogr/modelpipe/pull/167))
+- *(serve)* a peer set and its status are published together ([#166](https://github.com/mmogr/modelpipe/pull/166))
+- *(connect)* a connection that dies young is backed off, not redialled at once ([#165](https://github.com/mmogr/modelpipe/pull/165))
+
+### Other
+
+- *(readme)* the rest of the set ([#161](https://github.com/mmogr/modelpipe/pull/161))
+
 ## [0.8.7](https://github.com/mmogr/modelpipe/compare/v0.8.6...v0.8.7) - 2026-10-22
 
 ### Fixed
