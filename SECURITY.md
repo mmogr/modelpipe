@@ -223,3 +223,9 @@ modelpipe has not been audited. It is early software whose security claims
 are tested but not externally reviewed, and the honest summary is that it
 raises the floor for a backend that had no authentication at all rather than
 being a hardened perimeter.
+
+The edge's parsing is fuzzed as well as tested. Property tests in
+`modelpipe/src/props_tests.rs` run with every `cargo test`. They hold that
+whatever chunked body the edge forwards, httparse reads as the same body.
+The coverage-guided targets in `fuzz/` run weekly in CI, and locally with
+`cargo fuzz run <chunked_body|head|exchange>` from that directory.

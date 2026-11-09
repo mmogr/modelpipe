@@ -1,0 +1,68 @@
+# Coverage-guided fuzzing of the tunnel edge: the three targets in fuzz/, on
+# the nightly fuzz/rust-toolchain.toml pins. Five minutes a target every week
+# and on demand. Thirty seconds on a pull request that touches the library
+# or the targets, which is long enough to catch an entry point that no longer
+# builds or a seed that now crashes.
+name: Fuzz
+
+on:
+  schedule:
+    - cron: "17 3 * * 1"
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+    paths:
+      - "fuzz/**"
+      - "modelpipe/src/**"
+      - ".github/workflows/fuzz.yml"
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  fuzz:
+    name: Fuzz (${{ matrix.target }})
+    runs-on: ubuntu-26.04
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [chunked_body, head, exchange]
+    defaults:
+      run:
+        working-directory: fuzz
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install the pinned nightly
+        run: rustup show
+
+      - name: Setup Rust cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: fuzz
+          shared-key: "fuzz"
+          cache-on-failure: true
+
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz --version 0.13.2 --locked
+
+      - name: Fuzz
+        env:
+          TARGET: ${{ matrix.target }}
+          SECONDS_PER_TARGET: ${{ github.event_name == 'pull_request' && '30' || '300' }}
+        run: |
+          mkdir -p "corpus/$TARGET"
+          cargo fuzz run "$TARGET" "corpus/$TARGET" "seeds/$TARGET" -- \
+            -max_total_time="$SECONDS_PER_TARGET"
+
+      - name: Keep the input that failed
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: fuzz-${{ matrix.target }}
+          path: fuzz/artifacts/${{ matrix.target }}
+          if-no-files-found: ignore
