@@ -143,6 +143,34 @@ async fn a_live_connection_keeps_being_read_by_the_reconnect_loop() {
     .expect("a live connection must be re-read, not sampled once");
 }
 
+// ── The dial's pacing ────────────────────────────────────────────────────
+
+#[test]
+fn a_backoff_starts_at_the_first_retry_and_doubles() {
+    let mut backoff = Backoff::new();
+    assert_eq!(backoff.next(), FIRST_RETRY);
+    assert_eq!(backoff.next(), FIRST_RETRY * 2);
+    assert_eq!(backoff.next(), FIRST_RETRY * 4);
+}
+
+#[test]
+fn a_backoff_stops_doubling_at_the_ceiling() {
+    let mut backoff = Backoff::new();
+    for _ in 0..32 {
+        assert!(backoff.next() <= RETRY_CEILING);
+    }
+    assert_eq!(backoff.next(), RETRY_CEILING);
+}
+
+#[test]
+fn a_reset_backoff_starts_again_at_the_first_retry() {
+    let mut backoff = Backoff::new();
+    backoff.next();
+    backoff.next();
+    backoff.reset();
+    assert_eq!(backoff.next(), FIRST_RETRY);
+}
+
 // ── The nudge's pacing ───────────────────────────────────────────────────
 
 /// **The interval is a caller's, so it may be anything.**

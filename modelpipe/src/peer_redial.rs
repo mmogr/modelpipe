@@ -53,7 +53,7 @@ const RETRY_CEILING: Duration = Duration::from_secs(30);
 /// ceiling is what keeps a peer off for the night from being dialled
 /// thousands of times either way.
 pub(crate) async fn keep_connected(peer: &Peer, lifecycle: &Lifecycle, nudge: Option<Duration>) {
-    let mut backoff = FIRST_RETRY;
+    let mut backoff = Backoff::new();
     let mut nudge = Nudge::every(nudge, Instant::now());
     // One line per episode of having nobody, not one per attempt. The first
     // dial's failure is why a freshly returned handle reads `Idle`, and
@@ -83,7 +83,7 @@ pub(crate) async fn keep_connected(peer: &Peer, lifecycle: &Lifecycle, nudge: Op
             // `info` while the individual attempts below are not.
             tracing::info!("the peer went away, and this side is looking for it");
             announced = true;
-            backoff = FIRST_RETRY;
+            backoff.reset();
         }
 
         // And go looking for it.
@@ -106,16 +106,16 @@ pub(crate) async fn keep_connected(peer: &Peer, lifecycle: &Lifecycle, nudge: Op
         // `debug`, not `info`: a serve side that is off for the night is
         // dialled until morning, and the fact worth an operator's attention
         // is the line above rather than every attempt under it.
+        let wait = backoff.next();
         tracing::debug!(
-            backoff_ms = u64::try_from(backoff.as_millis()).unwrap_or(u64::MAX),
+            backoff_ms = u64::try_from(wait.as_millis()).unwrap_or(u64::MAX),
             "a dial found nobody"
         );
         tokio::select! {
             biased;
             () = lifecycle.wait_until_closed() => return,
-            () = tokio::time::sleep(backoff) => {}
+            () = tokio::time::sleep(wait) => {}
         }
-        backoff = (backoff * 2).min(RETRY_CEILING);
         // After the sleep rather than before the dial, so the very first
         // attempt — the one a freshly bound handle makes — is never
         // delayed by it. Only ever reached while there is no connection.
@@ -130,6 +130,33 @@ pub(crate) async fn keep_connected(peer: &Peer, lifecycle: &Lifecycle, nudge: Op
                 () = crate::network::notify(&peer.endpoint) => {}
             }
         }
+    }
+}
+
+/// How long to wait before the next dial: [`FIRST_RETRY`], doubling to
+/// [`RETRY_CEILING`].
+///
+/// A value of its own, like [`Nudge`], so the pacing is checkable without an
+/// endpoint.
+struct Backoff {
+    next: Duration,
+}
+
+impl Backoff {
+    const fn new() -> Self {
+        Self { next: FIRST_RETRY }
+    }
+
+    /// The wait before this dial, doubling the one after it.
+    fn next(&mut self) -> Duration {
+        let wait = self.next;
+        self.next = (wait * 2).min(RETRY_CEILING);
+        wait
+    }
+
+    /// Start again from [`FIRST_RETRY`].
+    const fn reset(&mut self) {
+        self.next = FIRST_RETRY;
     }
 }
 
