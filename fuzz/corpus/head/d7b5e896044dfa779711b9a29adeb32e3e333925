@@ -1,0 +1,4 @@
+POST /v0/chat/coletions HTTP/1.1
+Host: pip
+Expect: 457-continue
+

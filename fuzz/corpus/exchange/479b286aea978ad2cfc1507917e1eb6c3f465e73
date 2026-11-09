@@ -1,0 +1,15 @@
+OPOST /v1/chat/completipletions HTTP/1.1
+Host: pipe
+Authorization: Bearer sk-fuzz-the-credential
+Transfer-Encoding: chunked
+
+0
+{} HTTPmpletions Host: pipe
+Authoriza@ion: Bearer sk-fuzz-the-credential
+Transfer-EncTT°Ð1.1
+ons HTTP/1.1
+Hos Host: pipe
+Autzation: Beare1.ntia: cHunked
+
+0
+{}

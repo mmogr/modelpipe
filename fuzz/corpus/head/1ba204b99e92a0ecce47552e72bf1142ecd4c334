@@ -1,0 +1,11 @@
+POST /v1/chat/completioions HTTP/1.1
+Hos|: pipe
+ConLnegth:ns HTTP/1.1
+Hos|: pipe
+Content-Lnegth: ×
+Expect: 100sG HTTP/1ent-Lnegth:ns H
+Hos|: pipe
+Content-Lnegth:ns HTTP/1.1
+Hos|: piÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿpe
+Conten:t-Lnegth: 2
+Expec

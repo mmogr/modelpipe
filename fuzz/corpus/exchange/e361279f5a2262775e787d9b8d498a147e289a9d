@@ -1,0 +1,11 @@
+GET /nc/completions HTTP/1.1
+Host: pipe
+Authorization: Bearer sk-fuzz-the-credential
+Transfer-Encoding: chation: Bearer sk-fuzz-the-credential
+Transfer-Encoding: ch,nked
+
+5
+{} )HTTP,nked
+
+5
+{} )HTTP

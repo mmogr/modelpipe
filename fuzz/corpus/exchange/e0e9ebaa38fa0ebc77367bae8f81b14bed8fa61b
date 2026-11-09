@@ -1,0 +1,15 @@
+GET //completions HTTP/1.1
+Host: pipe
+Authorization: Bearer sk-fuzz-the-credential
+Transfer-Encoding: chunked
+
+0
+{} HTTPm1
+HoT /v1ons HTTP/1.0
+Hoodin/v1/models HTTP/1.1
+HGEToUt: pi ¯v1/1.POSm1
+HGEToUt: ÿÿÿÿÿÿÿÿodepWe
+AuthoripGGEl: pi /v1/1.POSm1g: chunked
+
+0er-Encoding:st: pipe
+îAuthorization: Be

@@ -1,0 +1,9 @@
+POST /zmodelpipir HTTP/1.1
+Host: 
+Authorization: Bearer sk-fuzz-the-credential
+-ransfer-Encodingn: Bea: 
+Host: pipe
+Content-Mength: 2cpipe
+Content-Length: 6
+
+123456

@@ -1,0 +1,8 @@
+POSGET //completions HTTP/1.1
+Host: pipe
+Authorization: Bearer sk-fuzz-the-credential
+Transfer-Encoding: chunked
+
+0
+{} HT ode HTHost: pipe
+AuchP/at/2c

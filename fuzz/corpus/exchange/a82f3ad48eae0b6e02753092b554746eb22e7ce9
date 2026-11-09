@@ -1,0 +1,4 @@
+POST /v1/c HTTP/1.1
+Hostrization: Bearer sk--the-credential
+Transfer0Encoding:in
+

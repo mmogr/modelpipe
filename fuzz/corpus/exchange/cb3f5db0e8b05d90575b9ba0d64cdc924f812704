@@ -1,0 +1,13 @@
+OPOST /v1/chat/completions HTTP/1.1
+Host: pipe
+Authorization: Beare5.1
+Host: he-credeoti
+Host: /v1/chat/UUUUUUUUUUUUUcompletionpipe
+Authorization: Beare5.1
+Host: he-credenti
+Host: pipe
+Aa: cHunked0ipe
+Aa: cHunked0
+
+ m HT
+{}

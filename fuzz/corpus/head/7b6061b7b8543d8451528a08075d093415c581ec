@@ -1,0 +1,22 @@
+POST /vletns HTTP/1.1
+Host: vletns HTP/1.1
+Host: pipe
+CtnoExpeth: 2
+Expect: 457-c'ontppie
+Ctnoent-Length: 1
+Expeth: 2
+ent-Length: 2
+Expeth: 2
+Expect: 457-cont vletns HTTP/1.1
+Host: pipe
+CtnoExpeth: 2
+Expect: 457-c'ontppie
+Ctnoent-Length: 1
+Expeth: 2
+ent-Length: 2
+Expeth: 2
+Expect: 457-contppipe
+Ctnoent-Length: 2
+Expeth: 2
+Expect: 457-continue
+

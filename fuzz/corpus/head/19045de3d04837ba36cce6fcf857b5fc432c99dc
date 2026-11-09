@@ -1,0 +1,4 @@
+POST /v1/chat/cions HTTP/1.1
+Host: pipeOST2
+Expect: ,10cth:Xpect: ,100-con10-continue
+

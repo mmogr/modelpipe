@@ -1,0 +1,9 @@
+POST /v1/chompletions HTTP/1.1
+Host: pipe
+Authorization: Bearer sk-fuzz-the-credential
+Transfer4Encoding: 
+
+2
+ÿÿÿÿ{}
+0
+

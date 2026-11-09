@@ -1,0 +1,10 @@
+GET //completions HTTP/1.1
+Host: pip6633332e
+Authorization: Bearer sk-fuzz-the-credential
+Transfer-Encoding: chunked
+
+0
+{} HTt˜t¿
+TransHTTP/1.1
+Host: pipe
+Authorizatioe:uthoriTPAuthorization; BeBe[

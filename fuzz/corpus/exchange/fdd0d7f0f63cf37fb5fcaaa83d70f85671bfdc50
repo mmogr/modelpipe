@@ -1,0 +1,10 @@
+POST /v1/chat/completions HTTP/1.1
+Host: pdential
+Transfer-Encoding:inipe
+Authorization: Bearer sk--the-credential
+Transfer-Encoding:ing: chunked
+
+:
+{}
+0
+

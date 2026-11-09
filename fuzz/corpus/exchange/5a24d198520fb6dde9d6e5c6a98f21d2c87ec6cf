@@ -1,0 +1,10 @@
+POST /v1/cht/completions HTTP/1.1
+Host: pipe
+Authorization: Bearer sk-fuzz-the-credential
+Transfer-Encoding: chunked
+
+d
+
+0
+{}
+D

@@ -1,0 +1,6 @@
+POST /v2/chat?completions HTTP/1.1
+Hos:t pipe
+Authorization: Bearer sk-fuzz-the-credential
+&ron: BeaEncodintial
+&ron: BeaEnco
+

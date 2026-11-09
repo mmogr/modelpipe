@@ -1,0 +1,25 @@
+POST /v/chat/coletmp HTTP/1.1
+Host: ]the-credential
+Tranlfer-Encoding:/v/chat/coletmp HTTP/1.1
+Host: ]thest: ]the-credential
+Tranlfer-Encoding:/v/chat/coletmp HTTP/1.1
+Host: ]the-credential
+Tranlfer-Encoding: ch
+
+5
+{}
+0
+
+ c-credential
+Tranlfer-Encoding: ch
+
+5
+{}
+0
+
+ ch
+
+5
+{}
+0
+

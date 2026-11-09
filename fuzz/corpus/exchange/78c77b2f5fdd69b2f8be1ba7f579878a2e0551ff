@@ -1,0 +1,6 @@
+POST /v2/chat/cos HTTP/1.1
+Host: pipe
+Authorization: Beare-cr-credential
+Transfer-Encoding: c+ed
+
+5

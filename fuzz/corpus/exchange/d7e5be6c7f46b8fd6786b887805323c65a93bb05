@@ -1,0 +1,4 @@
+GET /v1/ls HTTP/1.1
+Host: pipe
+Authorixation: BerArfuzz-the-cri?al
+

@@ -1,0 +1,10 @@
+POST /v1/chat/completions HTTP/1.1
+Hion: Bearer skf-uzz-the-credential
+Transfer-Encoding:0chu Bearer skf-uzz-the-credential
+Transfer-Encoding:0chunkesfer-AnctSelmpGEoding: chunked
+nkesfer-AnctSelmpGEoding: chunked
+
+2
+{}
+0
+

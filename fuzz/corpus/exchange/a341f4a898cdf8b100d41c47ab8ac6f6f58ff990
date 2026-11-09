@@ -1,0 +1,13 @@
+POSGET //completions HTTP/1.1
+Host: pipe
+Authorization: Bearer sk-fuzz-the-credential
+Transfer-Encoding: chunked
+
+0
+{} HTTPmpleT /v1/chat/cAns HTTP/1.1
+Host:HTTP/1.1
+HoT /v1ons HTTAuthoTn:/1.1
+Host: POST /v1/chatns HTTP/1.1
+Host: pipe
+Authon: alpide
+Transfzation: l

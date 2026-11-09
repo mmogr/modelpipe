@@ -1,0 +1,9 @@
+POST /v1/chat/ocmpletions HTTP/1.1
+t: pipe
+Ahorization: Bearer
+Transfgr-Encoding: chunked
+
+0
+{}
+0
+

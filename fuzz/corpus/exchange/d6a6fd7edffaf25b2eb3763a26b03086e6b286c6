@@ -1,0 +1,9 @@
+PT S/Ov1/chat/completions HTTP/1.1
+Host: pipe
+Authorization: Bearer sk-fuzz-the-credential
+Tragr-Encoding: chunked
+
+0
+{}
+0
+

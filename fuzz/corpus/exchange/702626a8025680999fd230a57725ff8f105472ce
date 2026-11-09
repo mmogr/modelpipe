@@ -1,0 +1,8 @@
+POST /v1/chat/completions HTTP/1.1
+Auation:on: Bearer sk-fuzz-the-credential
+Transger-Encoding:unked
+
+2
+{}
+0
+

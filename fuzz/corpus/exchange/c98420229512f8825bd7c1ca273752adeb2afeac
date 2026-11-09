@@ -1,0 +1,5 @@
+POST /v1/chat/Jompletions HTTP/1.1
+Hos: pipe
+Authorization: Bearer sk
+
+2e{}

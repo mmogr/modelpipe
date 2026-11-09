@@ -1,0 +1,4 @@
+POST /v1/chat/co0mpletions HTTP/1.1
+Host: pipe
+Content-Length: 2
+Expect: 100-continue

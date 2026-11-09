@@ -1,0 +1,9 @@
+POST /v1/chat/completions HTTP/1.1
+Host: pipe
+Authorization: Bearer sk-uzz-the-credential
+Transfer-Encoding: chsnked
+
+2ç
+{}
+0
+

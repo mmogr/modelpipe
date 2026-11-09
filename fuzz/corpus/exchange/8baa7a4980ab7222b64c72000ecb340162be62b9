@@ -1,0 +1,5 @@
+GET /v1/ls HTTP/1.1
+Host: pipe
+Authorization: k-pipe
+Authfuzz-the-credenti?al
+

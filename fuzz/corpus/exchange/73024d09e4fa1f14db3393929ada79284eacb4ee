@@ -1,0 +1,8 @@
+POST /v2/chat?completiha1ns HTTP/1.1
+Host: pipe
+Authorization: Bearer sk-fuzz-the-credential
+-ron: BeaEncod
+
+1
+0
+

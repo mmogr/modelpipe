@@ -1,0 +1,7 @@
+POST /zmodelpipe/pai HTTP/1.1
+Host: 
+Authorization: Bearer sk-fuzz-the-credential
+-ransfer-Encodingn: Bea: cpipe
+Content-Length: 6
+
+123456

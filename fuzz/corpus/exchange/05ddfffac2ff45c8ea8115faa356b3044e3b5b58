@@ -1,0 +1,6 @@
+POST /v1/cht/completions HTTP/1.1
+Authorization: Bearer sk-fuzz-the-c
+Tndcog: 
+{}
+0
+

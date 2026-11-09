@@ -1,0 +1,9 @@
+POST /v2/chat?completions HTTP/1.1
+Host: pipe
+Authorization: Bearer sk-fuzz-the-credential
+-ro.: BeaEncodinv1/chTP/1.1
+Howt: pcom
+
+1
+0
+

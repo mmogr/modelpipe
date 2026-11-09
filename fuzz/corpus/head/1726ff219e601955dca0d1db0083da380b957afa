@@ -1,0 +1,33 @@
+POCT /vletions HTTP/1.1
+Hoth: 2É
+Expet`: 2
+Expect: 457ÿÿÿÿth: 2
+Expet`: 2
+Expect:
+Hoth: 2É
+Expet`: 2
+Expect: 457ÿÿÿÿÿ
+-contm: 2ÿ
+-contm:Expect: 457ÿÿÿÿth: 2
+Expet`: 2
+Expect:
+Hoth: /1.1
+Hoth: 2É
+Expet`: 2
+Expect: 457ÿÿÿÿth: 2
+Expet`: 2
+Expect:
+Hoth: 2É
+Expet`: 2
+Expect: 457ÿÿÿÿÿ
+-contm: 2ÿ
+-contm:E2É
+Expet`: 2
+Expect: 457ÿÿÿÿÿ
+-contm: 2ÿ
+-contm: 2etions HTTP/1.1
+Host: pip
+Content-Length: 2
+Expect: 100-continue
+2É
+Expet`: 2conti

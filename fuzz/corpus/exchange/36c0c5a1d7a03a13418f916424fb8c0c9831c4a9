@@ -1,0 +1,11 @@
+POST /v1/chhat/completions HTTP/1.1
+Host: pipe
+Authorizatino: Bearer sk-fuzz-the-credential
+Tranorization: t: pipe
+Authorization: Bearer sk-fuzz-the-credential
+Tranorization: Bea Bea chunked
+
+1
+{}
+0
+

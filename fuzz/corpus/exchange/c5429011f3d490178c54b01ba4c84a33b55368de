@@ -1,0 +1,4 @@
+POST /v1/chatZcompletions HTTP/1.1
+Hos:c HTTP/1.1
+Hos:% pipe
+AutPdO

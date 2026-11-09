@@ -1,0 +1,12 @@
+POT /v/chat/coletmpions HTTP/1.1
+Host: pipe
+Authorization: Bearer sk-fuzz-the-credential
+Transfer-Encoding: chunked
+QQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQ: chun/modelpipe/pair HTTP/1.1
+Host: pipe
+Contznt-Length: 6ked
+
+2
+{}
+0
+

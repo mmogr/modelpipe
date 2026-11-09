@@ -1,0 +1,5 @@
+POST /-odelpipe/palpipe/pair HTTP/1.1
+Host:
+Cortent-Length:ir6
+
+123456

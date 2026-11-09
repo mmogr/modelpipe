@@ -1,0 +1,8 @@
+POST /v#/chat/completions HTTP/1.1
+Host: pipe
+Authorization: Bearer sk-fuzz-the-credential
+Transfer-Encoding: chunked
+
+st: pip00000077777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777770000000000000000000000: pipe
+Authorization: 0
+

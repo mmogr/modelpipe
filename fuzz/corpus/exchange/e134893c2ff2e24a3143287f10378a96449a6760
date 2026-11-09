@@ -1,0 +1,4 @@
+GET /v1/models HTTP/1.1
+Host: pipe
+Authorization: BearÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿAr sk-fuzz-the-credenti?al
+

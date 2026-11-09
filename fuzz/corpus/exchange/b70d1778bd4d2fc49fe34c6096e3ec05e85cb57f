@@ -1,0 +1,7 @@
+POST /v#/chat/completios HTTP/1.1
+Host: pipe
+Authorization: Bearer sk-fuzz-the-credential
+Transng: chunked
+
+st: pip2
+

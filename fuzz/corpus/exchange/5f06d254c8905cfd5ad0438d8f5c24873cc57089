@@ -1,0 +1,10 @@
+POST /v1/chat/completions HTTP/1.1
+Host: pipe
+Authorizatino:er-Encoding: chunkeT /v1/chat/completions HTTP/1.1
+Host: pipe
+Authorizatino:er-Encoding: chd
+
+5
+{}
+0
+

@@ -1,0 +1,10 @@
+POST /v1/chat/completions HTTP/1.1
+Host: pipe
+Authorizationtion: Beark-fuzz-the-credential
+-ransfer-Encoding: chization: Bearer sk-fuzz-the-credential
+-ransfer-Encoding: chunked
+
+1
+{}
+0
+

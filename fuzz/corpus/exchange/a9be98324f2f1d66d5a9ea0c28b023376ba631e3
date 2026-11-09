@@ -1,0 +1,13 @@
+POST /v/chat/coletmpions HTTP/1.1
+Host: pipe
+Aethorization: BST /v/chat/coletmpions HTTP/1.1
+Host: pipe
+Authorization: Bearer sk-fuzz-the-credential
+Tranersf-Encoding: chunked
+
+n: Bearer ehunked
+
+2
+{}
+0
+

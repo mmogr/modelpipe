@@ -1,0 +1,11 @@
+/Users/mattogrady/.local/src/modelpipe/fuzz/target/aarch64-apple-darwin/release/deps/iroh_dns-3a5a4ef32d7dd93c.d: /Users/mattogrady/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/iroh-dns-1.4.1/src/lib.rs /Users/mattogrady/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/iroh-dns-1.4.1/src/attrs.rs /Users/mattogrady/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/iroh-dns-1.4.1/src/dns.rs /Users/mattogrady/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/iroh-dns-1.4.1/src/endpoint_info.rs /Users/mattogrady/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/iroh-dns-1.4.1/src/pkarr.rs
+
+/Users/mattogrady/.local/src/modelpipe/fuzz/target/aarch64-apple-darwin/release/deps/libiroh_dns-3a5a4ef32d7dd93c.rlib: /Users/mattogrady/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/iroh-dns-1.4.1/src/lib.rs /Users/mattogrady/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/iroh-dns-1.4.1/src/attrs.rs /Users/mattogrady/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/iroh-dns-1.4.1/src/dns.rs /Users/mattogrady/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/iroh-dns-1.4.1/src/endpoint_info.rs /Users/mattogrady/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/iroh-dns-1.4.1/src/pkarr.rs
+
+/Users/mattogrady/.local/src/modelpipe/fuzz/target/aarch64-apple-darwin/release/deps/libiroh_dns-3a5a4ef32d7dd93c.rmeta: /Users/mattogrady/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/iroh-dns-1.4.1/src/lib.rs /Users/mattogrady/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/iroh-dns-1.4.1/src/attrs.rs /Users/mattogrady/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/iroh-dns-1.4.1/src/dns.rs /Users/mattogrady/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/iroh-dns-1.4.1/src/endpoint_info.rs /Users/mattogrady/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/iroh-dns-1.4.1/src/pkarr.rs
+
+/Users/mattogrady/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/iroh-dns-1.4.1/src/lib.rs:
+/Users/mattogrady/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/iroh-dns-1.4.1/src/attrs.rs:
+/Users/mattogrady/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/iroh-dns-1.4.1/src/dns.rs:
+/Users/mattogrady/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/iroh-dns-1.4.1/src/endpoint_info.rs:
+/Users/mattogrady/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/iroh-dns-1.4.1/src/pkarr.rs:
