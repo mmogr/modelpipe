@@ -14,7 +14,6 @@
 
 use std::time::Duration;
 
-
 use super::*;
 use crate::lifecycle::PeerPath;
 
