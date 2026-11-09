@@ -1026,10 +1026,10 @@ async fn a_dropped_connect_handle_is_announced_rather_than_left_to_the_idle_time
 
 /// A serve handle dropped on a thread with no runtime still tells the peer.
 ///
-/// `ServeHandle`'s `Drop` finds no runtime there to spawn the endpoint's
-/// close onto, and an embedder's FFI thread is exactly that kind of thread.
-/// The listener's own tasks let go of the endpoint once the pipe is closed,
-/// and its connections are closed with it, which this pins.
+/// An embedder's FFI thread is exactly that kind of thread. `Drop` once
+/// spawned the endpoint's close only onto a *current* runtime, so a drop
+/// there closed nothing, and on Linux the connect side waited out the idle
+/// timeout.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_serve_handle_dropped_off_the_runtime_is_announced() {
     let backend = MockBackend::json(200, OK_BODY).await;

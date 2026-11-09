@@ -77,3 +77,27 @@ async fn an_invite_whose_key_is_held_stays_live() {
     );
     serving.shutdown().await;
 }
+
+/// A handle that outlives the runtime `serve` ran on still drops quietly:
+/// the close it hands that runtime is discarded rather than panicking.
+#[test]
+fn a_handle_that_outlives_its_runtime_drops_without_a_panic() {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .expect("a runtime");
+    let serving = runtime.block_on(async {
+        let backend = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("a loopback port");
+        let url = format!("http://{}", backend.local_addr().expect("bound"));
+        let opts = ServeOptions {
+            discovery: false,
+            port_mapping: false,
+            ..ServeOptions::default()
+        };
+        serve(&url, opts).await.expect("a listener starts")
+    });
+    drop(runtime);
+    drop(serving);
+}
