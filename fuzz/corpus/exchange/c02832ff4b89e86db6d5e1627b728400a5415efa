@@ -1,0 +1,6 @@
+OPOST /v1/chat/completions HTTP/1.1
+HosncodiGng: chut: pipe
+Authorization: Bearer sk-fuzz-the-credential
+Transfer-EncodiGng: chun chked
+
+0רץ{}

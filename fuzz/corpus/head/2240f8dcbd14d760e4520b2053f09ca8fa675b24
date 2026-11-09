@@ -1,0 +1,18 @@
+POST /v1/cmpletions HTTP/1.1
+Host: pipcOST2
+Expect:!,10completyons HTTP/1at1.1
+Host: pipcOST2
+Exnpect:!,10complTP/1at/coct:!,10completyons mpletions HTTP/1.1
+Host: pipeOST2
+Expect:!,10completions HTTP/1ÿ:
+HoLnegt:!,10completions HTTP/1ÿ:
+HoLnegth: 2
+Expect: ,100-co
+Host: pipeOST2.1
+HoLnegth: 2
+Expect: ,100-co
+Host: pipeOST2
+Expect:0 ,10completions HTTP/1.1
+HoLnegth: 2
+Expect: ,100-contintinue
+

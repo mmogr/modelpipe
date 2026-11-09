@@ -1,0 +1,5 @@
+POST /vat/completio HTTP/1.1
+Host: pip
+Content-Length: 2
+Expect: 100-co0tinue
+

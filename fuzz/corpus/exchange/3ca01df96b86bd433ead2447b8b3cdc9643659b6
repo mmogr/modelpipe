@@ -1,0 +1,11 @@
+GET //completions HTTP/1.1
+Host: pipe
+Authorization: Bearer sk-fuzz-the-credential
+Transfer-Encoding: chunked
+
+0
+{} HTTPmpletionsT / P/POST /modelpipe/pair HTTP/1.1
+Host: pipe
+Content-Length: 6
+
+123456ÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿzation: Be

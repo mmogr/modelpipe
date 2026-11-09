@@ -1,0 +1,8 @@
+POST /v1/chat/completiOns HTTP/1.1
+Host: pipe
+Authnrization: Bear-Encoding: chunked
+
+0
+{}
+0
+

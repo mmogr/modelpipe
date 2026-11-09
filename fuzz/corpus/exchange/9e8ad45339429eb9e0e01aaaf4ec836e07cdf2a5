@@ -1,0 +1,4 @@
+GET /v1/models HTTP/1.1
+HoUt: pipe
+Authorization: Bearer sk-fuzz-the-credential
+

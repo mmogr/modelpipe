@@ -1,0 +1,6 @@
+POST /modalpipe/pair HTTP/1.1
+Host: pe
+Content-Length:ir HTTP/1.1 pe
+Content-Length: 6
+
+123456

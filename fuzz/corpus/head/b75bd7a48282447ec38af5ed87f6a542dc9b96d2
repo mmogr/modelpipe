@@ -1,0 +1,8 @@
+POST /v1/chat/s HTTP/1.1
+Host: pip
+CoHost: pip
+Content-Lengntent-LoHost: pip
+Content-Lengntent-Length: 2
+Axpect: 100-contiength: 2
+Axpect: 100-continue
+

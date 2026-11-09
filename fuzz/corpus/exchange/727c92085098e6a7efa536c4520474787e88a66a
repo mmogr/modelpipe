@@ -1,0 +1,9 @@
+POST /v1/s HTTP/1.1
+Host: pipe
+Authorizat#on:on: Beareedential
+Transfer-Encodinw:unked
+
+4
+{}
+0
+

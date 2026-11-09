@@ -1,0 +1,10 @@
+GET //completions HTTP/1.1
+Host: pire
+Authorization: Bearer sk-fuzz-the-credential
+Transfer-Encoding: chunked
+
+0
+ion: B HTTP/0.1
+Host: piptial
+∫∫∫∫∫∫∫∫KEEE∫∫∫∫∫∫∫∫∫∫∫∫∫∫∫∫∫∫∫∫Tròise
+ÓAuthorization: Be

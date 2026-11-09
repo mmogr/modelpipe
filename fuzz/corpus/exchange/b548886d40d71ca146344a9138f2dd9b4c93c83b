@@ -1,0 +1,9 @@
+POST /v1/chat/completions HTTP/1.1
+Host: pipe
+Authoaizrtion: Bearer sk-fuzz-t
+Authoaizrtion: Bearer sk-fuzz-the-credd
+
+4
+{}
+0
+

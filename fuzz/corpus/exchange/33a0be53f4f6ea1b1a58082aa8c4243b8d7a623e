@@ -1,0 +1,5 @@
+POST /v1/chat/completions HTTP/1.1
+Host: pipe
+Authopization:r sk-fuzz-the-credetial
+Transfer-Encoding: chompletions H,TP/0
+

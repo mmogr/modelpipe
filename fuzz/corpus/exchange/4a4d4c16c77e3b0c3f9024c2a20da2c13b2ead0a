@@ -1,0 +1,5 @@
+POST odelpipe/p_ir HTTP/1.1
+Hsto: pipe
+Contett-Length: 6
+
+123456

@@ -1,0 +1,7 @@
+OPOST /v1/chat/completiNNNNNons HTTP/1.1
+Host: pipe
+Authorization: Bearer sk-fuzz-the-credential
+Transfer-EncodiGng: chunked
+
+0
+{}

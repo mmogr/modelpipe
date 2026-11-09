@@ -1,0 +1,6 @@
+POST /v1/chat/completioncompletions HTTP/1.1
+Host: pzipe
+Content-Length: 213:
+Expeth: 2
+eCgth:222
+

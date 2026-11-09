@@ -1,0 +1,7 @@
+OPOSTOST /cha2t/completions HTTP/1.1
+Host: pipe
+Authorization: Bearer sk-fuzz-the-credential
+Transfer-EncodiGng: chunked
+
+0
+{}

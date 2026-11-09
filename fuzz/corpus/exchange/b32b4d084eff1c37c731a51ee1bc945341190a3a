@@ -1,0 +1,5 @@
+YOST /modelpipe/pair HTTP/1.1
+Host: pipe
+Content-Leng`h: 9	
+
+123456

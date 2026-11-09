@@ -1,0 +1,9 @@
+POST /v1/chat/com`lntioes HTTP/1.1
+Host: p
+Authorization: Bearer sk-fuzz-the-credential
+Transfer-Encoding: chunked
+
+5-
+{ÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿ}
+0
+

@@ -1,0 +1,8 @@
+POST /v1/chat/cons HTTP/1.1
+Host: pipe
+Authorization: al
+Transfer-Encoding: chi;nz al
+Transfer-Enckding: chu
+nsfng: chu
+nsfer-Encoding:!chunked
+

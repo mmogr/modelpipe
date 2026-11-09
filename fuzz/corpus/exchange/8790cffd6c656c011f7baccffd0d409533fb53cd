@@ -1,0 +1,11 @@
+GET //completions HTTP/1.1
+Host: pipe
+Authorization: Bearer sk-fuzz-the-credential
+Transfer-Encoding: chunked
+
+0
+{} HTTPmpletions Host: pipe
+Authorization: Bearer sk-fuzz-the-credential
+Transfer-EncTTP/1.1
+Host: pipe
+Authorization; Be

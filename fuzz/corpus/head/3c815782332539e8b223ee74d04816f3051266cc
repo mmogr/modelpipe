@@ -1,0 +1,14 @@
+POST /vletions HTTP/1.1
+Host: pipe
+Coltent-Length: 2
+Ex: 4
+Host: pipe
+Coltent-Length: 2
+Ex: 457-c57-continuvletions HTTP/1.1
+Host: pipe
+Coltent-Length: 2
+Ex: 4
+Host: pipe
+Coltent-Length: 2
+Ex: 457-c57-e
+

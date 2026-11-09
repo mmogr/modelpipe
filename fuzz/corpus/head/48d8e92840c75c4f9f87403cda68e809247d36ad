@@ -1,0 +1,3 @@
+POST /v1/ahat/completions HTTP/1.1
+Host:
+Uxp

@@ -1,0 +1,5 @@
+POST /zmodelpipe/pair HTTP/1.1
+Host: pipe
+Content-Length: 6
+
+123456

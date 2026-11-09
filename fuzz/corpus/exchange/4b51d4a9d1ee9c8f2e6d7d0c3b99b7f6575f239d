@@ -1,0 +1,9 @@
+POST /v/chat/coletmpions HTTP/1.1
+Host: pipe
+Authorization: Bearer sk-fuzz-the-credential
+Transfe-Encodin+: chunked
+
+2
+{}
+0
+

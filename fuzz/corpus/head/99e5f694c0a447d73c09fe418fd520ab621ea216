@@ -1,0 +1,4 @@
+TOPS /v0/chat/completions HTTP/1.1
+Host: pipeOST2
+Expect: ,10cth:xpet: ,100-0-con0,continue
+

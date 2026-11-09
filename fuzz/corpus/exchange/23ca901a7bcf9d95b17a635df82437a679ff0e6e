@@ -1,0 +1,9 @@
+POST /v1/chat/completions HTTP/1.1
+Host: pi
+Authorization: Bearer sk-fuzz-the-credential
+Transfer4Encoding: /v1
+
+2
+ÿýÿÿ{}
+0
+

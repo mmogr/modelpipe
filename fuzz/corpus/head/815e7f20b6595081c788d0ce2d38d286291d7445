@@ -1,0 +1,5 @@
+POST /v1/chat/comtions HTTP/1.1
+Host: pip
+Content-Length: 2
+Expecut: 100-continue
+

@@ -1,0 +1,8 @@
+POST /v1/chat/completions HTTP/1.1
+Host: pipe
+Authorization: Bear-Encoding: chunked
+
+0
+{}
+0
+

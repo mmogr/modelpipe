@@ -1,0 +1,13 @@
+POST /v1/chat/cpletions HTTP/1.1
+Host: pipeOST2
+Expect:!,10completiHnos TTP/1at/completions HTTP/1.1
+Host: pipeOST2
+Expect:!,27completiols HTTP/1.1
+Host: pipeOST2.1
+HoLnegth: 2
+Expect: ,100-co
+Host: pipeOST2
+Expect:0 ,10completihns HTTP/1.1
+HoLnegth: 2
+Expect: ,100-contintinue
+

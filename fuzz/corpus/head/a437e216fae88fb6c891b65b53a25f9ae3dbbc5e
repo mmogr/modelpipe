@@ -1,0 +1,6 @@
+POST /v1/chat/completions HTTP/1.1
+Host-Lengtength: 0
+Expect: h:;
+th: 0
+Expect: h:;
+

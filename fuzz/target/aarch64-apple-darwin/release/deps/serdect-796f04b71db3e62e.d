@@ -1,0 +1,11 @@
+/Users/mattogrady/.local/src/modelpipe/fuzz/target/aarch64-apple-darwin/release/deps/serdect-796f04b71db3e62e.d: /Users/mattogrady/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serdect-0.4.3/src/lib.rs /Users/mattogrady/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serdect-0.4.3/src/array.rs /Users/mattogrady/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serdect-0.4.3/src/common.rs /Users/mattogrady/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serdect-0.4.3/src/slice.rs /Users/mattogrady/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serdect-0.4.3/src/../README.md
+
+/Users/mattogrady/.local/src/modelpipe/fuzz/target/aarch64-apple-darwin/release/deps/libserdect-796f04b71db3e62e.rlib: /Users/mattogrady/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serdect-0.4.3/src/lib.rs /Users/mattogrady/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serdect-0.4.3/src/array.rs /Users/mattogrady/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serdect-0.4.3/src/common.rs /Users/mattogrady/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serdect-0.4.3/src/slice.rs /Users/mattogrady/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serdect-0.4.3/src/../README.md
+
+/Users/mattogrady/.local/src/modelpipe/fuzz/target/aarch64-apple-darwin/release/deps/libserdect-796f04b71db3e62e.rmeta: /Users/mattogrady/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serdect-0.4.3/src/lib.rs /Users/mattogrady/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serdect-0.4.3/src/array.rs /Users/mattogrady/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serdect-0.4.3/src/common.rs /Users/mattogrady/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serdect-0.4.3/src/slice.rs /Users/mattogrady/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serdect-0.4.3/src/../README.md
+
+/Users/mattogrady/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serdect-0.4.3/src/lib.rs:
+/Users/mattogrady/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serdect-0.4.3/src/array.rs:
+/Users/mattogrady/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serdect-0.4.3/src/common.rs:
+/Users/mattogrady/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serdect-0.4.3/src/slice.rs:
+/Users/mattogrady/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serdect-0.4.3/src/../README.md:

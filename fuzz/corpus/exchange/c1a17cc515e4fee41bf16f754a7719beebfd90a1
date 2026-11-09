@@ -1,0 +1,14 @@
+GET //completions HTTP/1.1
+Host: pipe
+Authorization: Bearer sk-fuzz-the-credential
+Transfer-Encoding: chunked
+
+0
+{} HTTPmpletions HTTP/2.1
+HoT /v1ons HTTP/1.1
+Host: piptial
+Transfedons HTTP/1.1
+HoT /v1onAs HTTP/1.1
+Host: piptial
+Transfer-Encodining:st: pipe
+Authorization: Be

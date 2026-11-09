@@ -1,0 +1,15 @@
+GET //completions HTTP/1.1
+Host: pipe
+Authorization: Bearer sk-fuzz-the-credential
+Transfer-Encoding: chunked
+
+0
+{} HVTPmpletions HTTP/1.1
+HoT /v1ons HTTP/1.1
+Host: piptialOST /modelpipe/pair HTTP/1.1
+HHost: pipe
+Content-Len0tv: 6ost: pipe
+Content-Len0tv: 6
+
+1pe
+4

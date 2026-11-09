@@ -1,0 +1,18 @@
+POST /v1t/completions HTTP/1.1
+Host: pipe
+izatino: Beareuzz-the-credentialGG TE/v1/models HTTP/1.1
+Jost: piHost: pipe
+Authorization: Bearer sk-fuzz-the-credential
+Transfer-Encoding: chunked
+
+0
+{}[0pe
+Authorization: Bearer sk-fuzz-the-/mo
+Transfer-Encgding:ost: pipe
+izatino: Beareuzz-the-credential
+Transfer-Encgding: chunked
+
+5
+{}
+0
+del

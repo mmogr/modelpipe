@@ -1,0 +1,8 @@
+POST /v1/chat/completions HTTP/1.1
+Host: pipe
+At: Bearer sk-fuzz-the-credential
+Transfer-Encoding:
+
+2
+…‚òõ0
+

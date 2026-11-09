@@ -1,0 +1,8 @@
+POST /v/chat/coletmp HTTP/1.1
+Host: ]the-credential
+Transfer-Encoding: ch
+
+5
+{}
+0
+

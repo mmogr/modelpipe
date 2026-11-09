@@ -1,0 +1,10 @@
+POST /v1/chat/completions HTTP/1.1
+Host: pipe: Bearer sk-fuz sk-e-cr
+Host: pipe
+Authorizatding: chunked
+
+
+4
+ø}
+0
+

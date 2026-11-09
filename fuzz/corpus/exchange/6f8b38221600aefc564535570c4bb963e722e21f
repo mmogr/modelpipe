@@ -1,0 +1,6 @@
+GET /v1/ls HTTP/1.1
+Host: pipe
+Authorization: BearAr sk-fuzz-the-c1.1
+Host: pipe
+Authorization: BearArrede?itnal
+

@@ -1,0 +1,9 @@
+POST /v1/chat/completions HTTP/1.1
+os:tH pipe
+Authorization: Bearer sk-fuzz-the-credential
+Transfer-Encodi2ng: chunked
+
+6
+{}
+0
+
