@@ -126,6 +126,8 @@ pub(crate) fn strip_hop_by_hop(headers: &mut Vec<(String, String)>) {
         .iter()
         .filter(|(name, _)| name.eq_ignore_ascii_case("connection"))
         .flat_map(|(_, value)| value.split(','))
+        // `str::trim` rather than [`ows`], deliberately: a wider trim here
+        // can only strip more, and `Connection` itself never goes upstream.
         .map(|token| token.trim().to_ascii_lowercase())
         .filter(|token| !token.is_empty())
         // A peer may not redefine what its own message means.

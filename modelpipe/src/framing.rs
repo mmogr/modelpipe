@@ -67,7 +67,7 @@ pub(crate) fn framing(
         // pass through blind.
         let all: Vec<String> = codings
             .flat_map(|(_, value)| value.split(','))
-            .map(|token| token.trim().to_ascii_lowercase())
+            .map(|token| headers::ows(token).to_ascii_lowercase())
             .filter(|token| !token.is_empty())
             .collect();
         if all.last().map(String::as_str) != Some("chunked") || all.len() != 1 {
