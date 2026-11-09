@@ -989,6 +989,72 @@ async fn a_connect_shutdown_is_announced_rather_than_left_to_the_idle_timeout() 
     serving.shutdown().await;
 }
 
+/// Dropping the connect handle is announced too, not only a shutdown.
+///
+/// `Drop` can only queue the close frame, because closing the endpoint is
+/// async. The runtime is still alive, so the frame goes out, and this pins
+/// that: a drop that stopped queueing it would leave the serve side listing
+/// a phantom peer for the whole idle timeout.
+#[tokio::test]
+async fn a_dropped_connect_handle_is_announced_rather_than_left_to_the_idle_timeout() {
+    let backend = MockBackend::json(200, OK_BODY).await;
+    let (serving, connected, url) = paired(&backend, TokenPolicy::Generate).await;
+    within(
+        "a request must cross the pipe",
+        request(&url, "/v1/models", Some(&bearer(&serving))),
+    )
+    .await
+    .expect("request");
+    assert_eq!(serving.peers().len(), 1, "the peer is registered");
+
+    drop(connected);
+
+    let noticed = tokio::time::timeout(Duration::from_secs(2), async {
+        while !serving.peers().is_empty() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await;
+    assert!(
+        noticed.is_ok(),
+        "the serve side was never told, and still lists {:?}",
+        serving.peers()
+    );
+
+    serving.shutdown().await;
+}
+
+/// A serve handle dropped on a thread with no runtime still tells the peer.
+///
+/// An embedder's FFI thread is exactly that kind of thread. `Drop` once
+/// spawned the endpoint's close only onto a *current* runtime, so a drop
+/// there closed nothing, and on Linux the connect side waited out the idle
+/// timeout.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_serve_handle_dropped_off_the_runtime_is_announced() {
+    let backend = MockBackend::json(200, OK_BODY).await;
+    let (serving, connected, url) = paired(&backend, TokenPolicy::Generate).await;
+    within(
+        "a request must cross the pipe",
+        request(&url, "/v1/models", Some(&bearer(&serving))),
+    )
+    .await
+    .expect("request");
+
+    std::thread::spawn(move || drop(serving))
+        .join()
+        .expect("the drop does not panic");
+
+    let noticed = tokio::time::timeout(Duration::from_secs(2), async {
+        while connected.status() != PipeStatus::Idle {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await;
+    assert!(noticed.is_ok(), "the connect side was never told");
+    connected.shutdown().await;
+}
+
 /// A live pairing reports the path it is actually using, on both sides.
 ///
 /// The connect side published no status at all: `Direct` and `Relayed` were
