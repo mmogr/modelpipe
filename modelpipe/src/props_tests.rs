@@ -131,13 +131,25 @@ fn mutation() -> impl Strategy<Value = (u8, usize, u8)> {
 }
 
 /// A chunk whose size line is spelled any of the ways a parser can be
-/// lenient about: a sign, leading zeros, padding on either side, an
+/// lenient about: a sign, leading zeros (more than httparse reads among
+/// them), padding on either side, an
 /// extension with a control byte or a no-break space, a bare LF. The data
 /// is always the declared length, so the size line is the only question.
 fn spelled_chunk() -> impl Strategy<Value = Vec<u8>> {
     (
         prop::collection::vec(any::<u8>(), 1..48),
-        prop::sample::select(vec!["", "+", "-", " ", "\t", "0", "00", "0x"]),
+        prop::sample::select(vec![
+            "",
+            "+",
+            "-",
+            " ",
+            "\t",
+            "0",
+            "00",
+            "0x",
+            // Sixteen zeros: with the size after them, past httparse's limit.
+            "0000000000000000",
+        ]),
         prop::sample::select(vec![
             "",
             " ",
