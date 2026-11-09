@@ -417,3 +417,69 @@ fn a_view_names_the_whole_endpoint_id_it_connected_from() {
     assert_eq!(views[0].id, desk);
     assert_eq!(views[0].fingerprint, desk.fingerprint());
 }
+
+/// The status published is the status of the set as it stands, however two
+/// mutations interleave.
+///
+/// A watcher's `set_path` racing the `remove` of the last peer is the shape
+/// that showed it. Each computed its status under the lock and published it
+/// after letting go, so the two could publish in the opposite order to the
+/// one they mutated in: `Relayed`, with nobody left to be relayed to, and
+/// nothing to correct it until the next peer arrived.
+///
+/// Probabilistic: a pass says only that no round lost the race. Before the
+/// fix about one round in a thousand did.
+#[test]
+fn the_status_published_is_the_status_of_the_set_left_behind() {
+    // Six watchers against one removal is what loses the race often enough
+    // to see: 82 rounds in 100,000 before the fix, and none with two threads.
+    const SETTERS: usize = 6;
+    const ROUNDS: usize = 50_000;
+    let registry = PeerRegistry::default();
+    let lifecycle = Lifecycle::new();
+    let caller = calling(&name("3ca82708b995"));
+    let id = std::sync::atomic::AtomicU64::new(0);
+    // Three parties: the two racing mutations, and the round that checks
+    // what they left once both are done.
+    let start = std::sync::Barrier::new(SETTERS + 2);
+    let done = std::sync::Barrier::new(SETTERS + 2);
+    let mut stale = 0;
+    std::thread::scope(|scope| {
+        for _ in 0..SETTERS {
+            scope.spawn(|| {
+                for _ in 0..ROUNDS {
+                    start.wait();
+                    registry.set_path(id.load(Ordering::SeqCst), via_relay(), &lifecycle);
+                    done.wait();
+                }
+            });
+        }
+        scope.spawn(|| {
+            for _ in 0..ROUNDS {
+                start.wait();
+                registry.remove(id.load(Ordering::SeqCst), &lifecycle);
+                done.wait();
+            }
+        });
+        // Counted rather than asserted inside the scope: a panic here would
+        // leave the other two waiting at a barrier for ever.
+        for _ in 0..ROUNDS {
+            let added = registry
+                .add(&caller, hole_punched(), &lifecycle)
+                .expect("one peer is under the cap");
+            id.store(added, Ordering::SeqCst);
+            start.wait();
+            done.wait();
+            if lifecycle.status() != PipeStatus::Idle {
+                stale += 1;
+                // Put it right for the next round, so one loss is one count.
+                lifecycle.set_status(PipeStatus::Idle);
+            }
+        }
+    });
+    assert!(registry.views().is_empty());
+    assert_eq!(
+        stale, 0,
+        "{stale} of {ROUNDS} rounds published a status for a peer that had left"
+    );
+}
