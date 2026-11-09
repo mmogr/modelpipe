@@ -159,6 +159,12 @@ pub(crate) async fn bind(
         let parsed =
             RelayUrl::from_str(url).map_err(|_| BindFailure::InvalidRelay(url.to_owned()))?;
         builder = builder.relay_mode(RelayMode::Custom(parsed.into()));
+        // The tests' relay is `crate::relay_tests::local`, on loopback with a
+        // self-signed certificate.
+        #[cfg(test)]
+        {
+            builder = builder.ca_tls_config(iroh::tls::CaTlsConfig::insecure_skip_verify());
+        }
     }
     if !net.port_mapping {
         builder = builder.portmapper_config(PortmapperConfig::Disabled);

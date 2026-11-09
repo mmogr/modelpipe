@@ -300,16 +300,19 @@ async fn an_endpoint_binds_with_every_network_contact_switched_off() {
 /// promises, and is exactly what the endpoint advertises for the first
 /// couple of seconds of its life. The relay arrives with a handshake and not
 /// with the bind, which is what [`wait_online`] is here for and what
-/// `ServeOptions::wait_online` exists for on the public surface. This test
-/// therefore needs a route to a relay; without one there is no such thing as
-/// a working `--relay-only` listener to test.
+/// `ServeOptions::wait_online` exists for on the public surface. The relay
+/// is `crate::relay_tests::local`, in this process.
 #[tokio::test]
 async fn relay_only_mints_a_ticket_that_names_the_relay_and_nothing_else() {
+    let (_relay, url) = crate::relay_tests::local().await;
     let net = NetOptions {
+        port_mapping: false,
+        discovery: false,
         relay_only: true,
-        ..NetOptions::default()
     };
-    let endpoint = bind(None, None, net).await.expect("binding must succeed");
+    let endpoint = bind(Some(&url), None, net)
+        .await
+        .expect("binding must succeed");
     wait_online(&endpoint, Duration::from_secs(20)).await;
 
     let ticket = ticket_from(&endpoint.addr());

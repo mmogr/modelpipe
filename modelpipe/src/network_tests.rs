@@ -87,14 +87,13 @@ async fn a_notice_arriving_after_the_endpoint_closed_is_ignored_rather_than_hang
 /// no test can produce; that mapping is a reading of iroh's manifest, and
 /// this test says how far it goes rather than implying further.
 ///
-/// **This needs a route to a relay**, which
-/// `transport_tests::relay_only_mints_a_ticket_that_names_the_relay_and_nothing_else`
-/// already establishes as a dependency this suite accepts. The assertion is
-/// guarded by an independently observed fact — a relay in the endpoint's own
-/// ticket — so a failure says which of the two things went wrong.
+/// The relay is `crate::relay_tests::local`, in this process. The assertion
+/// is guarded by an independently observed fact — a relay in the endpoint's
+/// own ticket — so a failure says which of the two things went wrong.
 #[tokio::test]
 async fn the_counters_are_the_endpoints_own_and_move_when_it_reaches_a_relay() {
-    let online = quiet_endpoint(None).await;
+    let (_relay, url) = crate::relay_tests::local().await;
+    let online = quiet_endpoint(Some(&url)).await;
     wait_online(&online, Duration::from_secs(20)).await;
 
     // Independent evidence that the handshake happened: `ticket_from` reads
@@ -102,7 +101,7 @@ async fn the_counters_are_the_endpoints_own_and_move_when_it_reaches_a_relay() {
     // connection has completed.
     assert!(
         !ticket_from(&online.addr()).relay_urls().is_empty(),
-        "this test needs a route to a relay, and this endpoint reached none"
+        "the endpoint never reached the relay in this process"
     );
 
     let reached = metrics_of(&online);
