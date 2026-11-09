@@ -18,13 +18,23 @@ use crate::status::PipeStatus;
 /// to.
 ///
 /// The first attempt after a death is immediate — a laptop waking up wants
-/// its pipe back now, not in half a second — and only a *failed* dial
-/// starts the backoff. The ceiling matters more than the floor: a serve
+/// its pipe back now, not in half a second — when the connection that died
+/// had lasted [`STABLE_FOR`]. One that died younger, and every *failed*
+/// dial, waits out the backoff instead. The ceiling matters more than the floor: a serve
 /// side that is off for the night must not be dialled thousands of times,
 /// and thirty seconds is short enough that coming back is noticed promptly
 /// and long enough to be nobody's idea of a busy loop.
 const FIRST_RETRY: Duration = Duration::from_millis(500);
 const RETRY_CEILING: Duration = Duration::from_secs(30);
+
+/// How long a connection has to have lasted for its death to be news rather
+/// than a refusal.
+///
+/// A listener at its peer cap completes the handshake and then lets the
+/// connection go, so to this side a refusal looks like a connection that
+/// dies at once. Restarting the backoff on that redialled such a listener
+/// as fast as a handshake completes.
+const STABLE_FOR: Duration = Duration::from_secs(10);
 
 /// Reach the peer, and keep a connection to it for as long as the pipe is
 /// up.
@@ -60,6 +70,7 @@ pub(crate) async fn keep_connected(peer: &Peer, lifecycle: &Lifecycle, nudge: Op
     // without saying so nothing at default verbosity does — but a serve
     // side off for the night must not narrate every retry until morning.
     let mut announced = false;
+    let mut up_since = Instant::now();
     loop {
         // Wait out the connection there is, if there is one — following
         // where it goes while we wait. The third arm is what makes the
@@ -83,7 +94,13 @@ pub(crate) async fn keep_connected(peer: &Peer, lifecycle: &Lifecycle, nudge: Op
             // `info` while the individual attempts below are not.
             tracing::info!("the peer went away, and this side is looking for it");
             announced = true;
-            backoff.reset();
+            if let Some(wait) = backoff.lost(up_since.elapsed()) {
+                tokio::select! {
+                    biased;
+                    () = lifecycle.wait_until_closed() => return,
+                    () = tokio::time::sleep(wait) => {}
+                }
+            }
         }
 
         // And go looking for it.
@@ -93,6 +110,7 @@ pub(crate) async fn keep_connected(peer: &Peer, lifecycle: &Lifecycle, nudge: Op
             dialed = peer.redial() => dialed,
         };
         if let Some(reading) = dialed {
+            up_since = Instant::now();
             let status = aggregate(&[reading.path]);
             lifecycle.set_status(status);
             tracing::info!(path = status.as_str(), "the peer is back");
@@ -154,9 +172,16 @@ impl Backoff {
         wait
     }
 
-    /// Start again from [`FIRST_RETRY`].
-    const fn reset(&mut self) {
-        self.next = FIRST_RETRY;
+    /// After a connection that lived `lived` has gone: `None` to redial at
+    /// once, starting the backoff again, when it lasted [`STABLE_FOR`];
+    /// otherwise the wait, exactly as after a failed dial.
+    fn lost(&mut self, lived: Duration) -> Option<Duration> {
+        if lived >= STABLE_FOR {
+            self.next = FIRST_RETRY;
+            None
+        } else {
+            Some(self.next())
+        }
     }
 }
 

@@ -51,6 +51,28 @@ fn ticket_for(endpoint: &Endpoint) -> Ticket {
     transport::ticket_from(&endpoint.addr())
 }
 
+/// An endpoint that completes every handshake and then lets the connection
+/// go, as a serve side at its peer cap does. Counts what it accepted.
+async fn dropping() -> (Endpoint, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+    let accepted = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let endpoint = Endpoint::builder(presets::N0)
+        .alpns(vec![transport::ALPN.to_vec()])
+        .bind()
+        .await
+        .expect("an endpoint binds");
+    let accepting = endpoint.clone();
+    let counted = accepted.clone();
+    tokio::spawn(async move {
+        while let Some(incoming) = accepting.accept().await {
+            if let Ok(connection) = incoming.await {
+                counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                connection.close(0u32.into(), b"full");
+            }
+        }
+    });
+    (endpoint, accepted)
+}
+
 /// This side's endpoint, opened against a ticket and nothing dialled.
 async fn bound(endpoint: &Endpoint) -> Peer {
     tokio::time::timeout(
@@ -143,6 +165,33 @@ async fn a_live_connection_keeps_being_read_by_the_reconnect_loop() {
     .expect("a live connection must be re-read, not sampled once");
 }
 
+/// A serve side that takes each connection and drops it at once is dialled
+/// at the backoff's pace, not once per round trip.
+///
+/// That is what a listener at `max_peers` does to the device one past it,
+/// and a loop that restarted its backoff on every death redialled it as
+/// fast as a handshake completes, for as long as the pipe was up.
+#[tokio::test]
+async fn a_connection_that_dies_young_is_redialled_at_the_backoffs_pace() {
+    let (endpoint, accepted) = dropping().await;
+    let peer = bound(&endpoint).await;
+    let lifecycle = Lifecycle::new();
+
+    tokio::select! {
+        () = keep_connected(&peer, &lifecycle, None) => {}
+        () = tokio::time::sleep(Duration::from_secs(3)) => {}
+    }
+
+    // Dials at about 0 s, 0.5 s, 1.5 s and 3.5 s: three inside the window,
+    // with room for a slow machine either side of the last.
+    let dials = accepted.load(std::sync::atomic::Ordering::SeqCst);
+    assert!(dials >= 1, "the loop must have dialled at all");
+    assert!(
+        dials <= 5,
+        "{dials} dials in three seconds is not a backoff"
+    );
+}
+
 // ── The dial's pacing ────────────────────────────────────────────────────
 
 #[test]
@@ -163,12 +212,21 @@ fn a_backoff_stops_doubling_at_the_ceiling() {
 }
 
 #[test]
-fn a_reset_backoff_starts_again_at_the_first_retry() {
+fn a_connection_that_lasted_is_redialled_at_once_and_starts_the_backoff_again() {
     let mut backoff = Backoff::new();
     backoff.next();
     backoff.next();
-    backoff.reset();
+    assert_eq!(backoff.lost(STABLE_FOR), None);
     assert_eq!(backoff.next(), FIRST_RETRY);
+}
+
+#[test]
+fn a_connection_that_died_young_waits_out_the_backoff_and_doubles_it() {
+    let mut backoff = Backoff::new();
+    let young = STABLE_FOR / 2;
+    assert_eq!(backoff.lost(young), Some(FIRST_RETRY));
+    assert_eq!(backoff.lost(young), Some(FIRST_RETRY * 2));
+    assert_eq!(backoff.next(), FIRST_RETRY * 4);
 }
 
 // ── The nudge's pacing ───────────────────────────────────────────────────
