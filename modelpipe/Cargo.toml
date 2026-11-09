@@ -124,6 +124,10 @@ tokio = { workspace = true, features = ["macros", "rt-multi-thread", "io-util", 
 # comments — the "already in the graph" line the four dependencies above
 # carry is a justification, not a formula, and it does not apply here.
 tracing-subscriber = { version = "0.3", default-features = false, features = ["std", "fmt"] }
+# `test-utils` for `iroh::test_utils::run_relay_server`, an in-process relay
+# on loopback, so the relay path is tested without the internet. New
+# compilation (axum and iroh-relay's server), in the test profile only.
+iroh = { workspace = true, features = ["metrics", "test-utils"] }
 # For the `serde` feature's tests only, which run under `--all-features`.
 # Like `tracing-subscriber` above, this is NOT already in the graph: it is
 # new compilation, in the test profile, and only when the feature is on —

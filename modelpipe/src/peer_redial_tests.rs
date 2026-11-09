@@ -12,10 +12,9 @@
 use std::time::Duration;
 
 use iroh::Endpoint;
-use iroh::endpoint::{Connection, presets};
+use iroh::endpoint::Connection;
 
 use super::*;
-use crate::connect::ConnectOptions;
 use crate::ticket::Ticket;
 use crate::transport;
 
@@ -30,7 +29,7 @@ const PATIENCE: Duration = Duration::from_secs(20);
 /// would make every test below race the peer's own teardown.
 async fn accepting() -> (Endpoint, tokio::sync::mpsc::UnboundedReceiver<Connection>) {
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-    let endpoint = Endpoint::builder(presets::N0)
+    let endpoint = crate::test_net::endpoint()
         .alpns(vec![transport::ALPN.to_vec()])
         .bind()
         .await
@@ -55,7 +54,7 @@ fn ticket_for(endpoint: &Endpoint) -> Ticket {
 /// go, as a serve side at its peer cap does. Counts what it accepted.
 async fn dropping() -> (Endpoint, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
     let accepted = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let endpoint = Endpoint::builder(presets::N0)
+    let endpoint = crate::test_net::endpoint()
         .alpns(vec![transport::ALPN.to_vec()])
         .bind()
         .await
@@ -77,7 +76,7 @@ async fn dropping() -> (Endpoint, std::sync::Arc<std::sync::atomic::AtomicUsize>
 async fn bound(endpoint: &Endpoint) -> Peer {
     tokio::time::timeout(
         PATIENCE,
-        Peer::bind(&ticket_for(endpoint), &ConnectOptions::default()),
+        Peer::bind(&ticket_for(endpoint), &crate::test_net::connect_options()),
     )
     .await
     .expect("the bind must not hang")

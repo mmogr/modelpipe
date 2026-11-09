@@ -160,6 +160,11 @@ jobs:
       - name: Run tests
         run: cargo test --workspace --no-fail-fast
 
+      # The tests that reach n0's public network, ignored by default so a
+      # plain `cargo test` needs no internet. A runner has it.
+      - name: Run the tests that need the internet
+        run: cargo test --workspace --no-fail-fast -- --ignored
+
       # The library's optional features, which the default-feature run above
       # never compiles. `-p modelpipe` rather than `--workspace`: the CLI
       # has no features to turn on, and the point is to test what an
