@@ -19,7 +19,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use iroh::Endpoint;
-use iroh::endpoint::presets;
 
 use crate::lifecycle::PeerPath;
 use crate::path_watch::Reading;
@@ -39,7 +38,7 @@ const PATIENCE: Duration = Duration::from_secs(20);
 /// the URL and checks it is local, and a port that has gone away between the
 /// bind and the check is a flake this test has no interest in.
 async fn listening() -> (ServeHandle, tokio::net::TcpListener) {
-    listening_with(ServeOptions::default()).await
+    listening_with(crate::test_net::serve_options()).await
 }
 
 /// [`listening`], started with `opts`.
@@ -59,7 +58,7 @@ async fn listening_with(opts: ServeOptions) -> (ServeHandle, tokio::net::TcpList
 /// this test needs the ALPN and nothing else.
 async fn peer_of(serving: &ServeHandle) -> (Endpoint, iroh::endpoint::Connection) {
     let addr = transport::addr_from(&serving.ticket()).expect("the ticket names an endpoint");
-    let near = Endpoint::builder(presets::N0)
+    let near = crate::test_net::endpoint()
         .bind()
         .await
         .expect("an endpoint binds");
@@ -179,7 +178,7 @@ async fn a_connection_past_the_cap_is_refused_before_it_is_served() {
         .collect();
 
     let addr = transport::addr_from(&serving.ticket()).expect("the ticket names an endpoint");
-    let near = Endpoint::builder(presets::N0)
+    let near = crate::test_net::endpoint()
         .bind()
         .await
         .expect("an endpoint binds");
@@ -226,7 +225,7 @@ async fn a_connection_holds_its_place_until_it_goes() {
 async fn a_listener_told_to_carry_one_peer_sends_the_second_away() {
     let (serving, _backend) = listening_with(ServeOptions {
         max_peers: NonZeroUsize::MIN,
-        ..ServeOptions::default()
+        ..crate::test_net::serve_options()
     })
     .await;
     let (_first, _held) = peer_of(&serving).await;
@@ -246,7 +245,7 @@ async fn a_listener_told_to_carry_one_peer_sends_the_second_away() {
 async fn a_listener_told_to_carry_one_connection_refuses_the_second_dial() {
     let (serving, _backend) = listening_with(ServeOptions {
         max_connections: NonZeroUsize::MIN,
-        ..ServeOptions::default()
+        ..crate::test_net::serve_options()
     })
     .await;
     let (_first, _held) = peer_of(&serving).await;
@@ -256,7 +255,7 @@ async fn a_listener_told_to_carry_one_connection_refuses_the_second_dial() {
     .await;
 
     let addr = transport::addr_from(&serving.ticket()).expect("the ticket names an endpoint");
-    let near = Endpoint::builder(presets::N0)
+    let near = crate::test_net::endpoint()
         .bind()
         .await
         .expect("an endpoint binds");

@@ -14,7 +14,6 @@
 
 use std::time::Duration;
 
-use iroh::endpoint::presets;
 
 use super::*;
 use crate::lifecycle::PeerPath;
@@ -30,7 +29,7 @@ const PATIENCE: Duration = Duration::from_secs(20);
 /// would make every test below race the peer's own teardown.
 async fn accepting() -> (Endpoint, tokio::sync::mpsc::UnboundedReceiver<Connection>) {
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-    let endpoint = Endpoint::builder(presets::N0)
+    let endpoint = crate::test_net::endpoint()
         .alpns(vec![transport::ALPN.to_vec()])
         .bind()
         .await
@@ -55,7 +54,7 @@ fn ticket_for(endpoint: &Endpoint) -> Ticket {
 async fn bound(endpoint: &Endpoint) -> Peer {
     tokio::time::timeout(
         PATIENCE,
-        Peer::bind(&ticket_for(endpoint), &ConnectOptions::default()),
+        Peer::bind(&ticket_for(endpoint), &crate::test_net::connect_options()),
     )
     .await
     .expect("the bind must not hang")
@@ -186,7 +185,7 @@ async fn forgetting_the_live_connection_clears_it() {
 async fn live_connect_side(far: &Endpoint) -> std::sync::Arc<crate::dialer::ConnectState> {
     let (state, listener) = tokio::time::timeout(
         PATIENCE,
-        crate::dialer::bind(&ticket_for(far), &ConnectOptions::default()),
+        crate::dialer::bind(&ticket_for(far), &crate::test_net::connect_options()),
     )
     .await
     .expect("the bind must not hang")

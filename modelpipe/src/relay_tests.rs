@@ -2,19 +2,8 @@
 //!
 //! A phone on a carrier network reaches its desktop through a relay, so the
 //! relayed path is the one that most needs to work. These tests run a
-//! relay on loopback (`iroh::test_utils`), which `transport::bind` trusts
-//! in tests despite its self-signed certificate, so none of them needs the
-//! internet.
-
-/// A relay on loopback, and the URL to hand `--relay`.
-///
-/// The relay runs for as long as the first half is held.
-pub(crate) async fn local() -> (impl Sized, String) {
-    let (_map, url, server) = iroh::test_utils::run_relay_server()
-        .await
-        .expect("a relay starts on loopback");
-    (server, url.to_string())
-}
+//! relay on loopback ([`crate::test_net::relay`]), so none of them needs
+//! the internet.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -23,6 +12,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Notify;
 
+use crate::test_net::relay as local;
 use crate::{ConnectHandle, ConnectOptions, PipeStatus, ServeHandle, ServeOptions, connect, serve};
 
 /// Long enough that a failure is a failure rather than a slow machine.

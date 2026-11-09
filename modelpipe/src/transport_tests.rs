@@ -198,7 +198,7 @@ fn validation_yields_a_verdict_and_never_a_normalized_url() {
 /// registered, not anything about connectivity.
 #[tokio::test]
 async fn an_endpoint_binds_and_reports_its_own_identity() {
-    let endpoint = bind(None, None, NetOptions::default())
+    let endpoint = bind(None, None, crate::test_net::QUIET)
         .await
         .expect("binding must succeed");
     let addr = endpoint.addr();
@@ -217,7 +217,7 @@ async fn an_endpoint_binds_and_reports_its_own_identity() {
 /// surfacing later as an unexplained transport failure.
 #[tokio::test]
 async fn binding_with_an_unparseable_relay_fails_before_the_endpoint_exists() {
-    let Err(failure) = bind(Some("not a url"), None, NetOptions::default()).await else {
+    let Err(failure) = bind(Some("not a url"), None, crate::test_net::QUIET).await else {
         panic!("an unparseable relay must be refused");
     };
     let err = ServeError::from(failure);
@@ -241,13 +241,13 @@ async fn the_same_key_binds_to_the_same_endpoint_and_a_different_one_does_not() 
     let key = [7u8; crate::identity::KEY_BYTES];
     let other = [9u8; crate::identity::KEY_BYTES];
 
-    let first = bind(None, Some(key), NetOptions::default())
+    let first = bind(None, Some(key), crate::test_net::QUIET)
         .await
         .expect("binds");
-    let again = bind(None, Some(key), NetOptions::default())
+    let again = bind(None, Some(key), crate::test_net::QUIET)
         .await
         .expect("binds");
-    let elsewhere = bind(None, Some(other), NetOptions::default())
+    let elsewhere = bind(None, Some(other), crate::test_net::QUIET)
         .await
         .expect("binds");
 
@@ -301,10 +301,10 @@ async fn an_endpoint_binds_with_every_network_contact_switched_off() {
 /// couple of seconds of its life. The relay arrives with a handshake and not
 /// with the bind, which is what [`wait_online`] is here for and what
 /// `ServeOptions::wait_online` exists for on the public surface. The relay
-/// is `crate::relay_tests::local`, in this process.
+/// is [`crate::test_net::relay`], in this process.
 #[tokio::test]
 async fn relay_only_mints_a_ticket_that_names_the_relay_and_nothing_else() {
-    let (_relay, url) = crate::relay_tests::local().await;
+    let (_relay, url) = crate::test_net::relay().await;
     let net = NetOptions {
         port_mapping: false,
         discovery: false,
@@ -352,10 +352,10 @@ fn a_connect_relay_that_is_not_a_url_is_refused_as_the_connect_error() {
 /// which is the disposable ticket every version before this one had.
 #[tokio::test]
 async fn binding_without_a_key_mints_a_new_identity_each_time() {
-    let first = bind(None, None, NetOptions::default())
+    let first = bind(None, None, crate::test_net::QUIET)
         .await
         .expect("binds");
-    let second = bind(None, None, NetOptions::default())
+    let second = bind(None, None, crate::test_net::QUIET)
         .await
         .expect("binds");
 

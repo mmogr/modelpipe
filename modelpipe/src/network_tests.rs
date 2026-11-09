@@ -87,12 +87,12 @@ async fn a_notice_arriving_after_the_endpoint_closed_is_ignored_rather_than_hang
 /// no test can produce; that mapping is a reading of iroh's manifest, and
 /// this test says how far it goes rather than implying further.
 ///
-/// The relay is `crate::relay_tests::local`, in this process. The assertion
+/// The relay is [`crate::test_net::relay`], in this process. The assertion
 /// is guarded by an independently observed fact — a relay in the endpoint's
 /// own ticket — so a failure says which of the two things went wrong.
 #[tokio::test]
 async fn the_counters_are_the_endpoints_own_and_move_when_it_reaches_a_relay() {
-    let (_relay, url) = crate::relay_tests::local().await;
+    let (_relay, url) = crate::test_net::relay().await;
     let online = quiet_endpoint(Some(&url)).await;
     wait_online(&online, Duration::from_secs(20)).await;
 

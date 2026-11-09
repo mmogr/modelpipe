@@ -17,7 +17,6 @@ use std::net::SocketAddr;
 use std::str::FromStr as _;
 use std::sync::{Arc, Mutex};
 
-use iroh::endpoint::presets;
 use iroh::{Endpoint, RelayUrl};
 
 use super::*;
@@ -165,7 +164,7 @@ async fn a_watcher_that_reads_a_lapse_goes_on_reporting_the_path_it_had() {
 /// the same reason.
 async fn accepting() -> (Endpoint, tokio::sync::mpsc::UnboundedReceiver<Connection>) {
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-    let endpoint = Endpoint::builder(presets::N0)
+    let endpoint = crate::test_net::endpoint()
         .alpns(vec![transport::ALPN.to_vec()])
         .bind()
         .await
@@ -183,7 +182,7 @@ async fn accepting() -> (Endpoint, tokio::sync::mpsc::UnboundedReceiver<Connecti
 
 /// One live connection to `far`, from an endpoint of this test's own.
 async fn connected_to(far: &Endpoint) -> (Endpoint, Connection) {
-    let near = Endpoint::builder(presets::N0)
+    let near = crate::test_net::endpoint()
         .bind()
         .await
         .expect("an endpoint binds");
