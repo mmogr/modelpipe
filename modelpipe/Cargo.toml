@@ -128,6 +128,10 @@ tracing-subscriber = { version = "0.3", default-features = false, features = ["s
 # on loopback, so the relay path is tested without the internet. New
 # compilation (axum and iroh-relay's server), in the test profile only.
 iroh = { workspace = true, features = ["metrics", "test-utils"] }
+# The property tests in `props_tests.rs`: the edge's framing rules held
+# against generated and mutated input, with httparse as the oracle. New
+# compilation, in the test profile only; `std` alone, no regex or fork.
+proptest = { version = "1", default-features = false, features = ["std"] }
 # For the `serde` feature's tests only, which run under `--all-features`.
 # Like `tracing-subscriber` above, this is NOT already in the graph: it is
 # new compilation, in the test profile, and only when the feature is on —
