@@ -323,7 +323,18 @@ impl Drop for Scratch {
 
 /// Wrap an await so a hung pipe fails the test rather than the suite.
 pub(crate) async fn within<F: Future>(why: &str, future: F) -> F::Output {
-    tokio::time::timeout(std::time::Duration::from_secs(20), future)
+    within_for(std::time::Duration::from_secs(20), why, future).await
+}
+
+/// [`within`] with a budget of its own, for an await that contains a wait
+/// of its own: sharing one budget, the wrapper can fire before the wait it
+/// wraps has run out.
+pub(crate) async fn within_for<F: Future>(
+    budget: std::time::Duration,
+    why: &str,
+    future: F,
+) -> F::Output {
+    tokio::time::timeout(budget, future)
         .await
         .unwrap_or_else(|_| panic!("{why}"))
 }

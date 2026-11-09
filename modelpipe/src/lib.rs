@@ -111,6 +111,11 @@ mod serve_error;
 mod serve_handle;
 mod serve_options;
 
+#[cfg(test)]
+mod relay_tests;
+#[cfg(test)]
+mod test_net;
+
 // This block is the public API. Everything above is a private module,
 // free to be rearranged at will; every name below is versioned. Adding to
 // this block is the one edit in the crate that cannot be walked back.

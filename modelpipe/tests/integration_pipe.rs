@@ -18,7 +18,7 @@ mod common;
 
 use std::time::Duration;
 
-use common::{MockBackend, Scratch, request, within};
+use common::{MockBackend, Scratch, request, within, within_for};
 use modelpipe::{
     CloseReason, ConnectOptions, NetworkMetrics, PipeStatus, ServeOptions, Ticket, TokenPolicy,
 };
@@ -1920,19 +1920,24 @@ async fn each_side_counts_the_relay_connection_its_own_endpoint_could_not_make()
 /// unreachable through it. `wait_online` is the switch that waits; this is
 /// how an embedder finds out whether it worked.
 ///
-/// **This needs a route to a relay**, and so it must: what is being checked
-/// is that the accessor sees one on a ticket a live listener minted, which
-/// no ticket built in a test can stand in for. `network_tests` and
-/// `transport_tests` carry the same dependency, for the same kind of reason.
-/// The unit tests beside `relay_urls` cover its behaviour against the
-/// normative vectors and need nothing at all.
+/// **This reaches n0's public relays**, and so it must: what is being
+/// checked is that the accessor sees one on a ticket a live listener
+/// minted against the relays a default listener uses. It is the one test
+/// in the suite that needs the internet, so it is ignored by default and
+/// CI runs it on its own with `--ignored`. The unit tests beside
+/// `relay_urls` cover its behaviour against the normative vectors, and
+/// `relay_tests` cover a relayed pipe against a relay in the process.
 #[tokio::test]
+#[ignore = "reaches n0's public relays; run with --ignored"]
 async fn a_live_ticket_says_which_paths_it_carries() {
+    const ONLINE: Duration = Duration::from_secs(20);
     let backend = MockBackend::json(200, OK_BODY).await;
     let mut serve_opts = common::serve_options();
     serve_opts.auth = TokenPolicy::Generate;
-    serve_opts.wait_online = Some(Duration::from_secs(20));
-    let serving = within(
+    serve_opts.wait_online = Some(ONLINE);
+    // Longer than the wait it wraps, so the relay's wait runs out first.
+    let serving = within_for(
+        ONLINE + Duration::from_secs(10),
         "serve must bind",
         Box::pin(modelpipe::serve(&backend.url, serve_opts)),
     )
