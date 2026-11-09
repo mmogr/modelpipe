@@ -1,10 +1,12 @@
 //! The edge's framing rules, held against input nobody wrote by hand.
 //!
 //! The other tests name the inputs that broke something once. These
-//! generate them: valid chunked bodies cut at any point, and header lists
-//! built from the fields framing is decided by. A forwarded body is read
-//! back with httparse, an independent and long-fuzzed parser, rather than
-//! with anything of this crate's own.
+//! generate them: valid chunked bodies cut at any point, the same bodies
+//! with bytes mutated, and header lists built from the fields framing is
+//! decided by. The chunked properties use httparse as the oracle. It is an
+//! independent and long-fuzzed parser, so whatever this edge forwards, a
+//! strict next hop has to read it with the same boundaries. That is the
+//! smuggling property, stated as a test.
 
 use proptest::prelude::*;
 use tokio::io::{AsyncWriteExt, duplex};
@@ -115,8 +117,94 @@ fn encode(chunks: &[(Vec<u8>, Option<String>)], trailers: &[&str]) -> Vec<u8> {
     out
 }
 
+/// The bytes most likely to change what a chunked body means.
+const SHARP: &[u8] = b"0123456789abcdefABCDEF;=\" \t\r\n:+-xX\x00\x7f";
+
+/// One edit to a body: replace, insert or delete at a position, with a
+/// byte from [`SHARP`] or any byte at all.
+fn mutation() -> impl Strategy<Value = (u8, usize, u8)> {
+    (
+        0..3u8,
+        any::<usize>(),
+        prop_oneof![prop::sample::select(SHARP.to_vec()), any::<u8>()],
+    )
+}
+
+/// A chunk whose size line is spelled any of the ways a parser can be
+/// lenient about: a sign, leading zeros, padding on either side, an
+/// extension with a control byte or a no-break space, a bare LF. The data
+/// is always the declared length, so the size line is the only question.
+fn spelled_chunk() -> impl Strategy<Value = Vec<u8>> {
+    (
+        prop::collection::vec(any::<u8>(), 1..48),
+        prop::sample::select(vec!["", "+", "-", " ", "\t", "0", "00", "0x"]),
+        prop::sample::select(vec![
+            "",
+            " ",
+            "\t",
+            ";a",
+            " ;a",
+            "\t;a",
+            ";a=\"b;c\"",
+            ";a\0",
+            ";a\x7f",
+            ";a\x1b",
+            "\u{a0}",
+            " \u{a0};a",
+        ]),
+        prop::sample::select(vec!["\r\n", "\n", "\r\r\n", "\r"]),
+        any::<bool>(),
+    )
+        .prop_map(|(data, prefix, suffix, end, upper)| {
+            let size = if upper {
+                format!("{:X}", data.len())
+            } else {
+                format!("{:x}", data.len())
+            };
+            let mut out = format!("{prefix}{size}{suffix}{end}").into_bytes();
+            out.extend_from_slice(&data);
+            out.extend_from_slice(b"\r\n");
+            out
+        })
+}
+
+fn mutate(mut bytes: Vec<u8>, edits: &[(u8, usize, u8)]) -> Vec<u8> {
+    for &(kind, at, byte) in edits {
+        if bytes.is_empty() {
+            bytes.push(byte);
+            continue;
+        }
+        let at = at % bytes.len();
+        match kind {
+            0 => bytes[at] = byte,
+            1 => bytes.insert(at, byte),
+            _ => {
+                bytes.remove(at);
+            }
+        }
+    }
+    bytes
+}
+
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(1024))]
+
+    /// The same property over size lines spelled every lenient way, which
+    /// random edits reach too rarely to rely on.
+    #[test]
+    fn however_a_size_line_is_spelled_httparse_reads_what_the_edge_forwards(
+        chunks in prop::collection::vec(spelled_chunk(), 1..4),
+        split in any::<usize>(),
+    ) {
+        let mut input: Vec<u8> = chunks.concat();
+        input.extend_from_slice(b"0\r\n\r\n");
+        let (n, out) = forward_chunked(&input, split % (input.len() + 1));
+        if let Ok(n) = n {
+            let read = oracle(&out);
+            prop_assert!(read.is_some(), "httparse cannot read what the edge forwarded: {:?}", out);
+            prop_assert_eq!(read.map(|data| data.len() as u64), Some(n));
+        }
+    }
 
     /// A valid chunked body arrives whole, wherever the head read cut it:
     /// the data is what was sent, and the trailers the edge drops are gone.
@@ -134,6 +222,30 @@ proptest! {
         let text = String::from_utf8_lossy(&out);
         for dropped in ["Content-Length", "Authorization", "X-Forwarded-For"] {
             prop_assert!(!text.contains(dropped), "{} crossed the edge: {}", dropped, text);
+        }
+    }
+
+    /// Whatever the edge accepts, httparse reads with the same boundaries.
+    ///
+    /// The input is a valid body with up to four bytes edited, which is
+    /// what reaches the parser's corners: a size padded or signed, an
+    /// extension with a control byte, a lone CR or LF, data that overruns
+    /// its size. The edge may refuse any of them. What it may not do is
+    /// accept one and forward something a strict next hop reads as a
+    /// different body, or as more than one.
+    #[test]
+    fn whatever_the_edge_forwards_httparse_reads_the_same_body(
+        chunks in prop::collection::vec(chunk(), 1..4),
+        trailers in trailers(),
+        edits in prop::collection::vec(mutation(), 1..5),
+        split in any::<usize>(),
+    ) {
+        let input = mutate(encode(&chunks, &trailers), &edits);
+        let (n, out) = forward_chunked(&input, split % (input.len() + 1));
+        if let Ok(n) = n {
+            let read = oracle(&out);
+            prop_assert!(read.is_some(), "httparse cannot read what the edge forwarded: {:?}", out);
+            prop_assert_eq!(read.map(|data| data.len() as u64), Some(n));
         }
     }
 
