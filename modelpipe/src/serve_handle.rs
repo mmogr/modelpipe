@@ -754,10 +754,10 @@ impl ServeHandle {
 
 // Dropping a handle tears its side down best-effort and without waiting,
 // which is the other half of "`shutdown` drains, `Drop` cuts". The close is
-// published synchronously so a watcher sees `Closed` immediately; anything
-// that needs an await is handed to the runtime, and a handle dropped
-// outside one does the synchronous half only — the process is going away
-// regardless.
+// published synchronously so a watcher sees `Closed` immediately. Closing
+// the endpoint needs an await, so it is handed to the runtime `serve` ran
+// on rather than whichever one is current: an embedder's FFI thread drops
+// a handle with no runtime current while that runtime is very much alive.
 
 impl Drop for ServeHandle {
     fn drop(&mut self) {
@@ -767,13 +767,11 @@ impl Drop for ServeHandle {
         // ended. A separate reason would also be one nobody could read —
         // the accessor needs a handle, and this is the handle going away.
         self.state.lifecycle.close(CloseReason::Shutdown);
-        if let Ok(runtime) = tokio::runtime::Handle::try_current() {
-            let state = self.state.clone();
-            runtime.spawn(async move {
-                state.endpoint.close().await;
-                state.lifecycle.mark_torn_down();
-            });
-        }
+        let state = self.state.clone();
+        self.state.runtime.spawn(async move {
+            state.endpoint.close().await;
+            state.lifecycle.mark_torn_down();
+        });
     }
 }
 
