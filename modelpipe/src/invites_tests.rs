@@ -60,6 +60,23 @@ fn an_armed_code_redeems_once_and_then_is_a_miss() {
     assert_eq!(invites.count(), 0);
 }
 
+/// A redeemed key is the device's credential, and a `{:?}` of what carries
+/// it must not print it: every other type here that holds one redacts it.
+#[test]
+fn a_redeemed_key_never_prints() {
+    let invites = Invites::default();
+    let invite = armed(&invites, "dev-a", 3);
+    let redeemed = invites
+        .redeem(invite.code.as_str().as_bytes(), DEVICE, None)
+        .expect("redeems");
+    let printed = format!("{redeemed:?}");
+    assert!(printed.contains("dev-a"), "the device is named: {printed}");
+    assert!(
+        !printed.contains(&redeemed.key),
+        "the key is not: {printed}"
+    );
+}
+
 /// Nothing may tell a guesser that a code exists before it is armed, so an
 /// unarmed code is an ordinary wrong code, and counts as one.
 #[test]

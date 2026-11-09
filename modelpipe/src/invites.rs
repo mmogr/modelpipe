@@ -47,10 +47,18 @@ pub(crate) struct Invites {
 }
 
 /// What a redeemed code hands back.
-#[derive(Debug)]
 pub(crate) struct Redeemed {
     pub(crate) device: String,
     pub(crate) key: String,
+}
+
+impl std::fmt::Debug for Redeemed {
+    /// The device, never the key, as [`crate::Paired`] renders its own.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Redeemed")
+            .field("device", &self.device)
+            .finish_non_exhaustive()
+    }
 }
 
 /// A freshly registered invite, as [`Invites::register`] hands it back.
