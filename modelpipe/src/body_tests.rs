@@ -234,6 +234,28 @@ async fn a_chunk_size_that_is_not_hexadecimal_is_an_error() {
     }
 }
 
+/// Sixteen hex digits is every `u64` and httparse's limit, leading zeros
+/// included. The size line is forwarded verbatim, so a longer one would be
+/// framed here and refused by a next hop built on httparse. The fuzzer's
+/// first find: a terminal chunk whose size was sixty-three zeros.
+#[tokio::test]
+async fn a_chunk_size_longer_than_sixteen_hex_digits_is_an_error() {
+    let longest = format!("{}5\r\nhello\r\n0\r\n\r\n", "0".repeat(15));
+    let (n, _) = run(b"", longest.as_bytes(), Framing::Chunked)
+        .await
+        .expect("sixteen digits is a size");
+    assert_eq!(n, 5);
+    for input in [
+        format!("{}5\r\nhello\r\n0\r\n\r\n", "0".repeat(16)),
+        format!("{};e\r\n\r\n", "0".repeat(63)),
+    ] {
+        assert!(
+            run(b"", input.as_bytes(), Framing::Chunked).await.is_err(),
+            "{input:?} is longer than httparse reads"
+        );
+    }
+}
+
 /// A chunk whose data is not followed by CRLF is a desynchronized stream,
 /// and continuing to read it would mean guessing where the next size line
 /// begins.
