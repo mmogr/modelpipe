@@ -265,9 +265,16 @@ impl PeerRegistry {
 
     /// Mutate the peer set and publish what it now means.
     ///
-    /// The lock is never held across an await — the closure is synchronous
-    /// and the status is computed inside it — so a slow peer cannot stall
-    /// another's accept.
+    /// Published under the lock, so statuses are published in the order the
+    /// set was changed in. Published after it, two mutations could publish
+    /// in the opposite order to the one they made, leaving `Relayed` behind
+    /// with no peer left. The lock is never held across an await — the
+    /// closure and `set_status` are both synchronous — so a slow peer cannot
+    /// stall another's accept.
+    #[expect(
+        clippy::significant_drop_tightening,
+        reason = "the status is published under the lock on purpose"
+    )]
     fn mutate<R>(
         &self,
         lifecycle: &Lifecycle,
@@ -276,9 +283,6 @@ impl PeerRegistry {
         let mut guard = self.lock();
         let result = f(&mut guard);
         let paths: Vec<PeerPath> = guard.values().map(|(_, _, reading)| reading.path).collect();
-        // Released before publishing, so nothing observes the status while
-        // the set it describes is still locked.
-        drop(guard);
         lifecycle.set_status(aggregate(&paths));
         result
     }
