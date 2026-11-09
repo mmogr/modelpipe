@@ -2,6 +2,14 @@
 /target
 **/*.rs.bk
 
+# cargo-fuzz output. fuzz/.gitignore says the same, but only on a branch
+# that has it: switching to an older branch with these on disk, and adding
+# everything, committed 2.9 GB of them once.
+/fuzz/target/
+/fuzz/corpus/
+/fuzz/artifacts/
+/fuzz/coverage/
+
 # Cargo.lock is COMMITTED: this workspace ships a binary (modelpipe-cli),
 # so reproducible builds win over the library convention of ignoring it.
 # Do not add Cargo.lock here.
