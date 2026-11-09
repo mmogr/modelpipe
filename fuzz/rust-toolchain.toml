@@ -1,0 +1,5 @@
+# cargo-fuzz needs nightly for its sanitizer flags. Dated, so a run is
+# reproducible; move it forward deliberately, as the root toolchain is.
+[toolchain]
+channel = "nightly-2026-04-02"
+profile = "minimal"

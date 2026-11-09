@@ -1,0 +1,41 @@
+# The coverage-guided targets for the tunnel edge, run with cargo-fuzz on
+# nightly: `cargo fuzz run <target>` from this directory. Its own workspace,
+# excluded from the root one, so the published crates and stable CI never
+# build it. The entry points it calls are `modelpipe::fuzzing`, compiled
+# only under the `cfg(fuzzing)` cargo-fuzz sets.
+[package]
+name = "modelpipe-fuzz"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+modelpipe = { path = "../modelpipe" }
+
+[workspace]
+members = ["."]
+
+[[bin]]
+name = "chunked_body"
+path = "fuzz_targets/chunked_body.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "head"
+path = "fuzz_targets/head.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "exchange"
+path = "fuzz_targets/exchange.rs"
+test = false
+doc = false
+bench = false
