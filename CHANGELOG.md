@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.10](https://github.com/mmogr/modelpipe/compare/v0.8.8...v0.8.10) - 2026-11-09
+
+### Other
+
+- *(fuzz)* the edge has coverage-guided targets ([#172](https://github.com/mmogr/modelpipe/pull/172))
+- *(body)* the edge holds its framing rules for any input ([#171](https://github.com/mmogr/modelpipe/pull/171))
+- *(relay)* the relay path is tested without the internet ([#170](https://github.com/mmogr/modelpipe/pull/170))
+- update Cargo.lock dependencies
+
 ## [0.8.9](https://github.com/mmogr/modelpipe/compare/v0.8.8...v0.8.9) - 2026-11-09
 
 ### Other
