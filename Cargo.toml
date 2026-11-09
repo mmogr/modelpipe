@@ -1,6 +1,8 @@
 [workspace]
 resolver = "3"
 members = ["modelpipe", "modelpipe-cli"]
+# Its own workspace, on nightly: see fuzz/Cargo.toml.
+exclude = ["fuzz"]
 
 [workspace.package]
 version = "0.8.8"
