@@ -23,6 +23,14 @@ const CHUNK: usize = 16 * 1024;
 /// endless line of digits is an unbounded allocation.
 const MAX_CHUNK_LINE: usize = 1024;
 
+/// The most hex digits a chunk size may have, leading zeros included.
+///
+/// Sixteen is every `u64`, and it is httparse's limit, so hyper and every
+/// other server built on it refuse a longer size. This edge forwards the
+/// size line verbatim, so a longer one it accepted would be a body it
+/// framed and the next hop would not.
+const MAX_CHUNK_SIZE_DIGITS: usize = 16;
+
 /// A source with bytes already read from it — the tail of the head read,
 /// which is usually the start of the body.
 pub(crate) struct Buffered<'a, R> {
@@ -170,6 +178,11 @@ where
         // other half of the same job.
         if size_text.is_empty() || !size_text.bytes().all(|b| b.is_ascii_hexdigit()) {
             return Err(std::io::Error::other("chunk size is not hexadecimal"));
+        }
+        if size_text.len() > MAX_CHUNK_SIZE_DIGITS {
+            return Err(std::io::Error::other(
+                "chunk size is longer than sixteen hex digits",
+            ));
         }
         let size = u64::from_str_radix(size_text, 16)
             .map_err(|_| std::io::Error::other("chunk size is not hexadecimal"))?;
