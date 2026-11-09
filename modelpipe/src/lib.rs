@@ -112,6 +112,8 @@ mod serve_handle;
 mod serve_options;
 
 #[cfg(test)]
+mod props_tests;
+#[cfg(test)]
 mod relay_tests;
 #[cfg(test)]
 mod test_net;
