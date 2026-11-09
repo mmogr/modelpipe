@@ -237,7 +237,7 @@ pub(crate) fn expects_continue(fields: &[(String, String)]) -> bool {
         .iter()
         .filter(|(name, _)| name.eq_ignore_ascii_case("expect"))
         .flat_map(|(_, value)| value.split(','))
-        .any(|expectation| expectation.trim().eq_ignore_ascii_case("100-continue"))
+        .any(|expectation| headers::ows(expectation).eq_ignore_ascii_case("100-continue"))
 }
 
 /// Apply the edge's header rules in the order they must happen.

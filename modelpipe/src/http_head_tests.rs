@@ -495,6 +495,40 @@ fn a_content_length_is_trimmed_of_http_whitespace_and_no_more() {
     }
 }
 
+#[test]
+fn a_transfer_coding_is_trimmed_of_http_whitespace_and_no_more() {
+    for value in [" chunked", "chunked\t", " \tchunked \t"] {
+        assert_eq!(
+            framing(&fields(&[("Transfer-Encoding", value)]), false),
+            Ok(Framing::Chunked),
+            "{value:?} is chunked surrounded by OWS"
+        );
+    }
+    for value in ["\u{a0}chunked", "chunked\u{a0}", "\u{2007}chunked"] {
+        assert_eq!(
+            framing(&fields(&[("Transfer-Encoding", value)]), false),
+            Err(HeadError::UnsupportedTransferCoding),
+            "{value:?} is not a coding this edge and the next hop agree on"
+        );
+    }
+}
+
+#[test]
+fn an_expectation_is_trimmed_of_http_whitespace_and_no_more() {
+    for value in [" 100-continue", "100-continue\t", "foo, 100-continue "] {
+        assert!(
+            expects_continue(&fields(&[("Expect", value)])),
+            "{value:?} asks for a continue"
+        );
+    }
+    for value in ["\u{a0}100-continue", "100-continue\u{a0}"] {
+        assert!(
+            !expects_continue(&fields(&[("Expect", value)])),
+            "{value:?} is not an expectation this edge answers for the backend"
+        );
+    }
+}
+
 /// With an upstream bearer, the client's `Authorization` — every copy of
 /// it, whatever its case — is gone and the edge's is in its place, and the
 /// device marker rides alongside. Built by hand, because [`parse_request`]
