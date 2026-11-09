@@ -9,6 +9,7 @@
 //! Pure and synchronous, like its neighbour. Every rule here is decided
 //! from values already in hand: a header list, a status code, a method.
 
+use crate::headers;
 use crate::http_head::HeadError;
 
 /// How to find the end of a message body.
@@ -46,13 +47,9 @@ pub(crate) fn framing(
     let mut lengths = fields
         .iter()
         .filter(|(name, _)| name.eq_ignore_ascii_case("content-length"))
-        // OWS is SP and HTAB, per RFC 9110 §5.6.3 — not `str::trim`, which
-        // also removes Unicode whitespace. A value of NBSP followed by `5`
-        // trimmed to `5` here and was forwarded with the NBSP intact, so
-        // this edge framed a five-byte body from a value the next hop reads
-        // differently or refuses outright. The digits check below is only
-        // worth having if it sees what actually goes on the wire.
-        .map(|(_, value)| value.trim_matches([' ', '\t']));
+        // The digits check below is only worth having if it sees what
+        // actually goes on the wire, so OWS and nothing wider is trimmed.
+        .map(|(_, value)| headers::ows(value));
     let mut codings = fields
         .iter()
         .filter(|(name, _)| name.eq_ignore_ascii_case("transfer-encoding"))

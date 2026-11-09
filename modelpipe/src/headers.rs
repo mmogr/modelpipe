@@ -10,6 +10,16 @@
 //! observable, so collapsing them into a map would silently rewrite traffic
 //! this crate has no business rewriting.
 
+/// A field value, or one member of a list-valued one, without the optional
+/// whitespace around it.
+///
+/// OWS is SP and HTAB, per RFC 9110 §5.6.3. Not `str::trim`, which also
+/// removes Unicode whitespace: a value this edge trimmed to `chunked` from
+/// `chunked` and a no-break space is one the next hop reads differently.
+pub(crate) fn ows(value: &str) -> &str {
+    value.trim_matches([' ', '\t'])
+}
+
 /// Headers that describe *this* connection rather than the message, and so
 /// must not be forwarded onto a different one. RFC 9110 §7.6.1.
 ///
