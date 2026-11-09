@@ -111,6 +111,8 @@ mod serve_error;
 mod serve_handle;
 mod serve_options;
 
+#[cfg(any(test, fuzzing))]
+mod oracle;
 #[cfg(test)]
 mod props_tests;
 #[cfg(test)]

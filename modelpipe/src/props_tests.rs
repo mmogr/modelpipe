@@ -9,65 +9,10 @@
 //! smuggling property, stated as a test.
 
 use proptest::prelude::*;
-use tokio::io::{AsyncWriteExt, duplex};
 
-use crate::body::{Buffered, forward};
 use crate::framing::{Framing, framing};
 use crate::http_head::{parse_request, parse_response};
-
-/// Forward `input` as a chunked body, `split` bytes of it already in hand
-/// as the head read's leftover.
-fn forward_chunked(input: &[u8], split: usize) -> (std::io::Result<u64>, Vec<u8>) {
-    let split = split.min(input.len());
-    let (leftover, rest) = input.split_at(split);
-    tokio::runtime::Builder::new_current_thread()
-        .build()
-        .expect("a runtime")
-        .block_on(async {
-            let (mut tx, mut rx) = duplex(64 * 1024);
-            tx.write_all(rest)
-                .await
-                .expect("the source takes the input");
-            drop(tx);
-            let mut out = Vec::new();
-            let mut src = Buffered::new(&mut rx, leftover.to_vec());
-            let n = forward(&mut src, &mut out, Framing::Chunked).await;
-            (n, out)
-        })
-}
-
-/// A chunked body as httparse reads it: the data, or `None` where it cannot
-/// read one that ends exactly at the end of `bytes`.
-fn oracle(bytes: &[u8]) -> Option<Vec<u8>> {
-    let mut data = Vec::new();
-    let mut at = 0;
-    loop {
-        let httparse::Status::Complete((line, size)) =
-            httparse::parse_chunk_size(&bytes[at..]).ok()?
-        else {
-            return None;
-        };
-        at += line;
-        if size == 0 {
-            break;
-        }
-        let end = at.checked_add(usize::try_from(size).ok()?)?;
-        data.extend_from_slice(bytes.get(at..end)?);
-        if bytes.get(end..end + 2)? != b"\r\n" {
-            return None;
-        }
-        at = end + 2;
-    }
-    // Trailer lines, then the blank line that ends the body, then nothing.
-    loop {
-        let rest = &bytes[at..];
-        let end = rest.windows(2).position(|w| w == b"\r\n")?;
-        at += end + 2;
-        if end == 0 {
-            return (at == bytes.len()).then_some(data);
-        }
-    }
-}
+use crate::oracle::{chunked as oracle, forward_chunked};
 
 /// One chunk's data, and the extension its size line carries, if any.
 fn chunk() -> impl Strategy<Value = (Vec<u8>, Option<String>)> {

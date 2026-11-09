@@ -38,6 +38,8 @@ tokio = { version = "1", default-features = false }
 anyhow = "1"
 
 [workspace.lints.rust]
+# `fuzzing` is set by cargo-fuzz, and gates the entry points `fuzz/` calls.
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(fuzzing)"] }
 # This crate is a transport for other people's inference traffic; there is no
 # performance argument that would justify hand-waving memory safety in it.
 unsafe_code = "deny"
