@@ -18,13 +18,23 @@ use crate::status::PipeStatus;
 /// to.
 ///
 /// The first attempt after a death is immediate — a laptop waking up wants
-/// its pipe back now, not in half a second — and only a *failed* dial
-/// starts the backoff. The ceiling matters more than the floor: a serve
+/// its pipe back now, not in half a second — when the connection that died
+/// had lasted [`STABLE_FOR`]. One that died younger, and every *failed*
+/// dial, waits out the backoff instead. The ceiling matters more than the floor: a serve
 /// side that is off for the night must not be dialled thousands of times,
 /// and thirty seconds is short enough that coming back is noticed promptly
 /// and long enough to be nobody's idea of a busy loop.
 const FIRST_RETRY: Duration = Duration::from_millis(500);
 const RETRY_CEILING: Duration = Duration::from_secs(30);
+
+/// How long a connection has to have lasted for its death to be news rather
+/// than a refusal.
+///
+/// A listener at its peer cap completes the handshake and then lets the
+/// connection go, so to this side a refusal looks like a connection that
+/// dies at once. Restarting the backoff on that redialled such a listener
+/// as fast as a handshake completes.
+const STABLE_FOR: Duration = Duration::from_secs(10);
 
 /// Reach the peer, and keep a connection to it for as long as the pipe is
 /// up.
@@ -53,13 +63,14 @@ const RETRY_CEILING: Duration = Duration::from_secs(30);
 /// ceiling is what keeps a peer off for the night from being dialled
 /// thousands of times either way.
 pub(crate) async fn keep_connected(peer: &Peer, lifecycle: &Lifecycle, nudge: Option<Duration>) {
-    let mut backoff = FIRST_RETRY;
+    let mut backoff = Backoff::new();
     let mut nudge = Nudge::every(nudge, Instant::now());
     // One line per episode of having nobody, not one per attempt. The first
     // dial's failure is why a freshly returned handle reads `Idle`, and
     // without saying so nothing at default verbosity does — but a serve
     // side off for the night must not narrate every retry until morning.
     let mut announced = false;
+    let mut up_since = Instant::now();
     loop {
         // Wait out the connection there is, if there is one — following
         // where it goes while we wait. The third arm is what makes the
@@ -83,7 +94,13 @@ pub(crate) async fn keep_connected(peer: &Peer, lifecycle: &Lifecycle, nudge: Op
             // `info` while the individual attempts below are not.
             tracing::info!("the peer went away, and this side is looking for it");
             announced = true;
-            backoff = FIRST_RETRY;
+            if let Some(wait) = backoff.lost(up_since.elapsed()) {
+                tokio::select! {
+                    biased;
+                    () = lifecycle.wait_until_closed() => return,
+                    () = tokio::time::sleep(wait) => {}
+                }
+            }
         }
 
         // And go looking for it.
@@ -93,6 +110,7 @@ pub(crate) async fn keep_connected(peer: &Peer, lifecycle: &Lifecycle, nudge: Op
             dialed = peer.redial() => dialed,
         };
         if let Some(reading) = dialed {
+            up_since = Instant::now();
             let status = aggregate(&[reading.path]);
             lifecycle.set_status(status);
             tracing::info!(path = status.as_str(), "the peer is back");
@@ -106,16 +124,16 @@ pub(crate) async fn keep_connected(peer: &Peer, lifecycle: &Lifecycle, nudge: Op
         // `debug`, not `info`: a serve side that is off for the night is
         // dialled until morning, and the fact worth an operator's attention
         // is the line above rather than every attempt under it.
+        let wait = backoff.next();
         tracing::debug!(
-            backoff_ms = u64::try_from(backoff.as_millis()).unwrap_or(u64::MAX),
+            backoff_ms = u64::try_from(wait.as_millis()).unwrap_or(u64::MAX),
             "a dial found nobody"
         );
         tokio::select! {
             biased;
             () = lifecycle.wait_until_closed() => return,
-            () = tokio::time::sleep(backoff) => {}
+            () = tokio::time::sleep(wait) => {}
         }
-        backoff = (backoff * 2).min(RETRY_CEILING);
         // After the sleep rather than before the dial, so the very first
         // attempt — the one a freshly bound handle makes — is never
         // delayed by it. Only ever reached while there is no connection.
@@ -129,6 +147,40 @@ pub(crate) async fn keep_connected(peer: &Peer, lifecycle: &Lifecycle, nudge: Op
                 () = lifecycle.wait_until_closed() => return,
                 () = crate::network::notify(&peer.endpoint) => {}
             }
+        }
+    }
+}
+
+/// How long to wait before the next dial: [`FIRST_RETRY`], doubling to
+/// [`RETRY_CEILING`].
+///
+/// A value of its own, like [`Nudge`], so the pacing is checkable without an
+/// endpoint.
+struct Backoff {
+    next: Duration,
+}
+
+impl Backoff {
+    const fn new() -> Self {
+        Self { next: FIRST_RETRY }
+    }
+
+    /// The wait before this dial, doubling the one after it.
+    fn next(&mut self) -> Duration {
+        let wait = self.next;
+        self.next = (wait * 2).min(RETRY_CEILING);
+        wait
+    }
+
+    /// After a connection that lived `lived` has gone: `None` to redial at
+    /// once, starting the backoff again, when it lasted [`STABLE_FOR`];
+    /// otherwise the wait, exactly as after a failed dial.
+    fn lost(&mut self, lived: Duration) -> Option<Duration> {
+        if lived >= STABLE_FOR {
+            self.next = FIRST_RETRY;
+            None
+        } else {
+            Some(self.next())
         }
     }
 }
