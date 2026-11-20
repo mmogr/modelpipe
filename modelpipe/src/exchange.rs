@@ -151,7 +151,7 @@ where
         return Ok(Outcome::TimedOut);
     };
     let Ok((mut head, leftover)) = asked? else {
-        return refusal::send(stream, refusal::bad_request(), Outcome::BadRequest).await;
+        return send(stream, refusal::bad_request(), Outcome::BadRequest).await;
     };
     // Recorded here rather than after the checks below, so a request
     // refused on its framing or its credential is still named on the line
@@ -168,7 +168,7 @@ where
     // Every framing refusal is a 400; the variants exist so a test can say
     // which rule fired, not so the edge answers them differently.
     let Ok(request_framing) = framing::framing(&head.headers, false) else {
-        return refusal::send(stream, refusal::bad_request(), Outcome::BadRequest).await;
+        return send(stream, refusal::bad_request(), Outcome::BadRequest).await;
     };
 
     // The pairing route is the edge's own to answer, before admission, and the
@@ -188,7 +188,7 @@ where
 
     // 3. The credential. Still nothing has been sent anywhere.
     let Some(admitted) = credential.admits(http_head::authorization(&head.headers), peer.id) else {
-        return refusal::send(stream, refusal::unauthorized(), Outcome::Unauthorized).await;
+        return send(stream, refusal::unauthorized(), Outcome::Unauthorized).await;
     };
     // The name is the operator's and the backend is about to be told it;
     // on the line it names the device the way `peer` names the endpoint.
@@ -211,7 +211,7 @@ where
         // Never reached, so nothing was sent and nothing came back. The
         // other two 502s in `refusal` describe events that did happen; this
         // one is the absence of any.
-        return refusal::send(stream, refusal::backend_unreachable(), Outcome::BadGateway).await;
+        return send(stream, refusal::backend_unreachable(), Outcome::BadGateway).await;
     };
 
     // Split so the request body and the response can be in flight at once.
@@ -246,10 +246,10 @@ where
     let (mut response, response_leftover) = match carried {
         Carried::Answered(response, rest) => (response, rest),
         Carried::Unreadable => {
-            return refusal::send(stream, refusal::bad_gateway(), Outcome::BadGateway).await;
+            return send(stream, refusal::bad_gateway(), Outcome::BadGateway).await;
         }
         Carried::Unfinished => {
-            return refusal::send(stream, refusal::incomplete_request(), Outcome::Unfinished).await;
+            return send(stream, refusal::incomplete_request(), Outcome::Unfinished).await;
         }
     };
     // Recorded before the framing check below, deliberately: a backend that
@@ -263,7 +263,7 @@ where
     let Ok(response_framing) =
         framing::response_framing(response.status, &method, &response.headers)
     else {
-        return refusal::send(stream, refusal::bad_gateway(), Outcome::BadGateway).await;
+        return send(stream, refusal::bad_gateway(), Outcome::BadGateway).await;
     };
     headers::strip_hop_by_hop(&mut response.headers);
     // One bi-stream carries one exchange, so the client must not put a
@@ -289,6 +289,18 @@ where
     body::forward(&mut from_backend, stream, response_framing).await?;
 
     Ok(Outcome::Forwarded)
+}
+
+/// Write a locally synthesized response and return without touching the
+/// backend.
+pub(crate) async fn send<S: AsyncWrite + Unpin>(
+    stream: &mut S,
+    response: Vec<u8>,
+    outcome: Outcome,
+) -> std::io::Result<Outcome> {
+    stream.write_all(&response).await?;
+    stream.flush().await?;
+    Ok(outcome)
 }
 
 #[cfg(test)]
