@@ -14,7 +14,7 @@
 
 use std::sync::LazyLock;
 
-use crate::admitted::Forward;
+use crate::credential::Forward;
 use crate::framing::Framing;
 use crate::headers;
 

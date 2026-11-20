@@ -52,7 +52,6 @@ use std::time::Duration;
 // "added a type, forgot to export it" into a compile error.
 
 // Pure: no I/O, no async.
-mod admitted;
 mod backend;
 mod backend_url;
 mod base32;
