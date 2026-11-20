@@ -90,6 +90,11 @@ where
     // discovering at the call site that the whole edge cannot be spawned.
     B: Backend + Sync,
 {
+    // Test builds only: the tests' subscriber is installed before the span
+    // below is first reached, whichever test gets here first.
+    // `exchange_tests::capturing` says what goes wrong otherwise.
+    #[cfg(test)]
+    exchange_tests::capturing();
     let span = tracing::info_span!(
         "exchange",
         method = Empty,

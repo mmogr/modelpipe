@@ -1347,8 +1347,8 @@ const LOG_QUERY: &str = "sk-zzq-query-sentinel";
 // subscriber below is installed process-wide, and its writer throws the
 // bytes away unless a test has armed this buffer. That is deliberate on both
 // counts — it keeps the capture tests from reading each other's output, and
-// it means all two hundred-odd tests here exercise the instrumentation
-// rather than compiling past it.
+// it means every test that runs an exchange exercises the exchange's
+// instrumentation rather than compiling past it.
 thread_local! {
     static CAPTURED: RefCell<Option<Vec<u8>>> = const { RefCell::new(None) };
 }
@@ -1397,7 +1397,21 @@ impl tracing_subscriber::fmt::MakeWriter<'_> for Sink {
 /// is a separate binary too, and also installs nothing, but it pins the
 /// exported surface at compile time and never runs an exchange — so it is
 /// not evidence for this and is not cited as such.)
-fn capturing() {
+///
+/// Called by `serve_exchange` itself, in test builds, before it opens its
+/// span, and not by the tests that read the log. `set_global_default` first
+/// works out which of the spans and events seen so far are wanted, and only
+/// then stores the subscriber. A span first reached by another thread
+/// between those two steps finds no subscriber, and is switched off for the
+/// rest of the process. `Once` makes each caller wait until the install is
+/// over, so no exchange can open its span first, whether a test here runs
+/// it or a listener does.
+///
+/// That holds for the span and the events in `exchange.rs`, which are all
+/// these tests read. A span or event anywhere else, the listener's `peer`
+/// span for one, can still be reached during the install and switched off
+/// the same way. Nothing asserts on those.
+pub(super) fn capturing() {
     static ONCE: std::sync::Once = std::sync::Once::new();
     ONCE.call_once(|| {
         let subscriber = tracing_subscriber::fmt()
@@ -1420,7 +1434,6 @@ async fn logged(
     policy: &TokenPolicy,
     backend: &CountingBackend,
 ) -> (Outcome, String) {
-    capturing();
     CAPTURED.with(|slot| *slot.borrow_mut() = Some(Vec::new()));
     // `#[tokio::test]` builds a current-thread runtime, so everything the
     // exchange does — including the backend stub's spawned reader — runs on
@@ -1628,7 +1641,6 @@ async fn logged_failure<B: Backend + Sync>(
     request: &[u8],
     backend: &B,
 ) -> (std::io::Error, String) {
-    capturing();
     CAPTURED.with(|slot| *slot.borrow_mut() = Some(Vec::new()));
 
     let (mut client, mut edge) = duplex(64 * 1024);
