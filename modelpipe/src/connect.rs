@@ -292,7 +292,7 @@ pub async fn connect(ticket: &Ticket, opts: ConnectOptions) -> Result<ConnectHan
     // than awaiting it is the whole of this function's contract: the handle
     // below is handed out with a port already answering.
     tokio::spawn(async move {
-        crate::peer_redial::keep_connected(&watching.peer, &watching.lifecycle, nudge).await;
+        crate::peer::keep_connected(&watching.peer, &watching.lifecycle, nudge).await;
     });
     Ok(ConnectHandle::new(state))
 }

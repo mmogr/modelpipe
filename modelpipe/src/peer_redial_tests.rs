@@ -1,8 +1,8 @@
 //! Tests for [`super`] — the loop that notices there is no connection and
 //! goes looking.
 //!
-//! Split out via `#[path]` so `peer_redial.rs` stays inside the file-size
-//! budget, and separated from `peer_tests` when the loop itself was.
+//! Split out via `#[path]` so `peer.rs` stays inside the file-size budget,
+//! and kept apart from `peer_tests`, which covers the connection there is.
 //!
 //! These bind real endpoints, and they have to: a reconnection is a
 //! statement about iroh — that the endpoint id in a ticket outlives the
