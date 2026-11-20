@@ -1,12 +1,16 @@
-//! The live connect side.
+//! The live connect side: [`ConnectHandle`] and every method this crate gives
+//! it. The inherent methods are one `impl` block, with a section for each
+//! question they answer.
 //!
 //! The twin of [`crate::serve_handle`].
 
+use std::fmt;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use std::time::Duration;
 
 use crate::dialer::{self, ConnectState};
+use crate::network::{NetworkMetrics, metrics_of, notify};
 use crate::peer_id::PeerId;
 use crate::status::{CloseReason, PipeStatus};
 
@@ -47,15 +51,15 @@ use crate::status::{CloseReason, PipeStatus};
 /// trait is an additive, non-breaking change — the decision is recorded
 /// here so the duplication reads as chosen, not overlooked.
 pub struct ConnectHandle {
-    /// Shared with this type's `impl` blocks in `network.rs` and
-    /// `connect_idle.rs`.
-    pub(crate) state: Arc<ConnectState>,
+    state: Arc<ConnectState>,
 }
 
 impl ConnectHandle {
     pub(crate) const fn new(state: Arc<ConnectState>) -> Self {
         Self { state }
     }
+
+    // Where a client points, and who this side is to the far end.
 
     /// The bound local address.
     pub fn local_addr(&self) -> SocketAddr {
@@ -81,6 +85,8 @@ impl ConnectHandle {
     pub fn peer_id(&self) -> PeerId {
         PeerId::from_bytes(*self.state.peer.endpoint.id().as_bytes())
     }
+
+    // What the pipe is doing, and why it closed.
 
     /// How this side is currently reaching the peer.
     pub fn status(&self) -> PipeStatus {
@@ -204,6 +210,141 @@ impl ConnectHandle {
         self.state.lifecycle.close_reason()
     }
 
+    // Waiting to reach the serve side. `connect` returns with the local port
+    // bound and the dial still running, and how long to wait for the peer is
+    // the caller's to decide. Every caller wrote the same loop to decide it,
+    // so this is that loop, written once.
+
+    /// Wait until this side has reached the serve side, for at most `within`.
+    ///
+    /// Returns the path, [`Direct`](PipeStatus::Direct) or
+    /// [`Relayed`](PipeStatus::Relayed), as soon as there is one, including a
+    /// path reached before this was called. A pipe that closes first ends the
+    /// wait at once.
+    ///
+    /// Running out ends the wait and not the pipe. The handle keeps trying, so
+    /// a caller may wait again, or hand the port out anyway and let a late
+    /// serve side be picked up. A `within` too long to add to the clock waits
+    /// with no deadline.
+    ///
+    /// # Errors
+    ///
+    /// [`Unreached::TimedOut`] when `within` runs out first, and
+    /// [`Unreached::Closed`] when the pipe closes first.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn example(ticket: &modelpipe::Ticket) -> Result<(), Box<dyn std::error::Error>> {
+    /// let connected = modelpipe::connect(ticket, modelpipe::ConnectOptions::default()).await?;
+    /// let path = connected.wait_reachable(std::time::Duration::from_secs(40)).await?;
+    /// println!("reached the serve side: {}", path.as_str());
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn wait_reachable(&self, within: Duration) -> Result<PipeStatus, Unreached> {
+        let deadline = tokio::time::Instant::now().checked_add(within);
+        // The current status first: a pipe that reached its peer before this
+        // was called has no change left to wait for.
+        let mut held = self.status();
+        loop {
+            match held {
+                PipeStatus::Direct | PipeStatus::Relayed => return Ok(held),
+                PipeStatus::Closed => return Err(Unreached::Closed(self.close_reason())),
+                PipeStatus::Idle => {}
+            }
+            let next = self.status_changed_since(held);
+            let next = match deadline {
+                Some(deadline) => tokio::time::timeout_at(deadline, next)
+                    .await
+                    .map_err(|_| Unreached::TimedOut(within))?,
+                None => next.await,
+            };
+            // `None` answers only a snapshot that was already `Closed`, and
+            // the match above has returned on that.
+            held = next.unwrap_or(PipeStatus::Closed);
+        }
+    }
+
+    // How long this side has been out of touch: not what the pipe is doing
+    // but how long it has been doing it. The clock itself lives on
+    // `crate::lifecycle::Lifecycle`; the argument for having one, and for it
+    // carrying no policy, is ADR 0004.
+
+    /// How long this side has been [`PipeStatus::Idle`],
+    /// or `None` when it is not idle — which means it has reached the peer
+    /// **or** that the pipe is closed.
+    ///
+    /// Those two are told apart by the status, not by this: `None` here is
+    /// not "reached". A caller that acts on absence should check
+    /// [`status`](Self::status) first, which is the live/closed
+    /// discriminator.
+    ///
+    /// `Idle` means the peer is not reachable *and is being dialled
+    /// again*, for as long as the pipe is held — so the status alone
+    /// cannot tell a packet lost a moment ago from a far machine that has
+    /// been asleep since last night. This is the difference, and it is
+    /// what a caller needs to decide when to start saying so.
+    ///
+    /// **The policy stays here.** How long is too long is a product
+    /// decision, not a transport one: a desktop tunnel and a phone app
+    /// reasonably answer it differently, and the same crate serves both.
+    /// What this promises is only the measurement.
+    ///
+    /// The clock starts at the *transition* into `Idle`, and a re-dial
+    /// that finds nobody does not restart it — a peer that is simply gone
+    /// would otherwise never look away. It also starts at birth: a handle
+    /// is `Idle` from the moment it is returned, so a pipe that has never
+    /// reached its peer reports the age of the pipe.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn example(connected: &modelpipe::ConnectHandle) {
+    /// const AWAY_AFTER: std::time::Duration = std::time::Duration::from_secs(30);
+    /// if connected.idle_for().is_some_and(|idle| idle >= AWAY_AFTER) {
+    ///     println!("the other machine is away; the port stays bound");
+    /// }
+    /// # }
+    /// ```
+    pub fn idle_for(&self) -> Option<Duration> {
+        self.state.lifecycle.idle_for()
+    }
+
+    // The endpoint underneath: telling it the network moved, and reading its
+    // counters. Neither hands the endpoint out; `crate::network` says why.
+
+    /// Tell this side's endpoint that the network underneath it may have
+    /// changed, and wait for the notice to be taken.
+    ///
+    /// Same contract as
+    /// [`ServeHandle::notify_network_change`](crate::ServeHandle::notify_network_change),
+    /// which states it in full — and this is the side that usually needs
+    /// it, because the connecting machine is the one that moves.
+    ///
+    /// It does not replace the re-dial loop and does not start one: this
+    /// side already retries a peer it cannot reach, for as long as the pipe
+    /// is held. What this fixes is the case underneath that loop, where the
+    /// socket it is dialling from is bound to an interface that no longer
+    /// exists — a laptop that changed network while suspended, a phone that
+    /// came back on cellular.
+    pub async fn notify_network_change(&self) {
+        notify(&self.state.peer.endpoint).await;
+    }
+
+    /// What the transport underneath this pipe has been doing.
+    ///
+    /// Same contract as
+    /// [`ServeHandle::network_metrics`](crate::ServeHandle::network_metrics),
+    /// and a separate set of numbers: the two sides are two endpoints, and
+    /// a relay that is rate limiting one of them is not necessarily
+    /// touching the other.
+    pub fn network_metrics(&self) -> NetworkMetrics {
+        metrics_of(&self.state.peer.endpoint)
+    }
+
+    // How this side stops.
+
     /// Stop accepting local connections, let the in-flight requests
     /// finish, and wait until the local listener is gone.
     ///
@@ -258,6 +399,39 @@ impl Drop for ConnectHandle {
         // free.
     }
 }
+
+/// Why [`ConnectHandle::wait_reachable`] returned without reaching the serve
+/// side.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Unreached {
+    /// The wait ran out, after the duration it was given, with the pipe still
+    /// looking. The pipe keeps looking: the handle is live, and a serve side
+    /// that turns up later is picked up.
+    TimedOut(Duration),
+    /// The pipe closed before it reached the serve side, for the reason
+    /// [`ConnectHandle::close_reason`] reports.
+    Closed(Option<CloseReason>),
+}
+
+impl fmt::Display for Unreached {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::TimedOut(within) => write!(
+                f,
+                "could not reach the serve side within {within:?}, directly or via a relay"
+            ),
+            Self::Closed(Some(reason)) => write!(
+                f,
+                "the pipe closed ({}) before it reached the serve side",
+                reason.as_str()
+            ),
+            Self::Closed(None) => f.write_str("the pipe closed before it reached the serve side"),
+        }
+    }
+}
+
+impl std::error::Error for Unreached {}
 
 /// The URL to point a client at.
 ///

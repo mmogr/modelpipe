@@ -101,8 +101,6 @@ mod transport;
 // Orchestration: the two entry points, and the live pipes they return.
 mod connect;
 mod connect_handle;
-mod connect_idle;
-mod connect_reach;
 mod network;
 mod pair;
 mod pair_wire;
@@ -128,8 +126,7 @@ mod test_net;
 // this block is the one edit in the crate that cannot be walked back.
 pub use backend_url::BackendUrl;
 pub use connect::{ConnectError, ConnectOptions, connect};
-pub use connect_handle::ConnectHandle;
-pub use connect_reach::Unreached;
+pub use connect_handle::{ConnectHandle, Unreached};
 pub use invite::{Invite, InviteHandle, InviteOptions, InviteOutcome, InviteRefusal, PAIR_PATH};
 pub use network::NetworkMetrics;
 pub use pair::{PairError, Paired, pair};
