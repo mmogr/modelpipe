@@ -11,6 +11,7 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 use crate::caller::Caller;
 use crate::credential::{Credential, bearer};
+use crate::exchange;
 use crate::framing::Framing;
 use crate::http_head::{self, RequestHead};
 use crate::invites::Redeemed;
@@ -86,7 +87,7 @@ where
 
 /// The one refusal, whatever refused.
 async fn refuse<S: AsyncWrite + Unpin>(stream: &mut S) -> std::io::Result<Outcome> {
-    refusal::send(stream, refusal::pairing_refused(), Outcome::Unauthorized).await
+    exchange::send(stream, refusal::pairing_refused(), Outcome::Unauthorized).await
 }
 
 /// `length` bytes of body, starting with what arrived with the head.

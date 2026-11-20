@@ -30,8 +30,6 @@
 
 use iroh::Endpoint;
 
-use crate::connect_handle::ConnectHandle;
-
 /// What the transport underneath a pipe has been doing, as plain numbers.
 ///
 /// A snapshot taken at the moment it was asked for, and owned outright:
@@ -85,37 +83,6 @@ pub struct NetworkMetrics {
     /// connections rather than of complaints; relate it to
     /// [`relay_connections`](Self::relay_connections) for the proportion.
     pub relay_connections_ratelimited: u64,
-}
-
-impl ConnectHandle {
-    /// Tell this side's endpoint that the network underneath it may have
-    /// changed, and wait for the notice to be taken.
-    ///
-    /// Same contract as
-    /// [`ServeHandle::notify_network_change`](crate::ServeHandle::notify_network_change),
-    /// which states it in full — and this is the side that usually needs
-    /// it, because the connecting machine is the one that moves.
-    ///
-    /// It does not replace the re-dial loop and does not start one: this
-    /// side already retries a peer it cannot reach, for as long as the pipe
-    /// is held. What this fixes is the case underneath that loop, where the
-    /// socket it is dialling from is bound to an interface that no longer
-    /// exists — a laptop that changed network while suspended, a phone that
-    /// came back on cellular.
-    pub async fn notify_network_change(&self) {
-        notify(&self.state.peer.endpoint).await;
-    }
-
-    /// What the transport underneath this pipe has been doing.
-    ///
-    /// Same contract as
-    /// [`ServeHandle::network_metrics`](crate::ServeHandle::network_metrics),
-    /// and a separate set of numbers: the two sides are two endpoints, and
-    /// a relay that is rate limiting one of them is not necessarily
-    /// touching the other.
-    pub fn network_metrics(&self) -> NetworkMetrics {
-        metrics_of(&self.state.peer.endpoint)
-    }
 }
 
 /// Push the notice in. Written once rather than twice because the two

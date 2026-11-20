@@ -9,7 +9,7 @@ use iroh::Endpoint;
 use iroh::endpoint::{PortmapperConfig, presets};
 
 use crate::connect::ConnectOptions;
-use crate::serve_options::ServeOptions;
+use crate::serve::ServeOptions;
 use crate::transport::NetOptions;
 
 /// No discovery and no port mapping.

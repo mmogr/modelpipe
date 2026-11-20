@@ -52,7 +52,6 @@ use std::time::Duration;
 // "added a type, forgot to export it" into a compile error.
 
 // Pure: no I/O, no async.
-mod admitted;
 mod backend;
 mod backend_url;
 mod base32;
@@ -82,7 +81,6 @@ mod pairing_string;
 mod path_watch;
 mod peer;
 mod peer_id;
-mod peer_redial;
 mod peers;
 mod private_file;
 mod refusal;
@@ -101,15 +99,12 @@ mod transport;
 // Orchestration: the two entry points, and the live pipes they return.
 mod connect;
 mod connect_handle;
-mod connect_idle;
-mod connect_reach;
 mod network;
 mod pair;
 mod pair_wire;
 mod serve;
 mod serve_error;
 mod serve_handle;
-mod serve_options;
 
 #[cfg(fuzzing)]
 #[doc(hidden)]
@@ -128,17 +123,15 @@ mod test_net;
 // this block is the one edit in the crate that cannot be walked back.
 pub use backend_url::BackendUrl;
 pub use connect::{ConnectError, ConnectOptions, connect};
-pub use connect_handle::ConnectHandle;
-pub use connect_reach::Unreached;
+pub use connect_handle::{ConnectHandle, Unreached};
 pub use invite::{Invite, InviteHandle, InviteOptions, InviteOutcome, InviteRefusal, PAIR_PATH};
 pub use network::NetworkMetrics;
 pub use pair::{PairError, Paired, pair};
 pub use pairing_string::{PairingCode, PairingString, PairingStringError};
 pub use peer_id::{PeerId, PeerIdParseError};
-pub use serve::serve;
+pub use serve::{ServeOptions, serve};
 pub use serve_error::{NamedTokenRefusal, ServeError};
 pub use serve_handle::ServeHandle;
-pub use serve_options::ServeOptions;
 pub use status::{CloseReason, PeerView, PipeStatus};
 pub use ticket::{Ticket, TicketParseError};
 pub use token_policy::TokenPolicy;

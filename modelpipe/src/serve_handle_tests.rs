@@ -8,8 +8,8 @@ use std::time::{Duration, Instant};
 
 use super::*;
 use crate::invite::InviteOutcome;
+use crate::serve::ServeOptions;
 use crate::serve::serve;
-use crate::serve_options::ServeOptions;
 use crate::token_policy::TokenPolicy;
 
 /// A listener that admits by name, with discovery and port mapping off, and
