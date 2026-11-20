@@ -105,7 +105,6 @@ mod pair_wire;
 mod serve;
 mod serve_error;
 mod serve_handle;
-mod serve_options;
 
 #[cfg(fuzzing)]
 #[doc(hidden)]
@@ -130,10 +129,9 @@ pub use network::NetworkMetrics;
 pub use pair::{PairError, Paired, pair};
 pub use pairing_string::{PairingCode, PairingString, PairingStringError};
 pub use peer_id::{PeerId, PeerIdParseError};
-pub use serve::serve;
+pub use serve::{ServeOptions, serve};
 pub use serve_error::{NamedTokenRefusal, ServeError};
 pub use serve_handle::ServeHandle;
-pub use serve_options::ServeOptions;
 pub use status::{CloseReason, PeerView, PipeStatus};
 pub use ticket::{Ticket, TicketParseError};
 pub use token_policy::TokenPolicy;

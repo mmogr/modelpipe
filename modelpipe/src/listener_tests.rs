@@ -23,9 +23,9 @@ use iroh::Endpoint;
 use crate::lifecycle::PeerPath;
 use crate::path_watch::Reading;
 use crate::peers::{DEFAULT_MAX_CONNECTIONS, DEFAULT_MAX_PEERS};
+use crate::serve::ServeOptions;
 use crate::serve::serve;
 use crate::serve_handle::ServeHandle;
-use crate::serve_options::ServeOptions;
 use crate::status::{CloseReason, PipeStatus};
 use crate::transport;
 
