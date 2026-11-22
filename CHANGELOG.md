@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.13](https://github.com/mmogr/modelpipe/compare/v0.8.11...v0.8.13) - 2026-11-22
+
+### Other
+
+- *(lib)* the files split to fit the old size gate are merged back ([#185](https://github.com/mmogr/modelpipe/pull/185))
+- *(exchange)* the log subscriber is installed before any test reaches the exchange span ([#184](https://github.com/mmogr/modelpipe/pull/184))
+- update Cargo.lock dependencies
+
 ## [0.8.12](https://github.com/mmogr/modelpipe/compare/v0.8.11...v0.8.12) - 2026-11-22
 
 ### Other
